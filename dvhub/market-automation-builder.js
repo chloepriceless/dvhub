@@ -793,7 +793,11 @@ export function createMarketAutomationBuilder(ctx) {
       futureSlots: generatedRules.length > 0 ? selectedSlotTimestamps.length : 0,
       selectedSlots: selectedSlotTimestamps.map((ts, index) => ({
         ts,
-        time: new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false }),
+        // GH #20: Zeitzone explizit wie im Schedule-Pfad (formatLocalHHMM, Zeile
+        // 576/577). Ohne timeZone nahm toLocaleTimeString die Prozess-Zeitzone
+        // (im Container meist UTC) → die Plan-Zusammenfassung oben zeigte UTC,
+        // die Schedule-Tabelle unten korrekt Europe/Berlin. Jetzt beide lokal.
+        time: formatLocalHHMM(new Date(ts), cfg.schedule?.timezone || 'Europe/Berlin'),
         priceCtKwh: state.epex?.data?.find((s) => Number(s.ts) === ts)?.ct_kwh ?? null,
         powerW: generatedRules[index]?.value ?? null
       })),

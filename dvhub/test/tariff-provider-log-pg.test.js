@@ -30,6 +30,10 @@ async function withDb(fn) {
       UNIQUE (series_key, scope, source, quality, ts_utc, resolution_seconds))`);
     await client.query('CREATE TEMP TABLE series_metadata (series_key text PRIMARY KEY, source text NOT NULL)');
     await client.query('CREATE TEMP TABLE energy_slots_15m (series_key text, slot_start_utc timestamptz)');
+    // Datenstufen (Migration 027): Stand, bis zu dem 1-min- und 15-min-Werte vollständig sind.
+    await client.query(`CREATE TEMP TABLE telemetry_tier_state (id text PRIMARY KEY, done_until timestamptz,
+      started_from timestamptz, updated_at timestamptz NOT NULL DEFAULT now())`);
+    await client.query('CREATE TEMP TABLE telemetry_tier_dirty (bucket_ts timestamptz PRIMARY KEY)');
     const pool = { query: (text, params) => client.query(text, params), connect: async () => ({ query: (t, p) => client.query(t, p), release() {} }) };
     return await fn(client, createTelemetryStorePg(pool), pool);
   } finally {
@@ -103,15 +107,17 @@ test('PG: Platz-Wache ohne TimescaleDB entfernt alte 5-s-Rohwerte, Anbieterpreis
       ('grid_total_w', 'live', 'local_poll', 'raw', $1, 5, 100),
       ($2, 'tariff', 'lichtblick', 'raw', $1, 900, 33.3),
       ('price_ct_kwh', 'live', 'epex', 'raw', $1, 900, 9.9)`, [old, SERIES_KEY]);
-    await client.query("INSERT INTO energy_slots_15m VALUES ('grid_import_wh', '2026-10-31T00:00:00Z')");
+    // Seit 24.11.: Rohwerte nur bis zum Stand der Datenstufen (aggregatedUntil), nicht mehr energy_slots_15m.
+    await client.query("INSERT INTO telemetry_tier_state (id, done_until, started_from) VALUES ('tiers', '2026-10-31T00:00:00Z', '2025-01-01T00:00:00Z')");
     const guard = createStorageGuard({
       getDb: () => pool,
       getDataDir: () => '/',
-      statfs: () => ({ blocks: 1000, bsize: 1024 * 1024, bavail: 50 }),   // 5 % frei → „wenig“
+      statfs: () => ({ blocks: 1000, bsize: 1024 * 1024, bavail: 50 }),   // 5 % frei → „kritisch“
       now: () => Date.parse('2026-11-01T00:00:00Z')
     });
     const r = await guard.check();
-    assert.ok(r.actions.some((a) => a.action === 'drop_raw'), JSON.stringify(r.actions));
+    // Ohne TimescaleDB gilt mindestens „winzig“ (E3 b): Aufbewahrung 30 Tage oder Notfall-Stufe — beides entfernt den alten Rohwert.
+    assert.ok(r.actions.some((a) => (a.action === 'drop_raw' || a.action === 'retain_raw') && !a.error), JSON.stringify(r.actions));
     const left = (await client.query('SELECT series_key FROM timeseries_samples ORDER BY series_key')).rows.map((x) => x.series_key);
     assert.deepEqual(left, ['price_ct_kwh', SERIES_KEY]);
   });

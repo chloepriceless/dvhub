@@ -140,7 +140,15 @@
     const evDeadline = c && c.reason === 'ev_deadline' && Number.isFinite(Date.parse(c.estimatedFrom))
       ? { estimatedFrom: Date.parse(c.estimatedFrom), at: Date.parse(c.deadline && c.deadline.at), covered: c.deadlineCovered !== false }
       : null;
-    const base = { available: false, reason: (p && p.reason) || null, stale: !!(p && p.plan && p.plan.current === false), timeZone, feedInBasis, evDeadline };
+    // Steuerzeitraum bis in die Preisprognose (1.0.11): Vorschau über mehrere Tage.
+    const forecastPlan = c && c.reason === 'price_forecast' && Number.isFinite(Date.parse(c.estimatedFrom))
+      ? { estimatedFrom: Date.parse(c.estimatedFrom) }
+      : null;
+    // M17: Terminal-Wert aus der EOS-Lösung (output.terminalValue, von
+    // services/optimizer/terminal-value.js). Gilt für den ganzen Plan, nicht je
+    // Tag. null, wenn EOS keinen Wert liefert.
+    const terminal = output && output.terminalValue && output.terminalValue.available ? output.terminalValue : null;
+    const base = { available: false, reason: (p && p.reason) || null, stale: !!(p && p.plan && p.plan.current === false), timeZone, feedInBasis, evDeadline, forecastPlan, terminal };
     const rows = raw
       .map((r) => ({ ...r, ts: Date.parse(r && r.ts_utc) }))
       .filter((r) => Number.isFinite(r.ts))
@@ -240,26 +248,48 @@
     return `${head}: ${pk.slots} ${pk.slots === 1 ? 'Slot' : 'Slots'} darüber (${de(pk.hours, 2)} h, bis ${de(pk.maxKw, 1)} kW)`;
   }
 
+  // M17: „EOS bewertet die Akkuladung am Planende mit X ct/kWh". Der Wert kommt
+  // aus EOS' eigenem Terminal-Wert (terminal-value.js) — keine Schwelle, keine
+  // DVhub-Preisannahme. Liegt der Einspeisewert darunter, lohnt Entladen nicht:
+  // der Akku bleibt geladen, und bei festem Bezugspreis kostet Halten nichts.
+  const TERMINAL_HELP = 'Womit EOS die am Ende des Plans noch im Akku gespeicherte Energie bewertet — '
+    + 'aus der EOS-Lösung, keine Schwelle. Liegt der Einspeisewert darunter, lohnt sich Entladen nicht, '
+    + 'also bleibt der Akku geladen. Bei festem Bezugspreis ist eine gespeicherte kWh heute so viel wert '
+    + 'wie morgen: Halten kostet dann ohne PV-Überschuss nichts. So erklärt sich, dass EOS den Akku hält, '
+    + 'statt ihn zu entladen.';
+  function terminalLine(t) {
+    if (!t || t.ctPerKwh === null || t.ctPerKwh === undefined) return null;
+    const ct = `${de(t.ctPerKwh, 1)} ct/kWh`;
+    // Plant EOS den Akku am Planende (nahezu) leer, ist „Akku halten" nicht das
+    // Thema — dann ehrlich den Wert der (letzten) kWh nennen, ohne Halte-Aussage.
+    if (t.heldCharge === false) {
+      return `EOS bewertet eine am Planende gespeicherte kWh mit ${ct} (Akku am Planende ~leer)`;
+    }
+    return `EOS bewertet die Akkuladung am Planende mit ${ct}`;
+  }
+
   const REASON_TEXT = { eos_off: 'EOS ist aus', eos_not_answering: 'EOS antwortet nicht' };
-  const ESTIMATED_HELP = 'Die echten Börsenpreise enden hier. Bis zur Abfahrt des E-Autos rechnet EOS mit geschätzten Preisen, '
-    + 'damit das Auto nicht schon vor Mitternacht teuer geladen wird. Sobald die echten Preise da sind (gegen 13 Uhr), '
-    + 'rechnet EOS neu. Aus Slots mit geschätzten Preisen setzt DVhub keine Akku-Regeln um.';
+  const ESTIMATED_HELP = 'Die festen Börsenpreise enden hier. Bis zur Abfahrt des E-Autos rechnet EOS mit der Preisprognose von dvhub.online, '
+    + 'damit das Auto nicht schon vor Mitternacht teuer geladen wird. Sobald die festen Preise da sind (gegen 13 Uhr), '
+    + 'rechnet EOS neu. Aus Slots mit Prognosepreisen setzt DVhub keine Akku-Regeln um.';
+  const FORECAST_HELP = 'Die festen Börsenpreise enden hier. Dahinter plant EOS mit der Preisprognose von dvhub.online — eine Vorschau. '
+    + 'Umgesetzt wird nur, was auf festen Preisen liegt; alle 15 Minuten rechnet EOS neu.';
 
   function view(s) {
     if (!s || !s.available) {
       const why = s && REASON_TEXT[s.reason];
-      return { note: why ? `Kein EOS-Plan (${why})` : 'Kein EOS-Plan', today: null, tomorrow: null };
+      return { note: why ? `Kein EOS-Plan (${why})` : 'Kein EOS-Plan', terminal: null, terminalTitle: '', today: null, tomorrow: null };
     }
     const time = (ms) => fmtParts(s.timeZone || DEFAULT_TZ).time.format(new Date(ms));
     const day = (d, label, missing) => {
       if (!d || d.empty) return { head: missing, headTitle: '', export: null, import: null, peak: null, exportTitle: '', importTitle: '' };
       let est = '';
       if (d.estimatedFrom !== null && d.estimatedFrom !== undefined) {
-        est = d.estimatedFrom <= d.from ? ' · Preise geschätzt' : ` · Preise ab ${time(d.estimatedFrom)} geschätzt`;
+        est = d.estimatedFrom <= d.from ? ' · Preisprognose' : ` · ab ${time(d.estimatedFrom)} Preisprognose`;
       }
       return {
         head: `${label}${d.complete ? '' : ` bis ${time(d.until)}`}${est}`,
-        headTitle: est ? ESTIMATED_HELP : '',
+        headTitle: est ? (s.forecastPlan ? FORECAST_HELP : ESTIMATED_HELP) : '',
         export: exportLine(d.export, s.feedInBasis),
         import: importLine(d.import, time),
         peak: peakLine(d.peak),
@@ -276,11 +306,16 @@
       const reach = s.evDeadline.covered || !Number.isFinite(s.evDeadline.planEnd)
         ? `Plan reicht bis zur Abfahrt des E-Autos${at}`
         : `Plan reicht Richtung Abfahrt des E-Autos${at}, aber nur bis ${time(s.evDeadline.planEnd)}`;
-      notes.push(`${reach} — ab ${time(s.evDeadline.estimatedFrom)} mit geschätzten Preisen`);
+      notes.push(`${reach} — ab ${time(s.evDeadline.estimatedFrom)} mit Preisprognose`);
+    } else if (s.forecastPlan) {
+      notes.push(`Plan reicht bis in die Preisprognose (ab ${time(s.forecastPlan.estimatedFrom)}) — Vorschau, umgesetzt wird nur mit festen Preisen`);
     }
+    const terminal = terminalLine(s.terminal);
     return {
       note: notes.join(' · '),
-      noteTitle: s.evDeadline ? ESTIMATED_HELP : '',
+      noteTitle: s.evDeadline ? ESTIMATED_HELP : (s.forecastPlan ? FORECAST_HELP : ''),
+      terminal,
+      terminalTitle: terminal ? TERMINAL_HELP : '',
       today: day(s.today, 'Heute ab jetzt', 'Heute: kein Plan mehr ab jetzt'),
       tomorrow: day(s.tomorrow, 'Morgen', 'Morgen: noch nicht im Plan'),
     };
@@ -338,6 +373,9 @@
     }));
     set('eosPlanSummaryNote', v.note);
     setTitle('eosPlanSummaryNote', v.noteTitle);
+    // M17: Terminal-Wert-Zeile (ct/kWh, mit der EOS die Rest-Ladung bewertet).
+    set('eosPlanSummaryTerminal', v.terminal);
+    setTitle('eosPlanSummaryTerminal', v.terminalTitle);
     for (const [key, prefix] of [['today', 'eosPlanSummaryToday'], ['tomorrow', 'eosPlanSummaryTomorrow']]) {
       const dv = v[key] || {};
       const box = d.getElementById(prefix);

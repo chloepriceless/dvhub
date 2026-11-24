@@ -49,7 +49,7 @@ function chargeThenDischarge({ state, tickPoll }, t0) {
 
 test('Befund 3: Kapazität fehlt → keine Ersatzzahl, kein Kappen, kein Abbuchen, Sperre bleibt, Meldung in Log und Status', () => {
   assert.deepEqual(gridShareCapacityInput({ state: { victron: { soc: 50 } } }, { optimizer: {} }),
-    { capacityWh: null, socPct: null, capacityMissing: true });
+    { capacityWh: null, socPct: null, floorPct: 0, capacityMissing: true });
   const s = setup();
   try {
     chargeThenDischarge(s, Date.now() - 4 * 3600_000);
@@ -65,14 +65,21 @@ test('Befund 3: Kapazität fehlt → keine Ersatzzahl, kein Kappen, kein Abbuche
   } finally { s.cleanup(); }
 });
 
-test('Befund 3: echte Kapazität (40 kWh) → richtig gekappt und anteilig abgebucht', () => {
+test('Befund 3: echte Kapazität (40 kWh) → nicht gekappt, Einspeisung kommt aus dem PV-Teil', () => {
   const s = setup({ capacityWh: 40_000 });
   try {
     chargeThenDischarge(s, Date.now() - 4 * 3600_000);
     const sum = s.ctx.gridShare.summary();
-    // 20 kWh Netzstrom bei 28 kWh Inhalt (70 %): Anteil ≈ 71 %, 6 kWh Entladung
-    // nehmen ~4,3 kWh Netzstrom mit — es bleiben ~15,7 kWh, Sperre an.
-    assert.ok(sum.gridWh > 15_000 && sum.gridWh < 16_500, `anteilig abgebucht: ${sum.gridWh} Wh`);
+    // 20 kWh Netzstrom bei 26 kWh Inhalt über dem Boden (70 %, Boden 5 %):
+    // 6 kWh PV-Teil. Die 6 kWh ins Netz kommen daraus (Akku→Netz nimmt zuerst
+    // PV, Christin 20.11.2026; bis dahin anteilig ~4,6 kWh Netzstrom) — es
+    // bleiben ~20 kWh, Sperre an. Am Ende ist der PV-Teil genau aufgebraucht:
+    // Mit jeder neuen Lesung kommt er aus dem ganzzahligen Ladestand (Codex
+    // 885ac894 P2), der höchstens um einen halben Prozentschritt (200 Wh)
+    // daneben liegt — so viel kann an dieser Grenze als Netzstrom zählen.
+    // Mit den früheren 8000 Wh Ersatzkapazität wäre auf ~5,7 kWh gekappt worden.
+    assert.ok(sum.gridWh > 19_500 && sum.gridWh <= 20_000, `kaum abgebucht: ${sum.gridWh} Wh`);
+    assert.ok(sum.today.batteryToGridFromGridKwh <= 0.2, `höchstens die Rundung als Netzstrom ins Netz: ${sum.today.batteryToGridFromGridKwh} kWh`);
     assert.equal(sum.locked, true);
     assert.equal(sum.capacityMissing, false);
     assert.equal(s.logs.filter((l) => l.event === 'grid_share_capacity_missing').length, 0);
@@ -148,4 +155,38 @@ test('Befund 7: Sperrwechsel vor der Datenbank werden vorgemerkt und nach teleme
 test('Befund 3: das Börsenautomatik-Feld (Standard 30 kWh) gilt nicht als Akkukapazität', () => {
   const cfg = { optimizer: {}, schedule: { smallMarketAutomation: { batteryCapacityKwh: 30 } } };
   assert.equal(gridShareCapacityInput({ state: { victron: { soc: 50 } } }, cfg).capacityMissing, true);
+});
+
+// --- Zwei Sungrow-WR (Parallelbetrieb): Systemkapazität = Summe beider Akkus, System-SoC ---------------
+
+function sungrowCtx({ aggregate = true, online = true, secondCapWh = 9600, mainCapWh = 10000, soc = 55 } = {}) {
+  const cfg = {
+    optimizer: { batteryCapacityWh: mainCapWh },
+    sungrow: { secondInverter: { host: '192.168.68.83', aggregateTelemetry: aggregate, ...(secondCapWh ? { batteryCapacityWh: secondCapWh } : {}) } },
+  };
+  const state = {
+    victron: { soc },
+    sungrowSecond: { online, updatedAt: Date.now(), socPct: 40, batteryPowerW: -2168, pvPowerW: 0, bdcRatedW: 10000 },
+  };
+  return { ctx: { state, getCfg: () => cfg }, cfg };
+}
+
+test('Zwei Sungrow-WR: Kapazität = Master + Slave, SoC = System-SoC', () => {
+  const { ctx, cfg } = sungrowCtx({ secondCapWh: 9600, mainCapWh: 10000, soc: 55 });
+  assert.deepEqual(gridShareCapacityInput(ctx, cfg), { capacityWh: 19600, socPct: 55, floorPct: 5, capacityMissing: false });
+});
+
+test('Zwei Sungrow-WR: Zweit-Kapazität fehlt → Summe unbekannt (capacityMissing), kein Abbuchen', () => {
+  const { ctx, cfg } = sungrowCtx({ secondCapWh: 0, soc: 55 });
+  assert.deepEqual(gridShareCapacityInput(ctx, cfg), { capacityWh: null, socPct: 55, floorPct: 5, capacityMissing: true });
+});
+
+test('Zwei Sungrow-WR: aggregateTelemetry AUS → Master-only wie bisher', () => {
+  const { ctx, cfg } = sungrowCtx({ aggregate: false, mainCapWh: 10000, soc: 55 });
+  assert.deepEqual(gridShareCapacityInput(ctx, cfg), { capacityWh: 10000, socPct: 55, floorPct: 5, capacityMissing: false });
+});
+
+test('Zwei Sungrow-WR: Slave offline → Master-only (kein Sungrow-Sonderfall)', () => {
+  const { ctx, cfg } = sungrowCtx({ online: false, mainCapWh: 10000, soc: 55 });
+  assert.deepEqual(gridShareCapacityInput(ctx, cfg), { capacityWh: 10000, socPct: 55, floorPct: 5, capacityMissing: false });
 });

@@ -231,10 +231,14 @@ describe('buildForecastResponse', () => {
 // Per-timestamp picking alternated vrm≈6kW with solcast=0 every 30 minutes.
 // Contract: ONE model (best non-zero coverage) supplies the whole line.
 describe('buildForecastResponse pastForecast model consistency', () => {
+  // N2: die historische Prognose kommt nur aus einem verbundenen Speicher (forecast.start() → ensureSchema).
+  const connectStore = (service) => service.store.ensureSchema({ query: async () => ({ rows: [] }) });
+
   it('picks the single best-coverage model instead of mixing models per slot', async () => {
     const ctx = createMockCtx();
     ctx.telemetryStore = { listPvActualSlots: async () => [] };
     const service = createForecastService(ctx);
+    await connectStore(service);
 
     const base = Date.parse('2026-06-13T10:00:00.000Z');
     const rows = [];
@@ -259,6 +263,7 @@ describe('buildForecastResponse pastForecast model consistency', () => {
     const ctx = createMockCtx();
     ctx.telemetryStore = { listPvActualSlots: async () => [] };
     const service = createForecastService(ctx);
+    await connectStore(service);
 
     const base = Date.parse('2026-06-13T00:00:00.000Z');
     const rows = [];
@@ -316,6 +321,59 @@ describe('buildForecastResponse — Lizenz-kWp-Cap', () => {
     const res = await service.buildForecastResponse();
     assert.equal(res.meta.pvCapKwp, null);
     assert.equal(res.pv.slots[0].powerW, 12000);
+  });
+});
+
+// N2 (Feld 19.11.2026): Kurz nach dem Start stand einmal „forecast_historic_query_error: Cannot read properties
+// of null (reading 'query')" im Protokoll, in derselben Sekunde „vrm_forecast_persist_error". Ursache: die
+// Datenbank (ctx.db) und ctx.telemetryStore stehen schon, der Prognose-Speicher hat seinen Pool aber erst, wenn
+// forecast.start() ensureSchema() aufruft (server.js, nach telemetryReady). Eine /api/forecast-Anfrage in diesem
+// Fenster las die historische Prognose und spiegelte VRM über den noch leeren Pool.
+describe('N2: buildForecastResponse vor dem Start des Prognose-Speichers', () => {
+  function bootCtx() {
+    const ctx = createMockCtx({ cfg: { telemetry: { historyImport: { vrmToken: 'tok' } } } });
+    const sqls = [];
+    const now = Date.now();
+    ctx.db = {
+      query: async (sql) => {
+        sqls.push(String(sql));
+        if (/FROM vrm_forecasts/.test(sql) && /solar_yield/.test(sql) && !/GROUP BY/.test(sql)) {
+          return { rows: [{ ts_utc: new Date(now + 3_600_000).toISOString(), value_w: 1500 }] };
+        }
+        if (/FROM pv_forecasts/.test(sql)) {
+          return { rows: [{ ts_utc: new Date(now - 3_600_000).toISOString(), power_w: 1200, model: 'vrm' }] };
+        }
+        return { rows: [], rowCount: 0 };
+      }
+    };
+    ctx.telemetryStore = { listPvActualSlots: async () => [] };
+    return { ctx, sqls };
+  }
+  const errorEvents = (ctx) => ctx._logs
+    .map((l) => l.type)
+    .filter((t) => t === 'forecast_historic_query_error' || t === 'vrm_forecast_persist_error');
+
+  it('meldet keinen Fehler, solange der Speicher noch keinen Pool hat (Start-Fenster)', async () => {
+    const { ctx, sqls } = bootCtx();
+    const service = createForecastService(ctx);
+    assert.equal(service.store.isReady(), false, 'Vorbedingung: forecast.start() lief noch nicht');
+    const res = await service.buildForecastResponse();
+    assert.deepEqual(errorEvents(ctx), [], 'keine Fehlerzeile im Start-Fenster');
+    assert.deepEqual(res.pastForecast, [], 'historische Prognose folgt mit der nächsten Anfrage');
+    assert.equal(res.vrmSolar.length, 1, 'das VRM-Overlay liest ctx.db direkt und kommt trotzdem');
+    assert.ok(!sqls.some((s) => /INSERT INTO pv_forecasts/.test(s)), 'kein Spiegel-Write ohne Pool');
+  });
+
+  it('liefert die historische Prognose und spiegelt VRM, sobald forecast.start() den Speicher verbunden hat', async () => {
+    const { ctx, sqls } = bootCtx();
+    const service = createForecastService(ctx);
+    await service.buildForecastResponse(); // Start-Fenster: still ausgelassen
+    await service.store.ensureSchema(ctx.db); // = forecast.start()
+    const res = await service.buildForecastResponse();
+    assert.deepEqual(errorEvents(ctx), []);
+    assert.equal(res.pastForecast.length, 1, 'historische Prognose jetzt da');
+    assert.equal(res.pastForecast[0].powerW, 1200);
+    assert.ok(sqls.some((s) => /INSERT INTO pv_forecasts/.test(s)), 'VRM-Spiegel nach dem Start geschrieben');
   });
 });
 

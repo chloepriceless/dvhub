@@ -43,7 +43,8 @@ export function parsePushFields(obj) {
   const errors = [];
   for (const [field, raw] of Object.entries(obj || {})) {
     if (field === 'uiToken') continue;
-    const spec = PUSH_FIELDS[field];
+    // Nur eigene Schlüssel (A8): constructor/toString/__proto__ sind unbekannte Felder, kein Eintrag über den Prototyp.
+    const spec = Object.hasOwn(PUSH_FIELDS, field) ? PUSH_FIELDS[field] : null;
     if (!spec) { errors.push(`${field}: unbekanntes Feld`); continue; }
     const str = typeof raw === 'number' ? String(raw) : String(raw ?? '').trim().replace(',', '.');
     if (!/^-?\d+(\.\d+)?$/.test(str)) { errors.push(`${field}: keine Zahl`); continue; }

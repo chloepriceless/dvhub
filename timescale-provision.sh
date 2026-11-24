@@ -216,6 +216,10 @@ fi
 
 echo "  TimescaleDB: provisioniere Community-Edition (PG ${PG_VER}, ${DISTRO} ${CODENAME:-?}) ..."
 
+# Warum die Community-Edition nicht kam (fuer timescale-status.json, S12 a1
+# 23.11.2026: der Apache-Rueckfall endete bisher mit „ok“ und blieb still).
+TSL_WHY=""
+
 # --- 3. Add Timescale's apt repo + GPG key (idempotent) ----------------------
 # Defensive: a minimal box may lack gnupg/curl.
 apt-get install -y gnupg curl ca-certificates >/dev/null 2>&1 || true
@@ -226,6 +230,7 @@ if [[ ! -s "$KEYRING" ]]; then
     echo "  TimescaleDB: Timescale-GPG-Key hinterlegt."
   else
     echo "  WARN: Timescale-GPG-Key nicht abrufbar (Netz?) — versuche Apache-Fallback." >&2
+    TSL_WHY="Timescale-GPG-Schluessel nicht abrufbar (Netz?)"
     rm -f "$KEYRING" 2>/dev/null || true
   fi
 fi
@@ -248,6 +253,7 @@ if [[ "$NEED_APT_UPDATE" -eq 1 ]]; then
   # grep ohne -q: liest alles, kein SIGPIPE unter pipefail (siehe apt-cache).
   if printf '%s\n' "$APT_OUT" | grep -E "^(E|Error): The repository '[^']*packagecloud\.io/timescale/[^']*' does not have a Release file" >/dev/null; then
     echo "  WARN: packagecloud hat keine TimescaleDB-Pakete fuer ${DISTRO} ${CODENAME} — apt-Quelle wieder entfernt." >&2
+    TSL_WHY="packagecloud hat keine TimescaleDB-Pakete fuer ${DISTRO} ${CODENAME}"
     rm -f "$REPO_LIST"
     apt-get update >>"$LOG_FILE" 2>&1 || true
   fi
@@ -260,9 +266,14 @@ USE_TSL=0
 # `grep -q`. Under `set -o pipefail`, grep -q closes the pipe on first match and
 # apt-cache dies with SIGPIPE (141), which pipefail reports as a failed pipeline
 # → USE_TSL would wrongly stay 0 and the box would fall back to Apache.
-TSL_POLICY="$(apt-cache policy "$TSL_PKG" 2>/dev/null || true)"
+# LC_ALL=C: apt-cache policy antwortet sonst in der Sprache der Box
+# („Installationskandidat:“) — das Muster unten fand dann keinen Kandidaten und
+# die Box fiel auf das Apache-Paket zurueck (Codex 7096c6f1).
+TSL_POLICY="$(LC_ALL=C apt-cache policy "$TSL_PKG" 2>/dev/null || true)"
 if [[ -s "$KEYRING" && -f "$REPO_LIST" && "$TSL_POLICY" =~ Candidate:\ [0-9] ]]; then
   USE_TSL=1
+elif [[ -z "$TSL_WHY" ]]; then
+  TSL_WHY="kein Community-Paket ${TSL_PKG} fuer ${DISTRO} ${CODENAME:-?} verfuegbar"
 fi
 
 # Eigener Download-Ordner (Gegenpruefung 25.10.2026): ein dpkg-Hook wie
@@ -282,6 +293,60 @@ apt_dl() { mkdir -p "$DEB_DIR/partial" && DEBIAN_FRONTEND=noninteractive apt-get
 apt_inst() { mkdir -p "$DEB_DIR/partial" && DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dir::Cache::archives="$DEB_DIR" "$@" >>"$LOG_FILE" 2>&1; }
 APACHE_REMOVED=0
 
+# Timescale liefert je Version einen Bau pro PostgreSQL-Minor: …-1806 verlangt
+# postgresql-18 (>= 18.6), …-1807 (>= 18.7). apt nimmt den hoechsten Bau. Hat die
+# Distribution erst 18.6, ist der nicht installierbar („Unable to satisfy
+# dependencies“) und DVhub fiele ohne Not auf das Apache-Paket zurueck (CI rot
+# 19.11.2026, Ubuntu 26.04 mit 18.6, packagecloud 2.32.1~ubuntu26.04-1807).
+# Darum, wenn der apt-Kandidat nicht passt, die neueste Version unterhalb waehlen, deren PostgreSQL-Abhaengigkeit die
+# INSTALLIERTE PostgreSQL-Version erfuellt. Gesucht wird die eigenstaendige
+# Abhaengigkeit „postgresql-N (>= …)“, nicht das Ende von „…-loader-postgresql-N (>= …)“. Ausgabe: "<paket>=<version>", oder nur
+# "<paket>" (apt entscheidet wie bisher), wenn sich nichts bestimmen laesst.
+# Gleiche Funktion in pkg-maintain.sh und scripts/ci/timescale-native-e2e.sh.
+ts_pkg_spec() {
+  local pkg="$1" pg_pkg="postgresql-${PG_VER}" have ver deps need re cand pol neg
+  have="$(dpkg-query -W -f='${Version}' "$pg_pkg" 2>/dev/null || true)"
+  if [[ -z "$have" ]]; then printf '%s\n' "$pkg"; return 0; fi
+  # apt-Kandidat = was apt nach den Regeln der Box (Pins, Prioritaeten) nehmen wuerde.
+  # Nie darueber hinausgehen: eine ausdrueckliche Version uebergeht sonst einen Pin
+  # des Betreibers (Codex 684697ca). Ohne Kandidat entscheidet apt wie bisher.
+  # LC_ALL=C: auf einer deutschen Box heisst die Zeile sonst „Installationskandidat:“.
+  pol="$(LC_ALL=C apt-cache policy "$pkg" 2>/dev/null || true)"
+  cand="$(printf '%s\n' "$pol" | sed -n 's/^ *Candidate: //p' | head -n1 || true)"
+  if [[ -z "$cand" || "$cand" == "(none)" ]]; then printf '%s\n' "$pkg"; return 0; fi
+  # Gesperrte Bauten (Pin-Priority < 0) auslassen: apt installiert eine ausdrueckliche
+  # Version auch dann, wenn der Betreiber sie gesperrt hat (apt 2.6 bis 3.2 im Container
+  # geprueft, Codex 711c4e3e). Versionstabelle: "     <version> <prioritaet>"; Quellzeilen
+  # haben mehr Felder oder keine Zahl am Ende. Der installierte Bau (" *** ") zaehlt nicht:
+  # ihn zu waehlen aendert nichts, ihn auszulassen verlangte ein Downgrade. Ist die Tabelle
+  # nicht lesbar, bleibt die Liste leer (Verhalten wie bisher).
+  neg="$(printf '%s\n' "$pol" | awk '/^ *Version table:/ { t = 1; next } t && NF == 2 && $2 ~ /^-[0-9]+$/ { print $1 }' || true)"
+  re="(^|, )${pg_pkg} \\(>= ([^)]+)\\)"
+  while IFS= read -r ver; do
+    [[ -n "$ver" ]] || continue
+    dpkg --compare-versions "$ver" le "$cand" || continue
+    if grep -qxF -- "$ver" <<<"$neg"; then continue; fi
+    deps="$(apt-cache show "${pkg}=${ver}" 2>/dev/null | sed -n 's/^Depends: //p' | head -n1 || true)"
+    need=""
+    if [[ "$deps" =~ $re ]]; then need="${BASH_REMATCH[2]}"; fi
+    if [[ -z "$need" ]] || dpkg --compare-versions "$have" ge "$need"; then
+      # Passt schon der Kandidat, bleibt es beim Paketnamen — apt waehlt wie immer.
+      if [[ "$ver" == "$cand" ]]; then printf '%s\n' "$pkg"; else printf '%s=%s\n' "$pkg" "$ver"; fi
+      return 0
+    fi
+  done < <(apt-cache madison "$pkg" 2>/dev/null | awk -F'|' '{gsub(/[ \t]/,"",$2); if ($2!="") print $2}' | sort -rV | uniq || true)
+  printf '%s\n' "$pkg"
+}
+TSL_LOADER_SPEC="$TSL_LOADER"
+TSL_PKG_SPEC="$TSL_PKG"
+if [[ "$USE_TSL" -eq 1 ]] && ! dpkg -s "$TSL_PKG" >/dev/null 2>&1; then
+  TSL_LOADER_SPEC="$(ts_pkg_spec "$TSL_LOADER")"
+  TSL_PKG_SPEC="$(ts_pkg_spec "$TSL_PKG")"
+  if [[ "$TSL_PKG_SPEC" == *=* ]]; then
+    echo "  TimescaleDB: Community-Paket passend zur installierten PostgreSQL-Version: ${TSL_PKG_SPEC#*=}"
+  fi
+fi
+
 if [[ "$USE_TSL" -eq 1 ]]; then
   # The Debian Apache package ships the same `timescaledb` .so and conflicts with
   # the Community package (retrofit Apache→Community). Review 25.10.2026: früher
@@ -293,8 +358,9 @@ if [[ "$USE_TSL" -eq 1 ]]; then
   # einem einzigen apt-Lauf: der hinge an Conflicts/Replaces der Fremdpakete.
   if dpkg -s "$TSL_PKG" >/dev/null 2>&1; then
     echo "  TimescaleDB: Community-Paket ${TSL_PKG} bereits installiert."
-  elif ! apt_dl "$TSL_LOADER" "$TSL_PKG"; then
+  elif ! apt_dl "$TSL_LOADER_SPEC" "$TSL_PKG_SPEC"; then
     echo "  WARN: Community-Paket nicht herunterladbar — Fallback auf Apache-Paket." >&2
+    TSL_WHY="Community-Paket nicht herunterladbar"
     USE_TSL=0
   else
     APACHE_READY=1
@@ -306,16 +372,18 @@ if [[ "$USE_TSL" -eq 1 ]]; then
         PKG_CHANGED=1
       else
         echo "  WARN: Apache-Paket nicht sicherbar — Tausch auf Community verschoben." >&2
+        TSL_WHY="Apache-Paket nicht sicherbar, Tausch auf Community verschoben"
         APACHE_READY=0
         USE_TSL=0
       fi
     fi
     if [[ "$APACHE_READY" -eq 1 ]]; then
-      if apt_inst "$TSL_LOADER" "$TSL_PKG"; then
+      if apt_inst "$TSL_LOADER_SPEC" "$TSL_PKG_SPEC"; then
         echo "  TimescaleDB: Community-Paket ${TSL_PKG} installiert."
         PKG_CHANGED=1
       else
         echo "  WARN: Community-Paket nicht installierbar — Fallback auf Apache-Paket." >&2
+        TSL_WHY="Community-Paket nicht installierbar"
         USE_TSL=0
         # Halb installierte Community-Pakete (z. B. nur der Loader) teilen sich
         # die .so mit Apache und stuenden der Rueckkehr im Weg.
@@ -346,6 +414,9 @@ if [[ "$USE_TSL" -eq 0 ]]; then
       fail_visible "Paketwechsel Apache→Community gescheitert, ${APACHE_PKG} nicht wieder installierbar — TimescaleDB-Bibliothek fehlt (Preload-Eintrag entfernt, damit PostgreSQL startet)"
     else
       echo "  WARN: ${APACHE_PKG} nicht installierbar (Netz/Repo?) — Box bleibt auf reinem Postgres." >&2
+      # Nicht mehr still (S12 a1): DVhub zeigt „Datenbank ohne Kompression“ mit diesem Grund.
+      log_line "WARN: keine TimescaleDB installierbar (${TSL_WHY:-?}), reines Postgres"
+      write_status failed "TimescaleDB nicht installierbar (${TSL_WHY:-Netz/Repo?}) — reines Postgres, keine Kompression"
       exit 0
     fi
   else
@@ -383,11 +454,12 @@ if [[ -d "$CONF_DIR" ]]; then
   fi
 else
   echo "  WARN: ${CONF_DIR} fehlt — kann shared_preload_libraries nicht setzen." >&2
+  write_status failed "${CONF_DIR} fehlt — TimescaleDB nicht eingerichtet"
   exit 0
 fi
 if [[ "$NEED_RESTART" -eq 1 ]]; then
   echo "  TimescaleDB: Postgres-Neustart (neue Bibliothek/Preload) ..."
-  restart_pg || { echo "  WARN: Postgres-Restart fehlgeschlagen." >&2; exit 0; }
+  restart_pg || { echo "  WARN: Postgres-Restart fehlgeschlagen." >&2; write_status failed "Postgres-Neustart nach der TimescaleDB-Einrichtung fehlgeschlagen"; exit 0; }
 fi
 
 # --- 6. Erweiterung anlegen bzw. auf die installierte Version heben ----------
@@ -506,8 +578,18 @@ EXTVER="$(su postgres -c "psql -X -v ON_ERROR_STOP=1 -tAq -d ${DB_NAME} -c \"SEL
 [[ -n "$EXTVER" ]] || fail_visible "TimescaleDB-Erweiterung fehlt nach der Provisionierung in '${DB_NAME}'"
 LICENSE="$(ext_license)"
 echo "  TimescaleDB: Extension in DB '${DB_NAME}' aktiv (v${EXTVER}, Lizenz ${LICENSE:-?})."
-log_line "OK: v${EXTVER}, Lizenz ${LICENSE:-?}"
-write_status ok ""
+if [[ "$LICENSE" == "timescale" ]]; then
+  log_line "OK: v${EXTVER}, Lizenz ${LICENSE}"
+  write_status ok ""
+else
+  # Apache-Rueckfall laut melden statt „ok“ (S12 a1, 23.11.2026): DVhub liest
+  # provision.result 'apache' aus timescale-status.json und zeigt den Grund im
+  # roten Hinweis „Datenbank ohne Kompression“. Der naechste Start/Update
+  # versucht es erneut (post-update.sh --check sieht nicht „timescale“).
+  echo "  WARN: TimescaleDB laeuft in der Apache-Edition (${TSL_WHY:-Grund unbekannt}) — keine Kompression." >&2
+  log_line "WARN: Apache-Edition v${EXTVER} (${TSL_WHY:-Grund unbekannt})"
+  write_status apache "Community-Edition nicht installiert: ${TSL_WHY:-Grund unbekannt}"
+fi
 
 # --- 7. Flip the config so migration 014 runs on next start ------------------
 flip_config_true

@@ -5,7 +5,11 @@
 #
 #   scripts/release/build-release.sh <tag|ref> [--arch arm64,armhf,amd64]
 #       [--out DIR] [--key PFAD | --no-sign] [--repo DIR] [--allowlist DATEI]
-#       [--no-eebus] [--npm-cache DIR]
+#       [--no-eebus] [--npm-cache DIR] [--sig-scope release|dev]
+#
+# --sig-scope dev (24.11.2026): mit dem dev-Schlüssel im Namensraum
+# dvhub-release-dev signieren (Vorgabe-Schlüssel ~/.config/dvhub-release/
+# dev_ed25519, eine Datei ohne Agent). Nur für dev-Stände — eine Tag-Ref bricht ab.
 #
 # Ablauf: git archive (nur die Ref, kein Arbeitsbaum) → Allowlist → npm ci
 # --omit=dev --ignore-scripts → Abhängigkeiten prüfen → je Architektur
@@ -22,8 +26,9 @@ NPM="${NPM:-npm}"
 REF=""
 ARCHS="arm64,armhf,amd64"
 OUT="${DVHUB_RELEASE_OUT:-$HOME/Projects/dvhub-release-out}"
-KEY="${DVHUB_RELEASE_KEY:-$HOME/.config/dvhub-release/release_ed25519}"
+KEY=""
 SIGN=1
+SCOPE="${DVHUB_RELEASE_SIG_SCOPE:-release}"
 REPO="$(cd "$HERE/../.." && pwd)"
 ALLOWLIST="$HERE/allowlist.txt"
 EEBUS=1
@@ -44,12 +49,18 @@ while [[ $# -gt 0 ]]; do
     --allowlist) ALLOWLIST="${2:-}"; shift 2 ;;
     --no-eebus) EEBUS=0; shift ;;
     --npm-cache) NPM_CACHE="${2:-}"; shift 2 ;;
+    --sig-scope) SCOPE="${2:-}"; shift 2 ;;
     -h|--help) usage ;;
     -*) die "unbekannte Option $1" ;;
     *) [[ -z "$REF" ]] || usage; REF="$1"; shift ;;
   esac
 done
 [[ -n "$REF" ]] || usage
+case "$SCOPE" in
+  release) NS_PKG=dvhub-release; KEY="${KEY:-${DVHUB_RELEASE_KEY:-$HOME/.config/dvhub-release/release_ed25519}}" ;;
+  dev) NS_PKG=dvhub-release-dev; KEY="${KEY:-${DVHUB_RELEASE_DEV_KEY:-$HOME/.config/dvhub-release/dev_ed25519}}" ;;
+  *) die "--sig-scope release oder dev" ;;
+esac
 for a in ${ARCHS//,/ }; do
   case "$a" in arm64|armhf|amd64) ;; *) die "Architektur $a unbekannt (arm64, armhf, amd64)" ;; esac
 done
@@ -68,6 +79,8 @@ if [[ "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && g rev-parse --verify --quiet "re
   TAG="$REF"
 fi
 COMMIT_TIME="$(g log -1 --format=%ct "$SHA")"
+# dev-Schlüssel nie für stable: Tag-Refs ergeben stable (computeReleaseVersion).
+[[ "$SCOPE" == dev && -n "$TAG" ]] && die "--sig-scope dev nur für dev-Stände, nicht für Tag $TAG"
 
 # Zeitordner unter dem Home (Colima teilt nur das Home in die VM — EEBUS-Bau).
 WORK_BASE="${DVHUB_RELEASE_WORK:-$HOME/Projects}"
@@ -85,6 +98,7 @@ VJSON="$("$NODE" "$CLI" version --tag "$TAG" --pkg-version "$PKG_VERSION" --comm
 VERSION="$(echo "$VJSON" | "$NODE" -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0,"utf8")).version)')"
 CHANNEL="$(echo "$VJSON" | "$NODE" -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0,"utf8")).channel)')"
 echo "    Version $VERSION, Kanal $CHANNEL"
+[[ "$SCOPE" == dev && "$CHANNEL" != dev ]] && die "--sig-scope dev nur für Kanal dev (ist $CHANNEL)"
 
 echo "[2/6] Allowlist"
 n="$("$NODE" "$CLI" assemble --src "$SRC" --dest "$PKG" --allowlist "$ALLOWLIST")"
@@ -159,9 +173,11 @@ echo "[5/6] Signieren"
 if [[ "$SIGN" -eq 1 ]]; then
   for f in "$OUTDIR"/*.tar.gz; do
     rm -f "$f.sig"
-    ssh-keygen -Y sign -q -f "$KEY" -n dvhub-release "$f" || die "Signatur für $f fehlgeschlagen"
+    # dev: nur die Schlüsseldatei, nie ein Agent (kein 1Password-Dialog).
+    if [[ "$SCOPE" == dev ]]; then env -u SSH_AUTH_SOCK ssh-keygen -Y sign -q -f "$KEY" -n "$NS_PKG" "$f" </dev/null
+    else ssh-keygen -Y sign -q -f "$KEY" -n "$NS_PKG" "$f"; fi || die "Signatur für $f fehlgeschlagen"
   done
-  echo "    mit $(ssh-keygen -l -f "$KEY" | awk '{print $2}')"
+  echo "    mit $(ssh-keygen -l -f "$KEY" | awk '{print $2}') (Namensraum $NS_PKG)"
 else
   echo "    übersprungen (--no-sign)"
 fi

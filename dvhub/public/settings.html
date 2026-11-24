@@ -12,7 +12,7 @@
   <meta name="theme-color" content="#030610">
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
-  <link rel="stylesheet" href="/settings.css?v=20261105-release110">
+  <link rel="stylesheet" href="/settings.css?v=20261119-pv-ensemble">
   <link rel="stylesheet" href="/settings-redesign.css?v=20261105-release110">
   <script src="/theme.js"></script>
 </head>
@@ -250,6 +250,24 @@
                 <button id="dbEngineUpgradeBtn" class="btn btn-primary btn-small" type="button">TimescaleDB aktualisieren</button>
               </div>
               <p class="svc-meta" id="dbEngineMeta">-</p>
+            </div>
+
+            <!-- Speicher (Speicher-Konzept 23.11.2026): Platten, Reichweite, Profil, Kompression -->
+            <div class="config-group" data-accent="cyan" id="storageGroup" hidden>
+              <div class="config-group-kicker">Speicher</div>
+              <div id="storageBanner" class="config-banner info">Speicher wird gepr&uuml;ft...</div>
+              <div class="data-table-scroll" tabindex="0">
+                <table class="data-table dv-log-table">
+                  <thead><tr><th scope="col">Platte</th><th scope="col">Gr&ouml;&szlig;e</th><th scope="col">frei</th><th scope="col">Stufe</th></tr></thead>
+                  <tbody id="storageMounts"><tr><td colspan="4">-</td></tr></tbody>
+                </table>
+              </div>
+              <p class="svc-meta" id="storageProfile">-</p>
+              <div id="storageProfileActions" class="svc-actions-block">
+                <button id="storageProfileApplyBtn" class="btn btn-primary btn-small" type="button">Vorschlag &uuml;bernehmen</button>
+              </div>
+              <p class="svc-meta" id="storageDb">-</p>
+              <p class="svc-meta" id="storageHints"></p>
             </div>
 
             <!-- Dienst -->
@@ -791,7 +809,7 @@
             <div class="config-group config-group-full" data-accent="blue">
               <div class="config-group-kicker">Zeitplan</div>
               <p class="svc-meta">Regeln laden, pr&uuml;fen und als JSON gezielt anpassen.</p>
-              <p class="svc-meta">JSON-Format: <code>{ "rules": [ ... ] }</code></p>
+              <p class="svc-meta">JSON-Format: <code>{ "rules": [ ... ] }</code> &mdash; die Liste ersetzt alle manuellen Regeln, auch die DC-Einspeise-Regeln; automatische Regeln bleiben.</p>
               <div class="svc-actions-row">
                 <button id="loadSchedule" class="btn btn-ghost btn-small" type="button">Zeitplan laden</button>
                 <button id="saveSchedule" class="btn btn-primary btn-small" type="button">Zeitplan speichern</button>
@@ -1029,8 +1047,8 @@
   <script src="/build-watch.js?v=20261111-t0423"></script>
   <script src="/dv-modal.js?v=20260629-prompt-inputtype"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/settings.js?v=20261110-paritaet"></script>
-  <script src="/tools.js?v=20261110-fable-r3"></script>
+  <script src="/settings.js?v=20261119-pv-ensemble"></script>
+  <script src="/tools.js?v=20261119-m20-dcregeln"></script>
   <script src="/mobile-link.js?v=20261022-handy2"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>

@@ -43,9 +43,22 @@ function setup({ arch = 'aarch64' } = {}) {
     writeFileSync(join(rel, WHEEL(a)), body);
     pins.push(`EOS_NATIVE_${key}=${WHEEL(a)}`, `EOS_NATIVE_${key}_SHA256=${sha(body)}`);
   }
+  // local-native: das eigenständige Binär dvhub-optimize als Release-Asset.
+  // Dieselbe Datei für alle Arch-Pins — eos-provision.sh wählt nach `uname -m`,
+  // so läuft der Test auf jeder Host-Arch. Das „Binär“ ist ein Skript, das auf
+  // `version` antwortet (der Rauchtest ruft genau das auf).
+  const binName = 'dvhub-optimize-0.1.0-test';
+  const binBody = '#!/usr/bin/env bash\ncase "$1" in version) echo "dvhub-optimize test (eos-genetic)";; esac\nexit 0\n';
+  writeFileSync(join(rel, binName), binBody);
+  chmodSync(join(rel, binName), 0o755);
+  const binPins = [];
+  for (const key of ['X86_64', 'AARCH64', 'ARMV7L']) {
+    binPins.push(`EOS_NATIVE_BIN_${key}=${binName}`, `EOS_NATIVE_BIN_${key}_SHA256=${sha(binBody)}`);
+  }
   const pinFile = join(dir, 'eos-version.env');
   writeFileSync(pinFile, [`EOS_REPO_URL=file://${upstream}`, `EOS_PIN=${pin}`, 'EOS_NATIVE_VERSION=0.2.0',
-    `EOS_NATIVE_URL=file://${rel}`, ...pins, ''].join('\n'));
+    `EOS_NATIVE_URL=file://${rel}`, ...pins,
+    'EOS_NATIVE_BIN_VERSION=0.1.0-test', `EOS_NATIVE_BIN_URL=file://${rel}`, ...binPins, ''].join('\n'));
 
   const bin = join(dir, 'bin');
   mkdirSync(bin);
@@ -83,11 +96,13 @@ exit 0`);
   const install = join(dir, 'opt');
   mkdirSync(install);
   const unitFile = join(dir, 'eos.service');
+  const optinMarker = join(dir, 'eos-native-optin');
   const env = {
     PATH: `${bin}:${process.env.PATH}`, ...GIT_ENV, HOME: dir, FAKE_ARCH: arch,
     EOS_PROVISION_EUID: '0', INSTALL_DIR: install, DATA_DIR: join(dir, 'data'),
     EOS_PIN_FILE: pinFile, EOS_HOME: join(dir, 'eos-home'),
     EOS_ENV_FILE: join(dir, 'eos.env'), EOS_UNIT_FILE: unitFile,
+    EOS_NATIVE_OPTIN_MARKER: optinMarker,
   };
   const run = (extra = {}) => {
     writeFileSync(log, '');
@@ -100,6 +115,9 @@ exit 0`);
     unit: () => read(unitFile) || '',
     marker: () => read(join(dir, 'data', '.eos-provisioned'))?.trim() ?? null,
     native: () => read(join(dir, 'data', '.eos-native'))?.trim() ?? null,
+    engine: () => read(join(dir, 'data', '.eos-native-engine'))?.trim() ?? null,
+    nativeBin: () => read(join(install, 'bin', 'dvhub-optimize')),
+    setOptin: (on) => { if (on) writeFileSync(optinMarker, ''); else rmSync(optinMarker, { force: true }); },
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
 }
@@ -234,3 +252,205 @@ test('update-pins: glibc-Wheels aus SHA256SUMS in die Pin-Datei, musllinux bleib
     assert.doesNotMatch(text, /musllinux/);
   } finally { s.cleanup(); }
 });
+
+// ── local-native: nativer Optimierer dvhub-optimize ALS EOS-Dienst ──────────
+// Nur mit BEIDEM — Config mode=local-native (EOS_PROXY_MODE) UND Opt-in-Marker.
+// Sonst bleibt es beim Python-EOS (der bestehende Weg ist unberührt). Fehlt das
+// Binär/passt die Prüfsumme nicht, Rückfall auf Python.
+const nativeExec = (unit) => /^ExecStart=\S*dvhub-optimize serve --listen 127\.0\.0\.1:8503 /m.test(unit);
+const pythonExec = (unit) => /ExecStart=\S*python -m akkudoktoreos\.server\.eos/.test(unit);
+// Der native Pfad wählt das Binär per `uname -m` (HOST-Arch) — FAKE_ARCH steuert nur
+// die pip/python-Plattform, nicht uname. Die Markererwartung richtet sich deshalb nach der
+// echten Laufzeit-Arch, damit der Test auf jedem Runner stimmt (arm64 lokal → AARCH64,
+// x86_64 CI → X86_64).
+const HOST_NATIVE_ARCH = { arm64: 'AARCH64', x64: 'X86_64', arm: 'ARMV7L' }[process.arch] || process.arch.toUpperCase();
+
+test('local-native + Opt-in: nativer Dienst, kein venv/pip, Marker native', () => {
+  const s = setup({ arch: 'aarch64' });
+  try {
+    s.setOptin(true);
+    const r = s.run({ EOS_PROXY_MODE: 'local-native' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(nativeExec(s.unit()), `native ExecStart erwartet:\n${s.unit()}`);
+    assert.ok(!pythonExec(s.unit()), 'kein Python-ExecStart');
+    assert.doesNotMatch(s.calls(), /^pip install -e /m, 'kein Python-Install im nativen Weg');
+    assert.match(s.calls(), /^systemctl restart eos\.service/m);
+    assert.ok(s.nativeBin(), 'Binär nach INSTALL_DIR/bin/dvhub-optimize installiert');
+    assert.match(s.native(), new RegExp(`\\bok native:dvhub-optimize-0\\.1\\.0-test-${HOST_NATIVE_ARCH}:`));
+    // Steuer-Marker .eos-native-engine getrennt; .eos-provisioned (Python-Stand)
+    // fasst der native Weg NICHT an (Rückweg-Datensicherung, Codex-P2 #3).
+    assert.match(s.engine(), /^native file:\/\/\S+@\S+ dvhub-optimize-0\.1\.0-test:[0-9a-f]{12}$/);
+    assert.equal(s.marker(), null, '.eos-provisioned unangetastet im nativen Weg');
+    assert.match(r.stdout, /nativer Optimierer AKTIV/);
+  } finally { s.cleanup(); }
+});
+
+test('mode=local-native OHNE Opt-in: KEIN nativer Dienst, Python-Weg (Codex-P3)', () => {
+  const s = setup({ arch: 'aarch64' });
+  try {
+    // kein setOptin → der Config-Schalter allein darf nicht umstellen
+    const r = s.run({ EOS_PROXY_MODE: 'local-native' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(pythonExec(s.unit()), 'Python-ExecStart (nicht nativ)');
+    assert.ok(!nativeExec(s.unit()), 'kein nativer ExecStart ohne Opt-in');
+    assert.match(s.calls(), /^pip install -e /m, 'Python-Weg lief');
+    assert.equal(s.nativeBin(), null, 'kein Binär installiert');
+  } finally { s.cleanup(); }
+});
+
+test('Opt-in gesetzt, aber mode=local: Python-Weg (beides nötig)', () => {
+  const s = setup({ arch: 'aarch64' });
+  try {
+    s.setOptin(true);
+    const r = s.run({ EOS_PROXY_MODE: 'local' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(pythonExec(s.unit()));
+    assert.ok(!nativeExec(s.unit()));
+  } finally { s.cleanup(); }
+});
+
+test('Binär-Prüfsumme passt nicht: Rückfall auf Python, Warnung', () => {
+  const s = setup({ arch: 'aarch64' });
+  try {
+    s.setOptin(true);
+    writeFileSync(join(s.rel, 'dvhub-optimize-0.1.0-test'), 'manipuliert\n'); // sha ≠ Pin
+    const r = s.run({ EOS_PROXY_MODE: 'local-native' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(pythonExec(s.unit()), 'Rückfall: Python-Dienst');
+    assert.ok(!nativeExec(s.unit()));
+    assert.match(r.stderr, /Rückfall auf Python-EOS/);
+    // Als Fallback VERMERKT, damit post-update.sh nicht bei jedem Start neu
+    // (teuer) provisioniert (Codex-P2 #1).
+    assert.match(s.engine(), /^fallback file:\/\/\S+@\S+ /);
+  } finally { s.cleanup(); }
+});
+
+test('kein Binär-Pin für diese Arch: Python, KEIN Fallback-Vermerk (Codex-P2 #1, kein Churn)', () => {
+  const s = setup({ arch: 'aarch64' });
+  try {
+    s.setOptin(true);
+    // Alle Binär-Pins entfernen → eos_bin_sig leer → gar nicht erst nativ versuchen.
+    const pins = readFileSync(s.pinFile, 'utf8').replace(/^EOS_NATIVE_BIN_.*$/gm, '').replace(/\n{2,}/g, '\n');
+    writeFileSync(s.pinFile, pins);
+    const r = s.run({ EOS_PROXY_MODE: 'local-native' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(pythonExec(s.unit()), 'Python-Dienst');
+    assert.ok(!nativeExec(s.unit()));
+    assert.equal(s.engine(), null, 'kein Motor-Marker (weder native noch fallback) → post-update churnt nicht');
+    assert.match(r.stderr, /kein natives Binär für .* gepinnt/);
+  } finally { s.cleanup(); }
+});
+
+test('vorübergehender Download-Fehler (kein Prüfsummen-Fehler): Python, KEIN Vermerk → erneuter Versuch (Codex-P3)', () => {
+  const s = setup({ arch: 'aarch64' });
+  try {
+    s.setOptin(true);
+    rmSync(join(s.rel, 'dvhub-optimize-0.1.0-test'), { force: true }); // Asset fehlt → Download-Fehler, kein sha-Fehler
+    const r = s.run({ EOS_PROXY_MODE: 'local-native' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(pythonExec(s.unit()), 'Python vorerst');
+    assert.equal(s.engine(), null, 'kein Fallback-Vermerk bei transientem Fehler → nächster Start versucht nativ erneut');
+    assert.match(r.stderr, /erneuter Versuch beim nächsten Start/);
+  } finally { s.cleanup(); }
+});
+
+test('EOS_ENGINE=native erzwingt nativ (mit Opt-in)', () => {
+  const s = setup({ arch: 'aarch64' });
+  try {
+    s.setOptin(true);
+    const r = s.run({ EOS_ENGINE: 'native' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(nativeExec(s.unit()));
+  } finally { s.cleanup(); }
+});
+
+test('EOS_ENGINE=native OHNE Opt-in: trotzdem Python (Marker ist harte Sperre)', () => {
+  const s = setup({ arch: 'aarch64' });
+  try {
+    const r = s.run({ EOS_ENGINE: 'native' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(pythonExec(s.unit()), 'ohne Opt-in nie nativ');
+  } finally { s.cleanup(); }
+});
+
+test('idempotent: zweiter nativer Lauf ändert nichts, kein erneuter restart', () => {
+  const s = setup({ arch: 'aarch64' });
+  try {
+    s.setOptin(true);
+    assert.equal(s.run({ EOS_PROXY_MODE: 'local-native' }).status, 0);
+    const r = s.run({ EOS_PROXY_MODE: 'local-native' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /nativer Optimierer aktuell .* nichts zu tun/);
+    assert.doesNotMatch(s.calls(), /^systemctl restart eos\.service/m, 'kein Neustart-Karussell');
+  } finally { s.cleanup(); }
+});
+
+test('neuer Binär-Pin (andere sha) → Neu-Installation, nicht "nichts zu tun" (Codex-P2 #2)', () => {
+  const s = setup({ arch: 'aarch64' });
+  try {
+    s.setOptin(true);
+    assert.equal(s.run({ EOS_PROXY_MODE: 'local-native' }).status, 0);
+    // Binär im Release ersetzen + Pin-sha nachziehen (wie DEV→CI-Bau).
+    const neu = '#!/usr/bin/env bash\ncase "$1" in version) echo "dvhub-optimize test v2";; esac\nexit 0\n';
+    writeFileSync(join(s.rel, 'dvhub-optimize-0.1.0-test'), neu);
+    const newSha = createHash('sha256').update(neu).digest('hex');
+    const pins = readFileSync(s.pinFile, 'utf8').replace(/^(EOS_NATIVE_BIN_[A-Z0-9_]*_SHA256)=.*$/gm, `$1=${newSha}`);
+    writeFileSync(s.pinFile, pins);
+    const r = s.run({ EOS_PROXY_MODE: 'local-native' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /nativer Optimierer AKTIV/, 'neu installiert, nicht übersprungen');
+    assert.match(s.engine(), new RegExp(`:${newSha.slice(0, 12)}$`), 'Motor-Marker nennt die neue sha');
+  } finally { s.cleanup(); }
+});
+
+test('Rückweg: von nativ zurück auf Python (mode=local) stellt den Python-Dienst wieder her', () => {
+  const s = setup({ arch: 'aarch64' });
+  try {
+    s.setOptin(true);
+    assert.ok(nativeExec((s.run({ EOS_PROXY_MODE: 'local-native' }), s.unit())));
+    const r = s.run({ EOS_PROXY_MODE: 'local' }); // Schalter zurück
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(pythonExec(s.unit()), 'Python-Dienst wieder da');
+    assert.ok(!nativeExec(s.unit()));
+    assert.match(s.calls(), /^pip install -e /m);
+    assert.equal(s.engine(), null, 'Motor-Marker beim Rückweg gelöscht');
+  } finally { s.cleanup(); }
+});
+
+// A14 (21.11.2026): dvhub-optimize ist jetzt auch für armv7l gepinnt (32-Bit-ARM-
+// Kernel, z. B. Pi 2/3). Die Box wählt nach `uname -m` genau das Binär ihrer Architektur —
+// hier mit drei verschiedenen Binären und einer uname-Attrappe je Architektur.
+for (const [unameM, key] of [['armv7l', 'ARMV7L'], ['aarch64', 'AARCH64'], ['x86_64', 'X86_64']]) {
+  test(`local-native auf ${unameM}: genau das ${key}-Binär wird geholt, geprüft und installiert`, () => {
+    const s = setup({ arch: unameM });
+    try {
+      s.setOptin(true);
+      const bodies = {};
+      let pins = readFileSync(s.pinFile, 'utf8').replace(/^EOS_NATIVE_BIN_(X86_64|AARCH64|ARMV7L)(_SHA256)?=.*\n/gm, '');
+      for (const k of ['X86_64', 'AARCH64', 'ARMV7L']) {
+        const name = `dvhub-optimize-0.1.0-test-${k.toLowerCase()}`;
+        bodies[k] = `#!/usr/bin/env bash\ncase "$1" in version) echo "dvhub-optimize test ${k} (eos-genetic)";; esac\nexit 0\n`;
+        writeFileSync(join(s.rel, name), bodies[k]);
+        chmodSync(join(s.rel, name), 0o755);
+        pins += `EOS_NATIVE_BIN_${k}=${name}\nEOS_NATIVE_BIN_${k}_SHA256=${sha(bodies[k])}\n`;
+      }
+      writeFileSync(s.pinFile, pins);
+      const r = s.run({ EOS_PROXY_MODE: 'local-native', PATH: `${fakeUname(s.dir, unameM)}:${process.env.PATH}` });
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.ok(nativeExec(s.unit()), `native ExecStart erwartet:\n${s.unit()}`);
+      assert.equal(s.nativeBin(), bodies[key], `installiert ist das ${key}-Binär`);
+      assert.match(s.native(), new RegExp(`\\bok native:dvhub-optimize-0\\.1\\.0-test-${key}:${sha(bodies[key]).slice(0, 12)}$`));
+      assert.match(s.engine(), new RegExp(` dvhub-optimize-0\\.1\\.0-test-${key.toLowerCase()}:${sha(bodies[key]).slice(0, 12)}$`));
+    } finally { s.cleanup(); }
+  });
+}
+
+// uname-Attrappe VOR den übrigen Attrappen (setup legt sie in <dir>/bin; PATH der
+// Probe: <dir>/uname-bin:<dir>/bin:…). Nur `-m` wird beantwortet, sonst echtes uname.
+function fakeUname(dir, machine) {
+  const d = join(dir, 'uname-bin');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'uname'), `#!/usr/bin/env bash\nif [[ "$1" == -m ]]; then echo ${machine}; else exec /usr/bin/uname "$@"; fi\n`);
+  chmodSync(join(d, 'uname'), 0o755);
+  return `${d}:${join(dir, 'bin')}`;
+}

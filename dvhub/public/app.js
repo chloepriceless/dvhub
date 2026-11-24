@@ -54,6 +54,34 @@ function isOptimizerRule(rule) {
   return rule.source === FORECAST_OPTIMIZER_SOURCE
     || (typeof rule.id === 'string' && rule.id.startsWith(OPT_ID_PREFIX));
 }
+// M18 (2026-11-16): EOS/Optimizer rules run a full hour (slotTs … slotEndTs =
+// 4×15-min), yet the Börsenchart used to highlight only the single slotTs slot
+// → a thin stripe at the start of each hour instead of a band over the whole
+// rule. Collect EVERY chart slot whose timestamp falls in [slotTs, slotEndTs).
+// Range-check against the ACTUAL chart slot timestamps (robust against the slot
+// raster) rather than enumerating a fixed 15-min step. The start slot is always
+// marked, so a rule without slotEndTs (old/incomplete) keeps its single slot —
+// no regress. Only Optimizer rules qualify (isOptimizerRule); automation/user
+// slots are collected separately.
+function collectOptimizerSlotTimestamps(rules, slotTimestamps = []) {
+  const slots = (Array.isArray(slotTimestamps) ? slotTimestamps : [])
+    .map(Number)
+    .filter(Number.isFinite);
+  const out = new Set();
+  for (const rule of (Array.isArray(rules) ? rules : [])) {
+    if (!isOptimizerRule(rule)) continue;
+    const slotTs = Number(rule?.slotTs);
+    if (!Number.isFinite(slotTs)) continue;
+    out.add(slotTs); // always mark the start slot (no regress for old rules)
+    const slotEndTs = Number(rule?.slotEndTs);
+    if (Number.isFinite(slotEndTs) && slotEndTs > slotTs) {
+      for (const ts of slots) {
+        if (ts >= slotTs && ts < slotEndTs) out.add(ts);
+      }
+    }
+  }
+  return [...out];
+}
 
 function fmtTs(ts) { return ts ? new Date(ts).toLocaleString('de-DE') : '-'; }
 // Heute nur die Uhrzeit, sonst Tag + Uhrzeit — spart in den schmalen Karten den Umbruch.
@@ -245,9 +273,10 @@ function updateFlowDiagram(status) {
     const w = Number(status?.victron?.batteryPowerW || 0);
     let label;
     let tone;
-    if (w > 50) { label = 'CHARGE'; tone = 'info'; }
-    else if (w < -50) { label = 'DISCHARGE'; tone = 'ok'; }
-    else { label = 'IDLE'; tone = ''; }
+    // M9: deutsche Statusworte (nicht „CHARGE/DISCHARGE/IDLE").
+    if (w > 50) { label = 'Laden'; tone = 'info'; }
+    else if (w < -50) { label = 'Entladen'; tone = 'ok'; }
+    else { label = 'Leerlauf'; tone = ''; }
     modeEl.textContent = label;
     chip.classList.remove('info', 'ok', 'warn');
     if (tone) chip.classList.add(tone);
@@ -711,8 +740,178 @@ function createScheduleRowsFromChartSelection(indices = getSelectedChartIndices(
 }
 
 let priceChartInstance = null;
+/** Letzte Antwort von /api/price/outlook (für die Zeile unter der Preiskurve). */
+let lastPriceOutlook = null;
 
-function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null, historySlots = [], userSlotTimestamps = [], sunTimes = null, optimizerSlotTimestamps = []) {
+/**
+ * Zeile unter der Preiskurve: Stand der festen Börsenpreise und — seit 1.0.11 —
+ * der Preisprognose (bis wann, Stand, oder seit wann sie fehlt).
+ */
+function priceChartMetaText(status, outlook) {
+  const epd = status?.epex?.data || [];
+  const distinctDays = Array.from(new Set(epd.map((r) => r.day).filter(Boolean))).sort();
+  const daysLabel = distinctDays.length
+    ? distinctDays.map((d) => d.slice(5)).join(' + ')
+    : '—';
+  const tomorrowHint = (distinctDays.length < 2 && status?.epex?.nextDate)
+    ? ` · Morgen (${status.epex.nextDate.slice(5)}) wird nach EPEX-Clearing ~13:00 verfügbar`
+    : '';
+  let text = `EPEX Update: ${fmtTs(status?.epex?.updatedAt)} | ${epd.length} Slots · ${daysLabel}${tomorrowHint}`;
+  const o = outlook;
+  const dm = (iso) => {
+    const d = new Date(iso);
+    return Number.isFinite(d.getTime()) ? d.toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+  };
+  if (o && (o.status === 'live' || o.status === 'cached') && Array.isArray(o.hours) && o.hours.length) {
+    const last = o.hours[o.hours.length - 1];
+    text += ` | Preisprognose (gestrichelt) liegt vor bis ${dm(Number(last.ts) + 3600000)}, Stand ${dm(o.issuedAt)}${o.status === 'cached' ? ' (gespeichert, neue nicht abrufbar)' : ''}`;
+    // Bezugspreis-Prognose (19.11.2026): nur nennen, wenn sich ein Bezugspreis ergibt.
+    const hasImport = Array.isArray(o.importSlots) && o.importSlots.some((s) => s && s.p50 !== null && Number.isFinite(Number(s.p50)));
+    if (hasImport) text += ' · Bezugspreis-Prognose nach deinem Tarif';
+  } else if (o && o.status === 'unavailable' && o.unavailableSince) {
+    text += ` | Preisprognose nicht verfügbar seit ${dm(o.unavailableSince)}`;
+  }
+  return text;
+}
+
+/**
+ * Prognose-Zeilen für die Preiskurve (1.0.11): Stunden aus /api/price/outlook
+ * hinter dem letzten festen Preis, im Raster der festen Preise (15 oder 60 min),
+ * bis jetzt + 36 h. Preise in ct/kWh (Börse).
+ * Seit 19.11.2026 mit Bezugspreis-Prognose (importP50/P10/P90, ct/kWh brutto)
+ * aus `importSlots` je Viertelstunde — Wert der Viertelstunde am Zeilenbeginn,
+ * wie der feste Bezugspreis je Slot; fehlt er, null.
+ * @returns {Array<{ts:number, ct_kwh:null, forecast:true, p50:number, p10:number|null, p90:number|null,
+ *   importP50:number|null, importP10:number|null, importP90:number|null}>}
+ */
+function buildPriceForecastRows(realData, outlook, nowTs) {
+  const hours = Array.isArray(outlook?.hours) ? outlook.hours : [];
+  if (!hours.length || !Array.isArray(realData) || !realData.length || !Number.isFinite(Number(nowTs))) return [];
+  const ts = realData.map((d) => Number(d.ts)).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!ts.length) return [];
+  let stepMs = Infinity;
+  for (let i = 1; i < ts.length; i += 1) stepMs = Math.min(stepMs, ts[i] - ts[i - 1]);
+  if (!Number.isFinite(stepMs) || stepMs <= 0 || stepMs > 3600000) stepMs = 900000;
+  const realEnd = ts[ts.length - 1] + stepMs;
+  const winTo = Number(nowTs) + 36 * 3600000;
+  const byHour = new Map(hours.map((h) => [Number(h.ts), h]));
+  const importByTs = new Map((Array.isArray(outlook?.importSlots) ? outlook.importSlots : [])
+    .filter((s) => s && Number.isFinite(Number(s.ts)))
+    .map((s) => [Number(s.ts), s]));
+  const num = (v) => (v !== null && v !== undefined && Number.isFinite(Number(v)) ? Number(v) : null);
+  const out = [];
+  for (let t = realEnd; t < winTo; t += stepMs) {
+    const h = byHour.get(t - (t % 3600000));
+    if (!h || !Number.isFinite(Number(h.p50))) break; // Lücke: Prognose endet
+    const imp = importByTs.get(t);
+    const importP50 = num(imp?.p50);
+    out.push({
+      ts: t,
+      ct_kwh: null,
+      forecast: true,
+      p50: Number(h.p50),
+      p10: Number.isFinite(Number(h.p10)) && h.p10 !== null ? Number(h.p10) : null,
+      p90: Number.isFinite(Number(h.p90)) && h.p90 !== null ? Number(h.p90) : null,
+      importP50,
+      importP10: importP50 === null ? null : num(imp?.p10),
+      importP90: importP50 === null ? null : num(imp?.p90)
+    });
+  }
+  return out;
+}
+
+/**
+ * Bezugspreis-Reihe der Preiskurve: feste Slots aus dem Preisvergleich
+ * (/api/status userEnergyPricing.slots), Prognose-Zeilen aus der
+ * Bezugspreis-Prognose (importP50). Fehlt ein Wert: null (Lücke).
+ */
+function priceChartImportSeries(data, comparisons) {
+  const byTs = new Map((comparisons || []).filter(Boolean).map((row) => [Number(row.ts), row]));
+  return (Array.isArray(data) ? data : []).map((d) => {
+    const v = d?.forecast ? d.importP50 : byTs.get(Number(d?.ts))?.importPriceCtKwh;
+    return v !== null && v !== undefined && Number.isFinite(Number(v)) ? Number(v) : null;
+  });
+}
+
+/**
+ * Spanne der Bezugspreis-Prognose als zwei Reihen (Christin 19.11.2026: „zweite
+ * blasse Linie“): P10 (lo) und P90 (hi) nur in Prognose-Zeilen mit echter
+ * Spanne. Fällt sie zusammen (fester Preis, bekannter Anbieterpreis) oder fehlt
+ * sie, null — die Linien lägen sonst genau auf P50.
+ */
+function priceChartImportBandSeries(data) {
+  const has = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
+  const lo = [];
+  const hi = [];
+  for (const d of Array.isArray(data) ? data : []) {
+    const ok = d?.forecast && has(d.importP50) && has(d.importP10) && has(d.importP90)
+      && Math.abs(Number(d.importP90) - Number(d.importP10)) >= 0.005;
+    lo.push(ok ? Number(d.importP10) : null);
+    hi.push(ok ? Number(d.importP90) : null);
+  }
+  return { lo, hi };
+}
+
+/**
+ * Legenden-Klick der Preiskurve: wie Chart.js (Datensatz ein/aus), dazu alle
+ * Datensätze mit `legendGroup` = Bezeichnung des Eintrags — die Spannen-Linien
+ * des Bezugspreises haben keinen eigenen Eintrag und folgen „Bezugspreis“.
+ */
+function togglePriceChartLegend(chart, datasetIndex) {
+  const sets = chart?.data?.datasets || [];
+  const main = sets[datasetIndex];
+  if (!main) return;
+  const hide = chart.isDatasetVisible(datasetIndex);
+  sets.forEach((ds, k) => {
+    if (k === datasetIndex || (main.label && ds.legendGroup === main.label)) chart.getDatasetMeta(k).hidden = hide;
+  });
+  chart.update();
+}
+
+/**
+ * Art eines Abschnitts der Bezugspreis-Linie (Chart.js-Segment-Kontext):
+ *   'real'     endet in einer festen Zeile — Stil der Linie wie bisher;
+ *   'forecast' endet in einer Prognose-Zeile — feiner gestrichelt;
+ *   'gap'      endet in einer Prognose-Zeile, und einer der beiden Punkte hat
+ *              keinen Bezugspreis — nicht zeichnen, sonst überbrückt die Linie
+ *              (spanGaps) die Lücke mit einem erfundenen Preis (Codex ff257d67).
+ * Chart.js 4 ruft den Segment-Stil für jedes benachbarte Paar auf, auch über
+ * übersprungene Punkte; die Lücke steckt in p0.skip/p1.skip, nicht im
+ * Index-Abstand (Codex 82843151). Der Abschnitt über die Lücke wird damit
+ * insgesamt unsichtbar.
+ */
+function priceChartImportSegmentKind(data, segCtx) {
+  if (!data?.[segCtx?.p1DataIndex]?.forecast) return 'real';
+  return segCtx?.p0?.skip || segCtx?.p1?.skip ? 'gap' : 'forecast';
+}
+
+/**
+ * Tooltip-Zeilen für eine Prognose-Zeile der Preiskurve: Börse und — seit
+ * 19.11.2026 — Bezug, je ganze Cent mit Spanne (keine Scheingenauigkeit).
+ * Hängt der Bezugspreis nicht von der Börse ab (fester Preis, bekannter
+ * Anbieterpreis: Spanne fällt zusammen), steht er genau da, ohne Spanne.
+ */
+function priceForecastTooltipLines(row) {
+  const r0 = (v) => Math.round(Number(v));
+  const has = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
+  const lines = [`Börse (Prognose): ≈ ${r0(row.p50)} ct/kWh`];
+  if (has(row.p10) && has(row.p90)) lines.push(`Spanne: ${r0(row.p10)}–${r0(row.p90)} ct/kWh`);
+  if (has(row.importP50)) {
+    if (has(row.importP10) && has(row.importP90)) {
+      if (Math.abs(Number(row.importP90) - Number(row.importP10)) < 0.005) {
+        lines.push(`Bezug (Prognose): ${fmtCt(row.importP50, 2)} (unabhängig von der Börse)`);
+      } else {
+        lines.push(`Bezug (Prognose): ≈ ${r0(row.importP50)} ct/kWh (${r0(row.importP10)}–${r0(row.importP90)})`);
+      }
+    } else {
+      lines.push(`Bezug (Prognose): ≈ ${r0(row.importP50)} ct/kWh`);
+    }
+  }
+  lines.push('Börsenpreis noch nicht fest');
+  return lines;
+}
+
+function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null, historySlots = [], userSlotTimestamps = [], sunTimes = null, optimizerSlotTimestamps = [], priceOutlook = null) {
   const canvas = document.getElementById('priceChartCanvas');
   const container = document.getElementById('priceChartContainer');
   const tooltip = document.getElementById('tooltip');
@@ -760,7 +959,15 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       return Number.isFinite(ts) && ts >= _winFrom && ts < _winTo;
     });
   }
-  chartSelectionState.data = Array.isArray(data) ? data : [];
+  // Preisprognose (1.0.11, /api/price/outlook): hinter den festen Börsenpreisen
+  // bis jetzt + 36 h als eigene, gestrichelte Reihe mit Band P10–P90. Die
+  // Prognose-Zeilen hängen hinten an `data` (forecast: true, ct_kwh null) —
+  // auswählen lassen sie sich nicht, Zeitpläne entstehen nur aus festen Preisen.
+  const realData = Array.isArray(data) ? data : [];
+  const realCount = realData.length;
+  const fcRows = buildPriceForecastRows(realData, priceOutlook, nowTs);
+  if (fcRows.length) data = realData.concat(fcRows);
+  chartSelectionState.data = realData;
   chartSelectionState.barElements = [];
   chartSelectionState.hoveredIndex = null;
   chartSelectionState.pointerDown = false;
@@ -818,16 +1025,15 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   const automationSlots = new Set((automationSlotTimestamps || []).map(Number));
   const userSlots = new Set((userSlotTimestamps || []).map(Number));
   const optimizerSlots = new Set((optimizerSlotTimestamps || []).map(Number));
-  const vals = data.map((d) => Number(d.ct_kwh) / 100);
-  const { high: highHighlights, low: lowHighlights } = getChartHighlightSets(vals, { timestamps: data.map((d) => d.ts) });
+  // Hoch-/Tiefpunkte nur aus festen Preisen (Prognose-Zeilen hängen hinten an).
+  const vals = realData.map((d) => Number(d.ct_kwh) / 100);
+  const { high: highHighlights, low: lowHighlights } = getChartHighlightSets(vals, { timestamps: realData.map((d) => d.ts) });
 
   const labels = data.map(d => new Date(d.ts));
-  const prices = data.map(d => Number(d.ct_kwh));
-  const importPrices = data.map(d => {
-    const c = comparisonByTs.get(Number(d.ts));
-    const v = Number(c?.importPriceCtKwh);
-    return Number.isFinite(v) ? v : null;
-  });
+  const prices = data.map(d => (d.forecast ? null : Number(d.ct_kwh)));
+  // Bezugspreis: feste Slots aus dem Preisvergleich, im Prognosebereich die
+  // Bezugspreis-Prognose (19.11.2026) — dieselbe Linie läuft weiter.
+  const importPrices = priceChartImportSeries(data, comparisons);
 
   // Build forecast series (interpolation from hourly to 15-min)
   let solarFc = data.map(() => null);
@@ -918,7 +1124,67 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     }
   ];
 
+  // Preisprognose: P50 gestrichelt (beginnt am letzten festen Preis, damit die
+  // Linie anschließt), darunter das Band P10–P90 — „so ungefähr“, keine
+  // Scheingenauigkeit.
+  if (fcRows.length) {
+    const p50 = data.map((d, i) => (d.forecast ? d.p50 : (i === realCount - 1 ? Number(d.ct_kwh) : null)));
+    const hasBand = fcRows.some((r) => r.p10 != null && r.p90 != null);
+    datasets.push({
+      label: 'Preisprognose',
+      type: 'line',
+      data: p50,
+      borderColor: hexToRgba(chartPositive, 0.75),
+      backgroundColor: 'transparent',
+      borderWidth: 2,
+      borderDash: [6, 4],
+      pointRadius: 0,
+      pointHoverRadius: 3,
+      tension: 0,
+      fill: false,
+      spanGaps: false,
+      yAxisID: 'y',
+      order: 2
+    });
+    if (hasBand) {
+      datasets.push({
+        label: '',
+        type: 'line',
+        data: data.map((d) => (d.forecast ? d.p10 : null)),
+        borderColor: 'transparent',
+        backgroundColor: 'transparent',
+        borderWidth: 0,
+        pointRadius: 0,
+        pointHoverRadius: 0,
+        fill: false,
+        spanGaps: false,
+        yAxisID: 'y',
+        order: 3
+      });
+      datasets.push({
+        label: 'Prognose-Spanne',
+        type: 'line',
+        data: data.map((d) => (d.forecast ? d.p90 : null)),
+        borderColor: 'transparent',
+        backgroundColor: hexToRgba(chartPositive, 0.12),
+        borderWidth: 0,
+        pointRadius: 0,
+        pointHoverRadius: 0,
+        fill: '-1',
+        spanGaps: false,
+        yAxisID: 'y',
+        order: 3
+      });
+    }
+  }
+
   if (hasImport) {
+    // Im Prognosebereich (Segmente, die in einer Prognose-Zeile enden) läuft
+    // die Linie in derselben Farbe weiter, feiner gestrichelt und etwas
+    // blasser. Eine Linie, ein Legenden-Eintrag: Ausblenden wirkt auf beides.
+    // Prognose-Zeilen ohne Bezugspreis bleiben leer (keine Überbrückung).
+    const importForecastColor = hexToRgba(chartImport, 0.5);
+    const importSegKind = (segCtx) => priceChartImportSegmentKind(data, segCtx);
     datasets.push({
       label: 'Bezugspreis',
       type: 'line',
@@ -930,9 +1196,43 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       pointHoverRadius: 3,
       fill: false,
       spanGaps: true,
+      segment: {
+        borderDash: (segCtx) => (importSegKind(segCtx) === 'real' ? undefined : [3, 4]),
+        borderColor: (segCtx) => {
+          const kind = importSegKind(segCtx);
+          if (kind === 'gap') return 'transparent';
+          return kind === 'forecast' ? importForecastColor : undefined;
+        }
+      },
       yAxisID: 'y',
       order: 1
     });
+    // Spanne P10/P90 der Bezugspreis-Prognose: zwei dünne, blassere Linien ohne
+    // Füllung (das Börsen-Band bleibt die einzige Fläche). Keine Überbrückung
+    // von Lücken (spanGaps: false); bei festem Preis gibt es keine Werte, also
+    // keine Linien. Kein eigener Legenden-Eintrag: sie folgen „Bezugspreis“.
+    const importBand = priceChartImportBandSeries(data);
+    if (importBand.hi.some((v) => v !== null)) {
+      const bandColor = hexToRgba(chartImport, 0.28);
+      for (const [label, values] of [['Bezugspreis-Spanne unten', importBand.lo], ['Bezugspreis-Spanne oben', importBand.hi]]) {
+        datasets.push({
+          label,
+          legendGroup: 'Bezugspreis',
+          type: 'line',
+          data: values,
+          borderColor: bandColor,
+          backgroundColor: 'transparent',
+          borderWidth: 1,
+          borderDash: [2, 3],
+          pointRadius: 0,
+          pointHoverRadius: 0,
+          fill: false,
+          spanGaps: false,
+          yAxisID: 'y',
+          order: 1
+        });
+      }
+    }
   }
 
   if (hasSolarFc) {
@@ -1261,8 +1561,12 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
             color: chartLabel,
             font: { size: 11 },
             usePointStyle: true,
-            padding: 16
-          }
+            padding: 16,
+            // Untere Kante des Prognose-Bands hat keinen eigenen Eintrag, die
+            // Spannen-Linien des Bezugspreises (legendGroup) auch nicht.
+            filter: (item, chartData) => !!item.text && !chartData?.datasets?.[item.datasetIndex]?.legendGroup
+          },
+          onClick: (_e, item, legend) => togglePriceChartLegend(legend.chart, item.datasetIndex)
         },
         tooltip: {
           enabled: false,
@@ -1276,7 +1580,12 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
             const row = data[idx];
             if (!row) { tt.style.display = 'none'; return; }
             const parts = [fmtDmHm(row.ts)];
-            parts.push(`Börse: ${fmtCt(row.ct_kwh, 2)}`);
+            if (row.forecast) {
+              // Prognose: Börse und Bezug in ganzen Cent, mit Spanne — keine Scheingenauigkeit.
+              parts.push(...priceForecastTooltipLines(row));
+            } else {
+              parts.push(`Börse: ${fmtCt(row.ct_kwh, 2)}`);
+            }
             const comp = comparisonByTs.get(Number(row.ts));
             if (comp) {
               if (comp.importPriceCtKwh != null) parts.push(`Bezug: ${fmtCt(comp.importPriceCtKwh, 2)}`);
@@ -1292,7 +1601,13 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
                 parts.push(`${dp.dataset.label}: ${Math.abs(Number(dp.raw)).toFixed(1)} kW`);
               }
             }
-            tt.innerHTML = parts.map(p => `<div class="tooltip-row">${escapeHtml(p)}</div>`).join('');
+            // Zeilen als Text-Knoten (textContent), kein HTML aus Daten.
+            tt.replaceChildren(...parts.map((p) => {
+              const line = document.createElement('div');
+              line.className = 'tooltip-row';
+              line.textContent = p;
+              return line;
+            }));
             tt.style.display = 'block';
             // 20px-Offset zur ECHTEN Maus (Operator-Wunsch). Fällt auf das
             // Chart-Caret zurück, falls noch keine Cursor-Position bekannt ist.
@@ -1322,6 +1637,23 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
         },
         annotation: {
           annotations: {
+            ...(fcRows.length ? {
+              priceForecastZone: {
+                type: 'box',
+                xMin: realCount - 0.5,
+                xMax: data.length - 0.5,
+                backgroundColor: hexToRgba(chartAxis, 0.06),
+                borderWidth: 0,
+                drawTime: 'beforeDatasetsDraw',
+                label: {
+                  display: true,
+                  content: 'Prognose',
+                  position: { x: 'start', y: 'start' },
+                  color: chartLabel,
+                  font: { size: 10 }
+                }
+              }
+            } : {}),
             ...slotOverlayAnnotations,
             ...dayBoundaryAnnotations,
             ...negWindowAnnotations,
@@ -1555,7 +1887,9 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   // Restore legend hidden state from previous chart instance
   if (prevHiddenDatasets.size) {
     priceChartInstance.data.datasets.forEach((ds, i) => {
-      if (prevHiddenDatasets.has(ds.label)) {
+      // Gruppen-Datensätze (Spannen-Linien) folgen ihrem Eintrag — auch wenn
+      // sie beim letzten Zeichnen noch nicht da waren.
+      if (prevHiddenDatasets.has(ds.label) || (ds.legendGroup && prevHiddenDatasets.has(ds.legendGroup))) {
         priceChartInstance.getDatasetMeta(i).hidden = true;
       }
     });
@@ -1578,6 +1912,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     if (!elements.length) return;
     const idx = elements[0].index;
     if (idx < 0 || idx >= data.length) return;
+    if (data[idx]?.forecast) return; // Prognose: nicht auswählbar
     // Capture so we keep getting pointermove/up even if finger leaves canvas
     try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ }
     e.preventDefault();
@@ -1600,6 +1935,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     if (!elements.length) return;
     const idx = elements[0].index;
     if (idx < 0 || idx >= data.length) return;
+    if (data[idx]?.forecast) return; // Prognose: nicht auswählbar
     chartSelectionState.hoveredIndex = idx;
     if (chartSelectionState.pointerDown && chartSelectionState.anchorIndex != null) {
       e.preventDefault();
@@ -1689,6 +2025,84 @@ function computeMinSocRenderState({ readbackValue, pendingState }) {
   return {
     pendingState: nextPendingState,
     shouldBlink: Boolean(nextPendingState)
+  };
+}
+
+// M9: reine Anzeige-Logik der Akku-Kachel für zwei Sungrow-WR (testbar, ohne DOM). Liefert die anzuzeigenden
+// Zeichenketten; der Renderer setzt sie per textContent. socBig = echter System-SoC (energyBalance.battery.socPct),
+// nie der gemeldete fensterrelative Wert; Grid-Setpoint aus ctrl.sungrowEms.target (bzw. schedule.active), nicht
+// victron.gridSetpointW (bei Sungrow null); wirksame Grenze real; Statusworte deutsch.
+function computeSungrowBatteryView(status) {
+  const s = status || {};
+  const sec = s.sungrowSecond;
+  if (!sec) return { isSungrow: false };
+  const vic = s.victron || {};
+  const dev = vic.device || {};
+  const ems = s.sungrowEms;
+  const split = ems && ems.decision && ems.decision.split;
+  const eb = s.energyBalance && s.energyBalance.battery;
+  const fin = (v) => v != null && v !== '' && Number.isFinite(Number(v));
+  const deNum = (v, d = 1) => (fin(v) ? Number(v).toLocaleString('de-DE', { maximumFractionDigits: d }) : null);
+  const realSoc = (rep, mn, mx) => {
+    if (!fin(rep)) return null;
+    const r = Number(rep);
+    if (!fin(mn) || !fin(mx) || Number(mx) <= Number(mn)) return Math.max(0, Math.min(100, r));
+    return Math.max(0, Math.min(100, Number(mn) + (r * (Number(mx) - Number(mn))) / 100));
+  };
+  const realSys = eb && fin(eb.socPct) ? Number(eb.socPct) : null;
+  const reported = fin(vic.soc) ? Number(vic.soc) : null;
+  const floor = eb && fin(eb.minSocPct) ? Number(eb.minSocPct) : null;
+  const devMin = fin(dev.minSocPctDevice) ? Number(dev.minSocPctDevice) : null;
+  const marks = [];
+  if (devMin != null) marks.push(`Geräte-Untergrenze ${deNum(devMin, 0)} %`);
+  if (floor != null) marks.push(`DVhub-Boden ${deNum(floor)} %`);
+  const spW = ems && ems.target && fin(ems.target.setpointW) ? Number(ems.target.setpointW)
+    : (fin(s.schedule && s.schedule.active && s.schedule.active.gridSetpointW && s.schedule.active.gridSetpointW.value) ? Number(s.schedule.active.gridSetpointW.value) : null);
+  const spSrc = (ems && ems.target && ems.target.source) || (s.schedule && s.schedule.active && s.schedule.active.gridSetpointW && s.schedule.active.gridSetpointW.source) || null;
+  const srcDe = { default: 'Standard', schedule: 'Zeitplan', rule: 'Zeitplan', eos: 'EOS', forecast_optimizer: 'EOS', eos_grid_hold: 'EOS', api_manual_write: 'Hand' };
+  const wrLine = (real, powerW, shareW, emergency) => {
+    const parts = [real == null ? 'SoC –' : `SoC ${deNum(real)} %`];
+    if (fin(powerW)) { const p = Number(powerW); parts.push(p > 0 ? `lädt ${Math.round(p)} W` : p < 0 ? `entlädt ${Math.round(-p)} W` : '0 W'); }
+    if (fin(shareW)) parts.push(`Anteil ${Math.round(Number(shareW))} W`);
+    if (emergency) parts.push('Notladung');
+    return parts.join(' · ');
+  };
+  const effW = (d, b) => { const c = [Number(d), Number(b)].filter((x) => Number.isFinite(x) && x > 0); return c.length ? Math.min(...c) : null; };
+  // M24: woher der Minimum-SoC kommt. Puffer 0 → „(Gerät)"; Gerät + Puffer → „(Gerät 10 % + Puffer 1 %)"; liegt der
+  // harte Boden höher → „(DVhub-Boden, Gerät 10 %)". Ohne Pufferangabe (älterer Stand) wie bisher „(Gerät … + Puffer)".
+  const minSocSourceText = (fl, dm, buf) => {
+    if (dm == null) return '';
+    const same = (a, b) => Math.abs(Number(a) - Number(b)) < 0.05;
+    if (!fin(buf)) return same(fl, dm) ? ' (Gerät)' : ` (Gerät ${deNum(dm, 0)} % + Puffer)`;
+    if (same(fl, dm + Number(buf))) return Number(buf) > 0 ? ` (Gerät ${deNum(dm, 0)} % + Puffer ${deNum(buf)} %)` : ' (Gerät)';
+    return ` (DVhub-Boden, Gerät ${deNum(dm, 0)} %)`;
+  };
+  const sOnline = sec.online === true;
+  // Codex 2c6c70d0 (P2): der Boden nimmt wie die EOS-Planung die HÖHERE Geräte-Untergrenze beider WR (Slave nur, wenn
+  // erreichbar und aggregiert) — die Herkunft „(Gerät …)" muss dieselbe Grenze vergleichen.
+  const slaveDevMin = sOnline && sec.aggregate !== false && fin(sec.minSocPctDevice) ? Number(sec.minSocPctDevice) : null;
+  // Codex 50deb8d3/4fc6e8da (P2): bevorzugt die Angabe aus energyBalance.battery — je Status frisch, dieselben Eingänge
+  // wie der angezeigte Boden (der EMS-Status kann bei ruhender Steuerung veraltet sein); sonst lokal geschätzt.
+  const devMinEff = eb && fin(eb.deviceMinSocPct) ? Number(eb.deviceMinSocPct)
+    : (devMin != null && slaveDevMin != null ? Math.max(devMin, slaveDevMin) : (devMin != null ? devMin : slaveDevMin));
+  const floorBuffer = eb && fin(eb.floorBufferPct) ? Number(eb.floorBufferPct) : (ems ? ems.socFloorBufferPct : null);
+  const mReal = realSoc(vic.sungrowMasterSocPct != null ? vic.sungrowMasterSocPct : vic.soc, dev.minSocPctDevice, dev.maxSocPctDevice);
+  const sReal = sOnline ? realSoc(sec.socPct, sec.minSocPctDevice, sec.maxSocPctDevice) : null;
+  const mDis = effW(dev.maxDischargeWDevice, dev.bdcRatedW);
+  const sDis = sOnline ? effW(sec.maxDischargeWDevice, sec.bdcRatedW) : null;
+  const maxDischarge = (mDis != null || sDis != null) ? `${deNum(((mDis || 0) + (sDis || 0)) / 1000, 1)} kW (Summe beider WR)` : null;
+  return {
+    isSungrow: true,
+    socBig: realSys != null ? `${deNum(realSys)} %` : null,
+    socReported: reported != null ? `Sungrow-Anzeige ${deNum(reported)} %` : null,
+    socBarPct: realSys != null ? Math.max(0, Math.min(100, realSys)) : null,
+    socMid: realSys != null ? `SoC ${deNum(realSys)} %` : null,
+    marks: marks.join(' · '),
+    gridSetpoint: spW == null ? '–' : `${Math.round(spW)} W${spSrc ? ` (${srcDe[spSrc] || spSrc})` : ''}`,
+    minSoc: floor != null ? `${deNum(floor)} %${minSocSourceText(floor, devMinEff, floorBuffer)}` : null,
+    master: wrLine(mReal, vic.sungrowMasterBatteryW != null ? vic.sungrowMasterBatteryW : vic.batteryPowerW, split ? split.masterW : null, vic.emergencyCharge === true),
+    slave: sOnline ? wrLine(sReal, sec.batteryPowerW, split ? split.slaveW : null, sec.emergencyCharge === true) : 'Nicht erreichbar',
+    maxDischarge,
   };
 }
 
@@ -1880,6 +2294,9 @@ function renderSupportTunnelBanner(st) {
     document.body.prepend(el);
   }
   const mins = st.ttlRemainingSec != null ? Math.max(0, Math.round(st.ttlRemainingSec / 60)) : null;
+  // Aufgabe 10: vor Ablauf warnen — ≤ 5 min Restzeit hebt das Banner hervor.
+  const soon = st.expiringSoon === true;
+  el.classList.toggle('support-tunnel-banner-soon', soon);
   // Fern-Support-Protokoll (2026-11-04): Token-, Kopplungs- und
   // Sicherheitsänderungen seit dem Öffnen gleich im Banner.
   const changes = Array.isArray(st.recentChanges) ? st.recentChanges : [];
@@ -1890,9 +2307,11 @@ function renderSupportTunnelBanner(st) {
       return `${c.label || c.kind}${hhmm ? ` (${hhmm})` : ''}`;
     }).join(', ') + '.'
     : '';
-  el.textContent = '🔓 Support-Tunnel aktiv — Fernzugriff für den Support möglich'
-    + (mins != null ? `, schließt automatisch in ~${mins} min` : '')
-    + '.' + changeText + ' Alle Aktionen und Schließen: Einstellungen → Fern-Support.';
+  const ttlText = mins != null
+    ? (soon ? `, schließt bald automatisch (~${mins} min)` : `, schließt automatisch in ~${mins} min`)
+    : '';
+  el.textContent = (soon ? '⏳' : '🔓') + ' Support-Tunnel aktiv — Fernzugriff für den Support möglich'
+    + ttlText + '.' + changeText + ' Alle Aktionen und Schließen: Einstellungen → Fern-Support.';
 }
 
 // T-0099 NOT-HALT: sticky Banner solange der Not-Halt aktiv ist (Quelle:
@@ -2001,21 +2420,24 @@ function renderVictronAlarms(va) {
 // Systemhinweise (2026-10-20). Quelle: /api/status.systemWarnings — z. B.
 // „Einspeisegrenze nicht angegeben“, unbekannter Befehl des Direktvermarkters,
 // Speicherplatz. Gelb wie Victron-Warnungen, nur Hinweis (keine Aktion).
-function renderSystemWarnings(list) {
+// severity 'error' (z. B. „Datenbank ohne Kompression“, 23.11.2026): rot und zuerst.
+function renderSystemWarnings(list, doc = document) {
   const id = 'systemWarningsBanner';
-  const existing = document.getElementById(id);
+  const existing = doc.getElementById(id);
   const items = Array.isArray(list) ? list.filter((w) => w && w.message) : [];
   if (!items.length) { if (existing) existing.remove(); return; }
   let banner = existing;
   if (!banner) {
-    banner = document.createElement('div');
+    banner = doc.createElement('div');
     banner.id = id;
-    banner.className = 'victron-alarm-banner warn';
-    document.body.prepend(banner);
+    doc.body.prepend(banner);
   }
-  banner.replaceChildren(...items.map((w) => {
-    const line = document.createElement('div');
-    line.textContent = '⚠️ ' + w.message;
+  const hasError = items.some((w) => w.severity === 'error');
+  banner.className = hasError ? 'victron-alarm-banner alarm' : 'victron-alarm-banner warn';
+  const sorted = [...items.filter((w) => w.severity === 'error'), ...items.filter((w) => w.severity !== 'error')];
+  banner.replaceChildren(...sorted.map((w) => {
+    const line = doc.createElement('div');
+    line.textContent = (w.severity === 'error' ? '\u{1F534} ' : '⚠️ ') + w.message;
     return line;
   }));
 }
@@ -2436,7 +2858,10 @@ function renderDashboardStatus(status) {
     const gs = status.gridShare;
     const gsRow = document.getElementById('gridShareRow');
     if (gsRow) {
-      const showGs = !!gs && (gs.gridChargeEnabled === true || Number(gs.gridKwh) > 0 || gs.locked === true);
+      // M10: nach einem Boden-Reset (leerer Akku, Netzanteil verbraucht/verloren) die Zeile kurz (2 min) sichtbar
+      // halten und den Grund anzeigen, auch wenn der Anteil schon 0 und die Sperre weg ist.
+      const resetRecent = !!(gs && gs.floorResetAt) && (Date.now() - new Date(gs.floorResetAt).getTime() < 120_000);
+      const showGs = !!gs && (gs.gridChargeEnabled === true || Number(gs.gridKwh) > 0 || gs.locked === true || resetRecent);
       gsRow.hidden = !showGs;
       if (showGs) {
         const kwh = Number(gs.gridKwh || 0).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 2 });
@@ -2444,7 +2869,15 @@ function renderDashboardStatus(status) {
         // Ohne eingestellte Akkukapazität bucht der Zähler nicht ab (die Sperre
         // bleibt) — das muss sichtbar sein (Gesamtprüfung Release 1.0.9, Befund 3).
         const capHint = gs.capacityMissing ? ' · Akkukapazität fehlt (Einstellungen)' : '';
-        setText('gridShare', `${kwh} kWh (${pct} %)${gs.locked ? ' · Einspeisung gesperrt' : ''}${capHint}`, gs.locked || gs.capacityMissing ? 'warn' : null);
+        // M10: nach dem Boden-Reset kurz anzeigen, dass der Netzanteil verbraucht/als Verlust gebucht wurde.
+        const resetHint = (resetRecent && !gs.locked) ? ' · Netzanteil verbraucht, Rest als Verlust gebucht' : '';
+        // Unsichere Akkuwerte (Feld Nebeling 19.11.): nichts wird abgebucht, die Sperre kann so nicht fallen.
+        const uncLabels = { soc: 'Ladestand', battery_power: 'Akkuleistung', telemetry: 'eingefroren', source: 'Kreuzprobe', second: 'zweiter Akku' };
+        const uncWhat = gs.uncertain && Array.isArray(gs.uncertain.reasons)
+          ? [...new Set(gs.uncertain.reasons.map((r) => uncLabels[Object.keys(uncLabels).find((k) => String(r).startsWith(k))] || r))].join(', ')
+          : '';
+        const uncHint = gs.uncertain && Number(gs.gridKwh) > 0 ? ` · Akkuwerte unsicher (${uncWhat}): keine Abbuchung` : '';
+        setText('gridShare', `${kwh} kWh (${pct} %)${gs.locked ? ' · Einspeisung gesperrt' : ''}${uncHint}${resetHint}${capHint}`, gs.locked || gs.capacityMissing || uncHint ? 'warn' : null);
       }
     }
     setText('pvP', vic.pvPowerW == null ? '-' : `${vic.pvPowerW} W`);
@@ -2463,11 +2896,35 @@ function renderDashboardStatus(status) {
     // T-0118: live readback of the Cerbo AC discharge cap (reg 2704).
     dashboardState.lastMaxDischargeReadback = vic.maxDischargeW == null ? null : Number(vic.maxDischargeW);
     setText('maxDischargeReadback', formatMaxDischarge(vic.maxDischargeW), Number(vic.maxDischargeW) === 0 ? 'off' : null);
+
+    // M9: Akku-Kachel für zwei Sungrow-WR (reine Logik in computeSungrowBatteryView, hier nur ins DOM gesetzt).
+    const setHidden = (id, h) => { const el = document.getElementById(id); if (el) el.hidden = h; };
+    const sgBat = computeSungrowBatteryView(status);
+    if (!sgBat.isSungrow) {
+      for (const id of ['socReported', 'sungrowSocMarks', 'sungrowBatMasterRow', 'sungrowBatSlaveRow']) setHidden(id, true);
+    } else {
+      if (sgBat.socBig != null) setText('soc', sgBat.socBig);
+      const socRep = document.getElementById('socReported');
+      if (socRep) { socRep.hidden = sgBat.socReported == null; socRep.textContent = sgBat.socReported || ''; }
+      const bar = document.getElementById('socBar');
+      if (bar && sgBat.socBarPct != null) { bar.classList.remove('progress-fill-init'); bar.style.width = `${sgBat.socBarPct}%`; }
+      if (sgBat.socMid != null) { const mid = document.getElementById('socMid'); if (mid) mid.textContent = sgBat.socMid; }
+      const marks = document.getElementById('sungrowSocMarks');
+      if (marks) { marks.hidden = !sgBat.marks; marks.textContent = sgBat.marks || ''; }
+      setText('gridSetpoint', sgBat.gridSetpoint);
+      if (sgBat.minSoc != null) setText('minSoc', sgBat.minSoc);
+      setText('sungrowBatMaster', sgBat.master); setHidden('sungrowBatMasterRow', false);
+      setText('sungrowBatSlave', sgBat.slave); setHidden('sungrowBatSlaveRow', false);
+      // Kann-2 (Feld 16.11.): der Summenwert beider WR ist korrekt — nicht rot färben. Die rote „off"-Tönung
+      // aus der Victron-Zeile oben (maxDischargeW === 0) hier bewusst zurücknehmen (null = neutrale Farbe).
+      if (sgBat.maxDischarge != null) setText('maxDischargeReadback', sgBat.maxDischarge, null);
+    }
   });
 
   // Zweite Victron-Anlage am selben Anschluss (second-gx-view.js).
   safeRender('dashboard.second-gx', () => {
     window.DVhubSecondGx?.render(status.multiGx);
+    window.DVhubSungrowInverters?.render(status);
   });
 
   // „Laut EOS-Plan“ (eos-plan-summary.js, Issue #27): Uhrzeit, Börsenpreise und
@@ -2507,7 +2964,12 @@ function renderDashboardStatus(status) {
     const lwMD = sch.lastWrite?.maxDischargeW;
     setText('activeGridSetpoint', ag?.value == null ? '-' : `${ag.value} W (${ag.source || '-'})`);
     setText('activeChargeCurrent', ac?.value == null ? '-' : `${ac.value} A (${ac.source || '-'})`);
-    setText('activeMinSoc', am?.value == null ? '-' : `${am.value} % (${am.source || '-'})`);
+    // Kann-3 (Feld 16.11.): bei zwei Sungrow-WR bleibt schedule.active.minSocPct/maxDischargeW leer (die Grenzen
+    // stehen im Geräte-/Energiebilanz-Pfad). Dann dieselben Werte wie die Akku-Kachel zeigen — aus derselben Quelle
+    // (computeSungrowBatteryView), nicht neu gerechnet.
+    const sgCtrl = computeSungrowBatteryView(status);
+    if (am?.value == null && sgCtrl.isSungrow && sgCtrl.minSoc != null) setText('activeMinSoc', `${sgCtrl.minSoc} (Sungrow)`);
+    else setText('activeMinSoc', am?.value == null ? '-' : `${am.value} % (${am.source || '-'})`);
     // Max Discharge: prominent so the operator sees the cap before manually changing it.
     // 0 = Hold (no discharge), -1 = unlimited (default), positive = AC cap in W.
     let mdLabel = '-';
@@ -2517,7 +2979,8 @@ function renderDashboardStatus(status) {
       else if (Number(amd.value) === -1) { mdLabel = `unbegrenzt (${amd.source || '-'})`; }
       else { mdLabel = `${amd.value} W (${amd.source || '-'})`; mdClass = 'ok'; }
     }
-    setText('activeMaxDischarge', mdLabel, mdClass);
+    if (amd?.value == null && sgCtrl.isSungrow && sgCtrl.maxDischarge != null) setText('activeMaxDischarge', `${sgCtrl.maxDischarge} (Sungrow)`, null);
+    else setText('activeMaxDischarge', mdLabel, mdClass);
     const adc = sch.active?.feedExcessDcPv;
     setText('activeDcFeed', adc?.value == null ? '-' : `${adc.value ? 'EIN' : 'AUS'} (${adc.source || '-'})`);
     const lwParts = [];
@@ -2549,13 +3012,15 @@ function renderDashboardStatus(status) {
     const today = dayStr(nowMs);
     const yesterday = dayStr(nowMs - 24 * 3600 * 1000);
     const activeRules = (status.schedule?.rules || []).filter(r => r.enabled !== false);
-    // Optimizer/EOS rules carry an exact 15-min slotTs → highlight the precise
-    // slot (no time-of-day cross-day false matches). Manual user rules have no
+    // Optimizer/EOS rules carry an exact slotTs…slotEndTs window (1 h = 4×15-min)
+    // → mark every chart slot inside that window so the band spans the whole rule
+    // (M18), not just the opening 15-min slot. Range-checked against the real epex
+    // slot timestamps; no cross-day false matches. Manual user rules have no
     // slotTs, so they keep the HH:MM-vs-epex matching below.
-    const optimizerSlotTimestamps = activeRules
-      .filter(isOptimizerRule)
-      .map(r => Number(r.slotTs))
-      .filter(Number.isFinite);
+    const optimizerSlotTimestamps = collectOptimizerSlotTimestamps(
+      activeRules,
+      (status.epex?.data || []).map(s => Number(s.ts))
+    );
     const userSlotTimestamps = activeRules
       .filter(r => !isSmallMarketAutomationRule(r) && !isOptimizerRule(r))
       .flatMap(r => {
@@ -2573,24 +3038,18 @@ function renderDashboardStatus(status) {
     Promise.all([
       apiFetch('/api/forecast').then(r => r.json()).catch(() => null),
       apiFetch(`/api/history/summary?view=day&date=${yesterday}`).then(r => r.json()).catch(() => null),
-      apiFetch(`/api/history/summary?view=day&date=${today}`).then(r => r.json()).catch(() => null)
-    ]).then(([fc, histYesterday, histToday]) => {
+      apiFetch(`/api/history/summary?view=day&date=${today}`).then(r => r.json()).catch(() => null),
+      // Preisprognose hinter den festen Börsenpreisen (1.0.11).
+      apiFetch('/api/price/outlook').then(r => r.json()).catch(() => null)
+    ]).then(([fc, histYesterday, histToday, outlook]) => {
       const mergedSlots = [...(histYesterday?.slots || []), ...(histToday?.slots || [])];
-      drawPriceChart(...baseChartArgs, fc?.ok ? fc : null, mergedSlots, userSlotTimestamps, sunTimes, optimizerSlotTimestamps);
+      lastPriceOutlook = outlook?.ok ? outlook : null;
+      drawPriceChart(...baseChartArgs, fc?.ok ? fc : null, mergedSlots, userSlotTimestamps, sunTimes, optimizerSlotTimestamps, lastPriceOutlook);
+      setText('chartMeta', priceChartMetaText(status, lastPriceOutlook));
     }).catch(() => {
       drawPriceChart(...baseChartArgs, null, [], userSlotTimestamps, sunTimes, optimizerSlotTimestamps);
     });
-    {
-      const epd = status.epex?.data || [];
-      const distinctDays = Array.from(new Set(epd.map((r) => r.day).filter(Boolean))).sort();
-      const daysLabel = distinctDays.length
-        ? distinctDays.map((d) => d.slice(5)).join(' + ')
-        : '—';
-      const tomorrowHint = (distinctDays.length < 2 && status.epex?.nextDate)
-        ? ` · Morgen (${status.epex.nextDate.slice(5)}) wird nach EPEX-Clearing ~13:00 verfügbar`
-        : '';
-      setText('chartMeta', `EPEX Update: ${fmtTs(status.epex?.updatedAt)} | ${epd.length} Slots · ${daysLabel}${tomorrowHint}`);
-    }
+    setText('chartMeta', priceChartMetaText(status, lastPriceOutlook));
   }, { placeholderTarget: document.getElementById('priceChartContainer') });
 
   safeRender('dashboard.automation', () => {
@@ -2803,6 +3262,133 @@ async function manualWriteMaxDischarge() {
   await requestDashboardRefresh();
 }
 
+/* --- M14b Feldtest: Abregelung testen (X min) --- */
+let curtailTestPollTimer = null;
+let curtailTestLastRaw = null;
+
+function fmtW(v) {
+  if (v == null || !Number.isFinite(Number(v))) return '–';
+  return `${Math.round(Number(v))} W`;
+}
+function fmtSecs(ms) {
+  const s = Math.max(0, Math.round(Number(ms || 0) / 1000));
+  const mm = Math.floor(s / 60); const ss = s % 60;
+  return `${mm}:${String(ss).padStart(2, '0')}`;
+}
+
+async function startCurtailTest(mode) {
+  const minsEl = document.getElementById('curtailTestMinutes');
+  const minutes = Math.round(Number(minsEl?.value));
+  if (!(minutes >= 1 && minutes <= 60)) return setControlMsg('Testdauer 1–60 Minuten.', true);
+  const blockCharge = document.getElementById('curtailTestBlockCharge')?.checked === true;
+  const label = mode === 'negativePrice' ? 'Negativpreis-Abregelung' : 'Direktvermarkter-Abregelung';
+  const go = typeof window !== 'undefined' && typeof window.confirm === 'function'
+    ? window.confirm(`${label} für ${minutes} min testen?\n\nLäuft über den echten Abregel-Pfad${blockCharge ? ' und sperrt das Laden beider WR (Entladen fürs Haus bleibt)' : ''}. Der Test endet garantiert nach ${minutes} min von selbst (selbst-ablaufendes Lease). Messwerte im 1-Sekunden-Takt werden protokolliert.`)
+    : true;
+  if (!go) return;
+  try {
+    const res = await apiFetch('/api/control/curtailment-test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode, minutes, blockCharge })
+    });
+    const out = await res.json();
+    if (!res.ok || !out.ok) return setControlMsg(`Test fehlgeschlagen: ${out.error || res.status}`, true);
+    setControlMsg(`${label}-Test läuft (${minutes} min)${blockCharge ? ', Laden beider WR gesperrt' : ''}.`);
+    renderCurtailTest(out.test);
+    startCurtailTestPolling();
+  } catch (e) {
+    setControlMsg(`Test fehlgeschlagen: ${e.message}`, true);
+  }
+}
+
+async function stopCurtailTest() {
+  try {
+    const res = await apiFetch('/api/control/curtailment-test/stop', { method: 'POST' });
+    const out = await res.json();
+    if (!res.ok || !out.ok) return setControlMsg(`Test-Stopp fehlgeschlagen: ${out.error || res.status}`, true);
+    setControlMsg('Abregelungs-Test beendet — Freigabe beim nächsten Takt (~15 s).');
+    renderCurtailTest(out.test);
+  } catch (e) {
+    setControlMsg(`Test-Stopp fehlgeschlagen: ${e.message}`, true);
+  }
+}
+
+function startCurtailTestPolling() {
+  if (curtailTestPollTimer) clearInterval(curtailTestPollTimer);
+  curtailTestPollTimer = setInterval(pollCurtailTest, 1000);
+}
+
+async function pollCurtailTest() {
+  try {
+    const res = await apiFetch('/api/control/curtailment-test');
+    const out = await res.json();
+    if (res.ok && out.ok) renderCurtailTest(out.test);
+    if (!out.test || out.test.active !== true) {
+      if (curtailTestPollTimer) { clearInterval(curtailTestPollTimer); curtailTestPollTimer = null; }
+    }
+  } catch { /* nächster Tick */ }
+}
+
+function renderCurtailTest(test) {
+  curtailTestLastRaw = test;
+  const statusEl = document.getElementById('curtailTestStatus');
+  const protoEl = document.getElementById('curtailTestProtocol');
+  const stopBtn = document.getElementById('curtailTestStopBtn');
+  const negBtn = document.getElementById('curtailTestNegBtn');
+  const dvBtn = document.getElementById('curtailTestDvBtn');
+  if (!statusEl || !protoEl) return;
+  if (!test) {
+    statusEl.hidden = true; protoEl.hidden = true;
+    if (stopBtn) stopBtn.hidden = true;
+    if (negBtn) negBtn.disabled = false;
+    if (dvBtn) dvBtn.disabled = false;
+    return;
+  }
+  const modeLabel = test.mode === 'negativePrice' ? 'Negativpreis' : 'Direktvermarkter';
+  const active = test.active === true;
+  statusEl.hidden = false;
+  if (active) {
+    statusEl.textContent = `Test aktiv: ${modeLabel}${test.blockCharge ? ' · Laden gesperrt' : ''} · Restzeit ${fmtSecs(test.remainingMs)} · ${test.sampleCount} Messwerte`;
+  } else {
+    statusEl.textContent = `Test beendet (${modeLabel}${test.stopReason === 'expired' ? ', Zeit abgelaufen' : ', gestoppt'}) · ${test.sampleCount} Messwerte`;
+  }
+  if (stopBtn) stopBtn.hidden = !active;
+  if (negBtn) negBtn.disabled = active;
+  if (dvBtn) dvBtn.disabled = active;
+  // Protokoll: letzter 1-s-Messwert + Abregel-Zustand + Sequenz-Ereignisse.
+  const samples = Array.isArray(test.samples) ? test.samples : [];
+  const last = samples.length ? samples[samples.length - 1] : null;
+  const lines = [];
+  if (last) {
+    lines.push(`Netz ${fmtW(last.gridTotalW)} · PV M ${fmtW(last.pvMasterW)} / S ${fmtW(last.pvSlaveW)} · Akku M ${fmtW(last.battMasterW)} / S ${fmtW(last.battSlaveW)}`);
+    const zust = [];
+    if (last.blocked === true) zust.push('Einspeisung gesperrt');
+    else if (last.blocked === false) zust.push('Einspeisung frei');
+    if (Array.isArray(last.saved) && last.saved.length) zust.push(`gesichert: ${last.saved.join(', ')}`);
+    if (last.forcedOff) zust.push('forcedOff');
+    if (last.negativePriceActive) zust.push('§51 aktiv');
+    if (zust.length) lines.push(zust.join(' · '));
+  }
+  const events = Array.isArray(test.events) ? test.events : [];
+  if (events.length) {
+    const tail = events.slice(-6).map(e => `${(e.ts || '').slice(11, 19)} ${e.event}${e.error ? ` (${e.error})` : ''}`);
+    lines.push('Sequenz: ' + tail.join(' | '));
+  }
+  protoEl.hidden = lines.length === 0;
+  protoEl.textContent = lines.join('\n');
+  protoEl.title = 'Klicken: Rohdaten (JSON) in die Zwischenablage kopieren';
+}
+
+function copyCurtailTestRaw() {
+  if (!curtailTestLastRaw) return;
+  try {
+    const txt = JSON.stringify(curtailTestLastRaw, null, 2);
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(txt);
+    setControlMsg('Test-Protokoll (Rohdaten) in die Zwischenablage kopiert.');
+  } catch { /* ignore */ }
+}
+
 /* --- Schedule --- */
 
 
@@ -2873,6 +3459,21 @@ function collectScheduleRulesFromRowState(rows) {
         end,
         value: 1
       });
+    }
+
+    // M20 (Feld 19.11.2026): DC-Einspeise-Regeln (feedExcessDcPv) der Zeile gehen
+    // unverändert mit — nur Zeitfenster und Aktiv-Schalter der Zeile gelten auch für
+    // sie. Vorher fielen sie hier weg, der Server behielt sie, und eine im Leitstand
+    // gelöschte Zeile („abregel-sperre“) blieb stehen.
+    // Den Aktiv-Schalter der Zeile bekommt sie nur, wenn der Operator ihn umgeschaltet hat (Codex c49d6e82 und
+    // e245fe0a P2): eine Zeile ist „aus“, sobald eine ihrer Regeln aus ist — ohne Umschalten behält jede DC-Regel
+    // ihren eigenen Schalter (sonst schaltete eine ausgeschaltete Netz-Regel im selben Fenster sie still aus);
+    // umgeschaltet gilt der Endstand, auch nach an → aus.
+    const keepOwnEnabled = row?.dcFeedRowToggled !== true;
+    for (const dcRule of Array.isArray(row?.dcFeedRules) ? row.dcFeedRules : []) {
+      if (!dcRule || typeof dcRule !== 'object') continue;
+      const enabled = keepOwnEnabled ? dcRule.enabled !== false : rowEnabled;
+      rules.push({ ...dcRule, target: 'feedExcessDcPv', start, end, enabled });
     }
 
     idx++;
@@ -3056,6 +3657,14 @@ function groupScheduleRulesForDashboard(rules) {
       const reserve = Number(rule.chargeReserveW);
       if (Number.isFinite(reserve) && reserve > 0) slot.chargeReserveW = reserve;
     }
+    // M20: DC-Einspeise-Regeln reisen mit ihrer Zeile (collectScheduleRows). Ohne die
+    // Laufzeit-Markierung _wasActive — die bestimmt nur der Server.
+    if (rule.target === 'feedExcessDcPv') {
+      if (!Array.isArray(slot.dcFeedRules)) slot.dcFeedRules = [];
+      const copy = { ...rule };
+      delete copy._wasActive;
+      slot.dcFeedRules.push(copy);
+    }
     if (rule.enabled === false) slot.enabled = false;
     if (!slot.ruleId && rule.id) slot.ruleId = rule.id;
     // All rule ids of the window — the optimizer slot-disable toggle must flip
@@ -3145,6 +3754,11 @@ function describeSlotControl(slot) {
   }
   if (slot?.stopSocPct != null && Number.isFinite(Number(slot.stopSocPct))) {
     parts.push(`Stop-SoC ${Number(slot.stopSocPct)}%`);
+  }
+  // M20: DC-Einspeise-Regeln (feedExcessDcPv) — vorher zeigte die Zeile nur „—“.
+  for (const r of Array.isArray(slot?.dcFeedRules) ? slot.dcFeedRules : []) {
+    const text = Number(r?.value) === 1 ? 'DC-Einspeisung erlaubt' : 'DC-Einspeisung aus';
+    if (!parts.includes(text)) parts.push(text);
   }
   // dcExport (Voll-/Teileinspeisung) wird in renderScheduleTable als eigenes
   // Badge gerendert (sched-feedin-badge), nicht mehr als Inline-Text.
@@ -3258,6 +3872,7 @@ function updateScheduleEconomicsCells(nowTs = lastStatusNow || Date.now()) {
 async function handleRowEnabledToggle(slot, cb, tr) {
   if (!isOptimizerSlot(slot)) {
     slot.enabled = cb.checked;
+    slot.enabledTouched = true; // M20: ausdrücklich umgeschaltet → gilt auch für die DC-Regeln der Zeile
     updateScheduleRowVisualState(tr);
     updateScheduleEconomicsCells();
     setControlMsg('Aktiv-Status geändert — mit „Speichern“ übernehmen.');
@@ -3612,6 +4227,9 @@ function openSlotEditor(idx = null) {
       charge: chargeEn.checked ? num(chargeVal) : null,
       stopSocPct: stopSocEn.checked ? num(stopSocVal) : null,
       dcExport: dcExportEn.checked,
+      // M20: DC-Einspeise-Regeln der Zeile bleiben beim Bearbeiten erhalten.
+      dcFeedRules: Array.isArray(slot?.dcFeedRules) ? slot.dcFeedRules : undefined,
+      enabledTouched: slot?.enabledTouched === true,
       enabled: slot ? slot.enabled !== false : true,
       ruleId: slot?.ruleId || '',
       ruleIds: slot?.ruleIds,
@@ -3696,6 +4314,8 @@ function collectScheduleRows() {
       stopSocEnabled: slot.stopSocPct != null,
       stopSocVal: slot.stopSocPct,
       dcExportEnabled: slot.dcExport === true,
+      dcFeedRules: Array.isArray(slot.dcFeedRules) ? slot.dcFeedRules : [],
+      dcFeedRowToggled: slot.enabledTouched === true,
       source: slot.source || '',
       displayTone: slot.displayTone || '',
       autoManaged: slot.autoManaged === true,
@@ -3793,10 +4413,12 @@ async function saveScheduleDefaults() {
 async function saveScheduleDash() {
   const rules = collectScheduleRows();
 
+  // M20: der Leitstand schickt die vollständige DC-Einspeise-Liste — eine
+  // gelöschte Zeile löscht ihre DC-Regel (auch die letzte).
   const r1 = await apiFetch('/api/schedule/rules', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ rules })
+    body: JSON.stringify({ rules, replaceDcFeedRules: true })
   });
   const out1 = await r1.json();
   if (!r1.ok || !out1.ok) return setControlMsg(`Fehler Rules: ${out1.error || r1.status}`, true);
@@ -3816,7 +4438,8 @@ async function saveScheduleDash() {
   const gridCount = rules.filter((r) => r.target === 'gridSetpointW').length;
   const chargeCount = rules.filter((r) => r.target === 'chargeCurrentA').length;
   const dcExportCount = rules.filter((r) => r.target === 'dcExportMode').length;
-  const dcPart = dcExportCount ? ` + ${dcExportCount} DC-Export` : '';
+  const dcFeedCount = rules.filter((r) => r.target === 'feedExcessDcPv').length;
+  const dcPart = `${dcExportCount ? ` + ${dcExportCount} DC-Export` : ''}${dcFeedCount ? ` + ${dcFeedCount} DC-Einspeisung` : ''}`;
   setControlMsg(`Gespeichert: ${gridCount} Grid + ${chargeCount} Charge${dcPart} Regeln`);
   await loadScheduleDash();
 }
@@ -4255,6 +4878,13 @@ function initDashboard() {
   document.getElementById('manualGridBtn')?.addEventListener('click', manualWriteGrid);
   document.getElementById('manualChargeBtn')?.addEventListener('click', manualWriteCharge);
   document.getElementById('manualMaxDischargeBtn')?.addEventListener('click', manualWriteMaxDischarge);
+  // M14b Feldtest: Abregelung testen (X min) — echter Pfad, selbst-ablaufendes Lease.
+  document.getElementById('curtailTestNegBtn')?.addEventListener('click', () => startCurtailTest('negativePrice'));
+  document.getElementById('curtailTestDvBtn')?.addEventListener('click', () => startCurtailTest('dv'));
+  document.getElementById('curtailTestStopBtn')?.addEventListener('click', stopCurtailTest);
+  document.getElementById('curtailTestProtocol')?.addEventListener('click', copyCurtailTestRaw);
+  // Laufenden Test nach einem Reload wieder aufgreifen (Status + Protokoll).
+  pollCurtailTest().then(() => { if (curtailTestLastRaw?.active) startCurtailTestPolling(); });
   // T-0118: Max-Discharge readback row -> inline editor (mirrors Min-SOC row).
   document.getElementById('maxDischargeRow')?.addEventListener('click', toggleMaxDischargeEditor);
   document.getElementById('maxDischargeRow')?.addEventListener('keydown', handleMaxDischargeRowKeydown);
@@ -4310,6 +4940,7 @@ const dashboardApi = {
   buildScheduleWindowsFromSelection,
   collectScheduleRulesFromRowState,
   computeMinSocRenderState,
+  computeSungrowBatteryView,
   computeDynamicGrossImportCtKwh,
   describeSlotControl,
   estimateSlotEconomics,
@@ -4321,12 +4952,20 @@ const dashboardApi = {
   formatChartCentValue,
   getDashboardLogUrl,
   getChartHighlightSets,
+  collectOptimizerSlotTimestamps,
+  buildPriceForecastRows,
+  priceChartImportSeries,
+  priceChartImportBandSeries,
+  togglePriceChartLegend,
+  priceForecastTooltipLines,
+  priceChartMetaText,
   groupScheduleRulesForDashboard,
   inferChartSlotMs,
   isScheduleWindowExpired,
   normalizeChartSelectionIndices,
   resolveMinSocPendingState,
   resolveDvControlIndicators,
+  renderSystemWarnings,
   submitMinSocUpdate
 };
 

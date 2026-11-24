@@ -16,6 +16,8 @@
 //                          Einspeise-Begrenzer services/feed-in-limit-arbiter.js).
 //   mergeDeviceCaps()      dasselbe je Gerät (id → W, null = frei).
 
+import { monoNow, monoStampAge } from '../mono-clock.js';
+
 /** Nennspannung je Phase für A ↔ W (Niederspannung, 230 V). */
 export const NOMINAL_PHASE_VOLTAGE_V = 230;
 
@@ -68,14 +70,20 @@ export function mergeDeviceCaps(...sources) {
  * @param {{ now?: number, maxAgeMs: number }} opts
  * @returns {{ fresh: boolean, reason: string|null, importW: number|null, phasesW: number[]|null, ageMs: number|null }}
  */
-export function meterImport(state, cfg, { now = Date.now(), maxAgeMs }) {
+export function meterImport(state, cfg, { now = Date.now(), maxAgeMs, clock = monoNow }) {
   const m = state?.meter || {};
   // MQTT: updatedAt ist die Abfrage, sourceAt der Empfang des Werts — maßgeblich
   // ist der ältere (ein gepufferter alter Wert wird nicht durch Abfragen frisch).
   const polledAt = Number(m.updatedAt) || 0;
   const srcAt = Number(m.sourceAt) || 0;
   const at = srcAt > 0 ? Math.min(polledAt, srcAt) : polledAt;
-  const ageMs = at > 0 ? now - at : null;
+  // A26: Alter monoton aus den Erzeuger-Marken (A24, Poller/MQTT-Empfang) — nur wenn jeder beteiligte Stempel eine
+  // hat, sonst Wanduhr wie bisher (nie gemischt).
+  const monoPolled = polledAt > 0 ? monoStampAge(m, 'updatedAt', clock) : null;
+  const monoSrc = srcAt > 0 ? monoStampAge(m, 'sourceAt', clock) : null;
+  const monoAge = at > 0 && monoPolled != null && (srcAt > 0 ? monoSrc != null : true)
+    ? Math.max(monoPolled, srcAt > 0 ? monoSrc : -Infinity) : null;
+  const ageMs = at > 0 ? Math.round(monoAge ?? (now - at)) : null;
   const sign = cfg?.gridPositiveMeans === 'grid_import' ? 1 : -1;
   const total = m.grid_total_w;
   const reason = m.ok !== true ? 'meter_error'

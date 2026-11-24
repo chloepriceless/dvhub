@@ -1,0 +1,2549 @@
+{
+  "function": "sungrowRealSocPct",
+  "schema": "dvhub.golden-split/1",
+  "generator": "test/golden/generate-split-vectors.mjs",
+  "count": 231,
+  "vectors": [
+    {
+      "name": "gemeldet_0_real_geraetemin",
+      "input": {
+        "args": [
+          0,
+          10,
+          100
+        ]
+      },
+      "output": 10
+    },
+    {
+      "name": "gemeldet_100_real_max",
+      "input": {
+        "args": [
+          100,
+          10,
+          100
+        ]
+      },
+      "output": 100
+    },
+    {
+      "name": "min_gleich_max_kein_fenster",
+      "input": {
+        "args": [
+          50,
+          20,
+          20
+        ]
+      },
+      "output": 50
+    },
+    {
+      "name": "kein_fenster_min_fehlt",
+      "input": {
+        "args": [
+          50,
+          null,
+          100
+        ]
+      },
+      "output": 50
+    },
+    {
+      "name": "rohwert_ueber_100_geklemmt",
+      "input": {
+        "args": [
+          120,
+          null,
+          null
+        ]
+      },
+      "output": 100
+    },
+    {
+      "name": "rohwert_negativ_geklemmt",
+      "input": {
+        "args": [
+          -5,
+          null,
+          null
+        ]
+      },
+      "output": 0
+    },
+    {
+      "name": "raster_0",
+      "input": {
+        "args": [
+          0,
+          null,
+          null
+        ]
+      },
+      "output": 0
+    },
+    {
+      "name": "raster_1",
+      "input": {
+        "args": [
+          0,
+          null,
+          15
+        ]
+      },
+      "output": 0
+    },
+    {
+      "name": "raster_2",
+      "input": {
+        "args": [
+          0,
+          null,
+          80
+        ]
+      },
+      "output": 0
+    },
+    {
+      "name": "raster_3",
+      "input": {
+        "args": [
+          0,
+          null,
+          90
+        ]
+      },
+      "output": 0
+    },
+    {
+      "name": "raster_4",
+      "input": {
+        "args": [
+          0,
+          null,
+          100
+        ]
+      },
+      "output": 0
+    },
+    {
+      "name": "raster_5",
+      "input": {
+        "args": [
+          0,
+          0,
+          null
+        ]
+      },
+      "output": 0
+    },
+    {
+      "name": "raster_6",
+      "input": {
+        "args": [
+          0,
+          0,
+          15
+        ]
+      },
+      "output": 0
+    },
+    {
+      "name": "raster_7",
+      "input": {
+        "args": [
+          0,
+          0,
+          80
+        ]
+      },
+      "output": 0
+    },
+    {
+      "name": "raster_8",
+      "input": {
+        "args": [
+          0,
+          0,
+          90
+        ]
+      },
+      "output": 0
+    },
+    {
+      "name": "raster_9",
+      "input": {
+        "args": [
+          0,
+          0,
+          100
+        ]
+      },
+      "output": 0
+    },
+    {
+      "name": "raster_10",
+      "input": {
+        "args": [
+          0,
+          5,
+          null
+        ]
+      },
+      "output": 0
+    },
+    {
+      "name": "raster_11",
+      "input": {
+        "args": [
+          0,
+          5,
+          15
+        ]
+      },
+      "output": 5
+    },
+    {
+      "name": "raster_12",
+      "input": {
+        "args": [
+          0,
+          5,
+          80
+        ]
+      },
+      "output": 5
+    },
+    {
+      "name": "raster_13",
+      "input": {
+        "args": [
+          0,
+          5,
+          90
+        ]
+      },
+      "output": 5
+    },
+    {
+      "name": "raster_14",
+      "input": {
+        "args": [
+          0,
+          5,
+          100
+        ]
+      },
+      "output": 5
+    },
+    {
+      "name": "raster_15",
+      "input": {
+        "args": [
+          0,
+          10,
+          null
+        ]
+      },
+      "output": 0
+    },
+    {
+      "name": "raster_16",
+      "input": {
+        "args": [
+          0,
+          10,
+          15
+        ]
+      },
+      "output": 10
+    },
+    {
+      "name": "raster_17",
+      "input": {
+        "args": [
+          0,
+          10,
+          80
+        ]
+      },
+      "output": 10
+    },
+    {
+      "name": "raster_18",
+      "input": {
+        "args": [
+          0,
+          10,
+          90
+        ]
+      },
+      "output": 10
+    },
+    {
+      "name": "raster_19",
+      "input": {
+        "args": [
+          0,
+          10,
+          100
+        ]
+      },
+      "output": 10
+    },
+    {
+      "name": "raster_20",
+      "input": {
+        "args": [
+          0,
+          20,
+          null
+        ]
+      },
+      "output": 0
+    },
+    {
+      "name": "raster_21",
+      "input": {
+        "args": [
+          0,
+          20,
+          15
+        ]
+      },
+      "output": 0
+    },
+    {
+      "name": "raster_22",
+      "input": {
+        "args": [
+          0,
+          20,
+          80
+        ]
+      },
+      "output": 20
+    },
+    {
+      "name": "raster_23",
+      "input": {
+        "args": [
+          0,
+          20,
+          90
+        ]
+      },
+      "output": 20
+    },
+    {
+      "name": "raster_24",
+      "input": {
+        "args": [
+          0,
+          20,
+          100
+        ]
+      },
+      "output": 20
+    },
+    {
+      "name": "raster_25",
+      "input": {
+        "args": [
+          5,
+          null,
+          null
+        ]
+      },
+      "output": 5
+    },
+    {
+      "name": "raster_26",
+      "input": {
+        "args": [
+          5,
+          null,
+          15
+        ]
+      },
+      "output": 5
+    },
+    {
+      "name": "raster_27",
+      "input": {
+        "args": [
+          5,
+          null,
+          80
+        ]
+      },
+      "output": 5
+    },
+    {
+      "name": "raster_28",
+      "input": {
+        "args": [
+          5,
+          null,
+          90
+        ]
+      },
+      "output": 5
+    },
+    {
+      "name": "raster_29",
+      "input": {
+        "args": [
+          5,
+          null,
+          100
+        ]
+      },
+      "output": 5
+    },
+    {
+      "name": "raster_30",
+      "input": {
+        "args": [
+          5,
+          0,
+          null
+        ]
+      },
+      "output": 5
+    },
+    {
+      "name": "raster_31",
+      "input": {
+        "args": [
+          5,
+          0,
+          15
+        ]
+      },
+      "output": 0.75
+    },
+    {
+      "name": "raster_32",
+      "input": {
+        "args": [
+          5,
+          0,
+          80
+        ]
+      },
+      "output": 4
+    },
+    {
+      "name": "raster_33",
+      "input": {
+        "args": [
+          5,
+          0,
+          90
+        ]
+      },
+      "output": 4.5
+    },
+    {
+      "name": "raster_34",
+      "input": {
+        "args": [
+          5,
+          0,
+          100
+        ]
+      },
+      "output": 5
+    },
+    {
+      "name": "raster_35",
+      "input": {
+        "args": [
+          5,
+          5,
+          null
+        ]
+      },
+      "output": 5
+    },
+    {
+      "name": "raster_36",
+      "input": {
+        "args": [
+          5,
+          5,
+          15
+        ]
+      },
+      "output": 5.5
+    },
+    {
+      "name": "raster_37",
+      "input": {
+        "args": [
+          5,
+          5,
+          80
+        ]
+      },
+      "output": 8.75
+    },
+    {
+      "name": "raster_38",
+      "input": {
+        "args": [
+          5,
+          5,
+          90
+        ]
+      },
+      "output": 9.25
+    },
+    {
+      "name": "raster_39",
+      "input": {
+        "args": [
+          5,
+          5,
+          100
+        ]
+      },
+      "output": 9.75
+    },
+    {
+      "name": "raster_40",
+      "input": {
+        "args": [
+          5,
+          10,
+          null
+        ]
+      },
+      "output": 5
+    },
+    {
+      "name": "raster_41",
+      "input": {
+        "args": [
+          5,
+          10,
+          15
+        ]
+      },
+      "output": 10.25
+    },
+    {
+      "name": "raster_42",
+      "input": {
+        "args": [
+          5,
+          10,
+          80
+        ]
+      },
+      "output": 13.5
+    },
+    {
+      "name": "raster_43",
+      "input": {
+        "args": [
+          5,
+          10,
+          90
+        ]
+      },
+      "output": 14
+    },
+    {
+      "name": "raster_44",
+      "input": {
+        "args": [
+          5,
+          10,
+          100
+        ]
+      },
+      "output": 14.5
+    },
+    {
+      "name": "raster_45",
+      "input": {
+        "args": [
+          5,
+          20,
+          null
+        ]
+      },
+      "output": 5
+    },
+    {
+      "name": "raster_46",
+      "input": {
+        "args": [
+          5,
+          20,
+          15
+        ]
+      },
+      "output": 5
+    },
+    {
+      "name": "raster_47",
+      "input": {
+        "args": [
+          5,
+          20,
+          80
+        ]
+      },
+      "output": 23
+    },
+    {
+      "name": "raster_48",
+      "input": {
+        "args": [
+          5,
+          20,
+          90
+        ]
+      },
+      "output": 23.5
+    },
+    {
+      "name": "raster_49",
+      "input": {
+        "args": [
+          5,
+          20,
+          100
+        ]
+      },
+      "output": 24
+    },
+    {
+      "name": "raster_50",
+      "input": {
+        "args": [
+          20,
+          null,
+          null
+        ]
+      },
+      "output": 20
+    },
+    {
+      "name": "raster_51",
+      "input": {
+        "args": [
+          20,
+          null,
+          15
+        ]
+      },
+      "output": 20
+    },
+    {
+      "name": "raster_52",
+      "input": {
+        "args": [
+          20,
+          null,
+          80
+        ]
+      },
+      "output": 20
+    },
+    {
+      "name": "raster_53",
+      "input": {
+        "args": [
+          20,
+          null,
+          90
+        ]
+      },
+      "output": 20
+    },
+    {
+      "name": "raster_54",
+      "input": {
+        "args": [
+          20,
+          null,
+          100
+        ]
+      },
+      "output": 20
+    },
+    {
+      "name": "raster_55",
+      "input": {
+        "args": [
+          20,
+          0,
+          null
+        ]
+      },
+      "output": 20
+    },
+    {
+      "name": "raster_56",
+      "input": {
+        "args": [
+          20,
+          0,
+          15
+        ]
+      },
+      "output": 3
+    },
+    {
+      "name": "raster_57",
+      "input": {
+        "args": [
+          20,
+          0,
+          80
+        ]
+      },
+      "output": 16
+    },
+    {
+      "name": "raster_58",
+      "input": {
+        "args": [
+          20,
+          0,
+          90
+        ]
+      },
+      "output": 18
+    },
+    {
+      "name": "raster_59",
+      "input": {
+        "args": [
+          20,
+          0,
+          100
+        ]
+      },
+      "output": 20
+    },
+    {
+      "name": "raster_60",
+      "input": {
+        "args": [
+          20,
+          5,
+          null
+        ]
+      },
+      "output": 20
+    },
+    {
+      "name": "raster_61",
+      "input": {
+        "args": [
+          20,
+          5,
+          15
+        ]
+      },
+      "output": 7
+    },
+    {
+      "name": "raster_62",
+      "input": {
+        "args": [
+          20,
+          5,
+          80
+        ]
+      },
+      "output": 20
+    },
+    {
+      "name": "raster_63",
+      "input": {
+        "args": [
+          20,
+          5,
+          90
+        ]
+      },
+      "output": 22
+    },
+    {
+      "name": "raster_64",
+      "input": {
+        "args": [
+          20,
+          5,
+          100
+        ]
+      },
+      "output": 24
+    },
+    {
+      "name": "raster_65",
+      "input": {
+        "args": [
+          20,
+          10,
+          null
+        ]
+      },
+      "output": 20
+    },
+    {
+      "name": "raster_66",
+      "input": {
+        "args": [
+          20,
+          10,
+          15
+        ]
+      },
+      "output": 11
+    },
+    {
+      "name": "raster_67",
+      "input": {
+        "args": [
+          20,
+          10,
+          80
+        ]
+      },
+      "output": 24
+    },
+    {
+      "name": "raster_68",
+      "input": {
+        "args": [
+          20,
+          10,
+          90
+        ]
+      },
+      "output": 26
+    },
+    {
+      "name": "raster_69",
+      "input": {
+        "args": [
+          20,
+          10,
+          100
+        ]
+      },
+      "output": 28
+    },
+    {
+      "name": "raster_70",
+      "input": {
+        "args": [
+          20,
+          20,
+          null
+        ]
+      },
+      "output": 20
+    },
+    {
+      "name": "raster_71",
+      "input": {
+        "args": [
+          20,
+          20,
+          15
+        ]
+      },
+      "output": 20
+    },
+    {
+      "name": "raster_72",
+      "input": {
+        "args": [
+          20,
+          20,
+          80
+        ]
+      },
+      "output": 32
+    },
+    {
+      "name": "raster_73",
+      "input": {
+        "args": [
+          20,
+          20,
+          90
+        ]
+      },
+      "output": 34
+    },
+    {
+      "name": "raster_74",
+      "input": {
+        "args": [
+          20,
+          20,
+          100
+        ]
+      },
+      "output": 36
+    },
+    {
+      "name": "raster_75",
+      "input": {
+        "args": [
+          33,
+          null,
+          null
+        ]
+      },
+      "output": 33
+    },
+    {
+      "name": "raster_76",
+      "input": {
+        "args": [
+          33,
+          null,
+          15
+        ]
+      },
+      "output": 33
+    },
+    {
+      "name": "raster_77",
+      "input": {
+        "args": [
+          33,
+          null,
+          80
+        ]
+      },
+      "output": 33
+    },
+    {
+      "name": "raster_78",
+      "input": {
+        "args": [
+          33,
+          null,
+          90
+        ]
+      },
+      "output": 33
+    },
+    {
+      "name": "raster_79",
+      "input": {
+        "args": [
+          33,
+          null,
+          100
+        ]
+      },
+      "output": 33
+    },
+    {
+      "name": "raster_80",
+      "input": {
+        "args": [
+          33,
+          0,
+          null
+        ]
+      },
+      "output": 33
+    },
+    {
+      "name": "raster_81",
+      "input": {
+        "args": [
+          33,
+          0,
+          15
+        ]
+      },
+      "output": 4.95
+    },
+    {
+      "name": "raster_82",
+      "input": {
+        "args": [
+          33,
+          0,
+          80
+        ]
+      },
+      "output": 26.4
+    },
+    {
+      "name": "raster_83",
+      "input": {
+        "args": [
+          33,
+          0,
+          90
+        ]
+      },
+      "output": 29.7
+    },
+    {
+      "name": "raster_84",
+      "input": {
+        "args": [
+          33,
+          0,
+          100
+        ]
+      },
+      "output": 33
+    },
+    {
+      "name": "raster_85",
+      "input": {
+        "args": [
+          33,
+          5,
+          null
+        ]
+      },
+      "output": 33
+    },
+    {
+      "name": "raster_86",
+      "input": {
+        "args": [
+          33,
+          5,
+          15
+        ]
+      },
+      "output": 8.3
+    },
+    {
+      "name": "raster_87",
+      "input": {
+        "args": [
+          33,
+          5,
+          80
+        ]
+      },
+      "output": 29.75
+    },
+    {
+      "name": "raster_88",
+      "input": {
+        "args": [
+          33,
+          5,
+          90
+        ]
+      },
+      "output": 33.05
+    },
+    {
+      "name": "raster_89",
+      "input": {
+        "args": [
+          33,
+          5,
+          100
+        ]
+      },
+      "output": 36.35
+    },
+    {
+      "name": "raster_90",
+      "input": {
+        "args": [
+          33,
+          10,
+          null
+        ]
+      },
+      "output": 33
+    },
+    {
+      "name": "raster_91",
+      "input": {
+        "args": [
+          33,
+          10,
+          15
+        ]
+      },
+      "output": 11.65
+    },
+    {
+      "name": "raster_92",
+      "input": {
+        "args": [
+          33,
+          10,
+          80
+        ]
+      },
+      "output": 33.1
+    },
+    {
+      "name": "raster_93",
+      "input": {
+        "args": [
+          33,
+          10,
+          90
+        ]
+      },
+      "output": 36.4
+    },
+    {
+      "name": "raster_94",
+      "input": {
+        "args": [
+          33,
+          10,
+          100
+        ]
+      },
+      "output": 39.7
+    },
+    {
+      "name": "raster_95",
+      "input": {
+        "args": [
+          33,
+          20,
+          null
+        ]
+      },
+      "output": 33
+    },
+    {
+      "name": "raster_96",
+      "input": {
+        "args": [
+          33,
+          20,
+          15
+        ]
+      },
+      "output": 33
+    },
+    {
+      "name": "raster_97",
+      "input": {
+        "args": [
+          33,
+          20,
+          80
+        ]
+      },
+      "output": 39.8
+    },
+    {
+      "name": "raster_98",
+      "input": {
+        "args": [
+          33,
+          20,
+          90
+        ]
+      },
+      "output": 43.1
+    },
+    {
+      "name": "raster_99",
+      "input": {
+        "args": [
+          33,
+          20,
+          100
+        ]
+      },
+      "output": 46.4
+    },
+    {
+      "name": "raster_100",
+      "input": {
+        "args": [
+          50,
+          null,
+          null
+        ]
+      },
+      "output": 50
+    },
+    {
+      "name": "raster_101",
+      "input": {
+        "args": [
+          50,
+          null,
+          15
+        ]
+      },
+      "output": 50
+    },
+    {
+      "name": "raster_102",
+      "input": {
+        "args": [
+          50,
+          null,
+          80
+        ]
+      },
+      "output": 50
+    },
+    {
+      "name": "raster_103",
+      "input": {
+        "args": [
+          50,
+          null,
+          90
+        ]
+      },
+      "output": 50
+    },
+    {
+      "name": "raster_104",
+      "input": {
+        "args": [
+          50,
+          null,
+          100
+        ]
+      },
+      "output": 50
+    },
+    {
+      "name": "raster_105",
+      "input": {
+        "args": [
+          50,
+          0,
+          null
+        ]
+      },
+      "output": 50
+    },
+    {
+      "name": "raster_106",
+      "input": {
+        "args": [
+          50,
+          0,
+          15
+        ]
+      },
+      "output": 7.5
+    },
+    {
+      "name": "raster_107",
+      "input": {
+        "args": [
+          50,
+          0,
+          80
+        ]
+      },
+      "output": 40
+    },
+    {
+      "name": "raster_108",
+      "input": {
+        "args": [
+          50,
+          0,
+          90
+        ]
+      },
+      "output": 45
+    },
+    {
+      "name": "raster_109",
+      "input": {
+        "args": [
+          50,
+          0,
+          100
+        ]
+      },
+      "output": 50
+    },
+    {
+      "name": "raster_110",
+      "input": {
+        "args": [
+          50,
+          5,
+          null
+        ]
+      },
+      "output": 50
+    },
+    {
+      "name": "raster_111",
+      "input": {
+        "args": [
+          50,
+          5,
+          15
+        ]
+      },
+      "output": 10
+    },
+    {
+      "name": "raster_112",
+      "input": {
+        "args": [
+          50,
+          5,
+          80
+        ]
+      },
+      "output": 42.5
+    },
+    {
+      "name": "raster_113",
+      "input": {
+        "args": [
+          50,
+          5,
+          90
+        ]
+      },
+      "output": 47.5
+    },
+    {
+      "name": "raster_114",
+      "input": {
+        "args": [
+          50,
+          5,
+          100
+        ]
+      },
+      "output": 52.5
+    },
+    {
+      "name": "raster_115",
+      "input": {
+        "args": [
+          50,
+          10,
+          null
+        ]
+      },
+      "output": 50
+    },
+    {
+      "name": "raster_116",
+      "input": {
+        "args": [
+          50,
+          10,
+          15
+        ]
+      },
+      "output": 12.5
+    },
+    {
+      "name": "raster_117",
+      "input": {
+        "args": [
+          50,
+          10,
+          80
+        ]
+      },
+      "output": 45
+    },
+    {
+      "name": "raster_118",
+      "input": {
+        "args": [
+          50,
+          10,
+          90
+        ]
+      },
+      "output": 50
+    },
+    {
+      "name": "raster_119",
+      "input": {
+        "args": [
+          50,
+          10,
+          100
+        ]
+      },
+      "output": 55
+    },
+    {
+      "name": "raster_120",
+      "input": {
+        "args": [
+          50,
+          20,
+          null
+        ]
+      },
+      "output": 50
+    },
+    {
+      "name": "raster_121",
+      "input": {
+        "args": [
+          50,
+          20,
+          15
+        ]
+      },
+      "output": 50
+    },
+    {
+      "name": "raster_122",
+      "input": {
+        "args": [
+          50,
+          20,
+          80
+        ]
+      },
+      "output": 50
+    },
+    {
+      "name": "raster_123",
+      "input": {
+        "args": [
+          50,
+          20,
+          90
+        ]
+      },
+      "output": 55
+    },
+    {
+      "name": "raster_124",
+      "input": {
+        "args": [
+          50,
+          20,
+          100
+        ]
+      },
+      "output": 60
+    },
+    {
+      "name": "raster_125",
+      "input": {
+        "args": [
+          66,
+          null,
+          null
+        ]
+      },
+      "output": 66
+    },
+    {
+      "name": "raster_126",
+      "input": {
+        "args": [
+          66,
+          null,
+          15
+        ]
+      },
+      "output": 66
+    },
+    {
+      "name": "raster_127",
+      "input": {
+        "args": [
+          66,
+          null,
+          80
+        ]
+      },
+      "output": 66
+    },
+    {
+      "name": "raster_128",
+      "input": {
+        "args": [
+          66,
+          null,
+          90
+        ]
+      },
+      "output": 66
+    },
+    {
+      "name": "raster_129",
+      "input": {
+        "args": [
+          66,
+          null,
+          100
+        ]
+      },
+      "output": 66
+    },
+    {
+      "name": "raster_130",
+      "input": {
+        "args": [
+          66,
+          0,
+          null
+        ]
+      },
+      "output": 66
+    },
+    {
+      "name": "raster_131",
+      "input": {
+        "args": [
+          66,
+          0,
+          15
+        ]
+      },
+      "output": 9.9
+    },
+    {
+      "name": "raster_132",
+      "input": {
+        "args": [
+          66,
+          0,
+          80
+        ]
+      },
+      "output": 52.8
+    },
+    {
+      "name": "raster_133",
+      "input": {
+        "args": [
+          66,
+          0,
+          90
+        ]
+      },
+      "output": 59.4
+    },
+    {
+      "name": "raster_134",
+      "input": {
+        "args": [
+          66,
+          0,
+          100
+        ]
+      },
+      "output": 66
+    },
+    {
+      "name": "raster_135",
+      "input": {
+        "args": [
+          66,
+          5,
+          null
+        ]
+      },
+      "output": 66
+    },
+    {
+      "name": "raster_136",
+      "input": {
+        "args": [
+          66,
+          5,
+          15
+        ]
+      },
+      "output": 11.6
+    },
+    {
+      "name": "raster_137",
+      "input": {
+        "args": [
+          66,
+          5,
+          80
+        ]
+      },
+      "output": 54.5
+    },
+    {
+      "name": "raster_138",
+      "input": {
+        "args": [
+          66,
+          5,
+          90
+        ]
+      },
+      "output": 61.1
+    },
+    {
+      "name": "raster_139",
+      "input": {
+        "args": [
+          66,
+          5,
+          100
+        ]
+      },
+      "output": 67.7
+    },
+    {
+      "name": "raster_140",
+      "input": {
+        "args": [
+          66,
+          10,
+          null
+        ]
+      },
+      "output": 66
+    },
+    {
+      "name": "raster_141",
+      "input": {
+        "args": [
+          66,
+          10,
+          15
+        ]
+      },
+      "output": 13.3
+    },
+    {
+      "name": "raster_142",
+      "input": {
+        "args": [
+          66,
+          10,
+          80
+        ]
+      },
+      "output": 56.2
+    },
+    {
+      "name": "raster_143",
+      "input": {
+        "args": [
+          66,
+          10,
+          90
+        ]
+      },
+      "output": 62.8
+    },
+    {
+      "name": "raster_144",
+      "input": {
+        "args": [
+          66,
+          10,
+          100
+        ]
+      },
+      "output": 69.4
+    },
+    {
+      "name": "raster_145",
+      "input": {
+        "args": [
+          66,
+          20,
+          null
+        ]
+      },
+      "output": 66
+    },
+    {
+      "name": "raster_146",
+      "input": {
+        "args": [
+          66,
+          20,
+          15
+        ]
+      },
+      "output": 66
+    },
+    {
+      "name": "raster_147",
+      "input": {
+        "args": [
+          66,
+          20,
+          80
+        ]
+      },
+      "output": 59.6
+    },
+    {
+      "name": "raster_148",
+      "input": {
+        "args": [
+          66,
+          20,
+          90
+        ]
+      },
+      "output": 66.2
+    },
+    {
+      "name": "raster_149",
+      "input": {
+        "args": [
+          66,
+          20,
+          100
+        ]
+      },
+      "output": 72.8
+    },
+    {
+      "name": "raster_150",
+      "input": {
+        "args": [
+          80,
+          null,
+          null
+        ]
+      },
+      "output": 80
+    },
+    {
+      "name": "raster_151",
+      "input": {
+        "args": [
+          80,
+          null,
+          15
+        ]
+      },
+      "output": 80
+    },
+    {
+      "name": "raster_152",
+      "input": {
+        "args": [
+          80,
+          null,
+          80
+        ]
+      },
+      "output": 80
+    },
+    {
+      "name": "raster_153",
+      "input": {
+        "args": [
+          80,
+          null,
+          90
+        ]
+      },
+      "output": 80
+    },
+    {
+      "name": "raster_154",
+      "input": {
+        "args": [
+          80,
+          null,
+          100
+        ]
+      },
+      "output": 80
+    },
+    {
+      "name": "raster_155",
+      "input": {
+        "args": [
+          80,
+          0,
+          null
+        ]
+      },
+      "output": 80
+    },
+    {
+      "name": "raster_156",
+      "input": {
+        "args": [
+          80,
+          0,
+          15
+        ]
+      },
+      "output": 12
+    },
+    {
+      "name": "raster_157",
+      "input": {
+        "args": [
+          80,
+          0,
+          80
+        ]
+      },
+      "output": 64
+    },
+    {
+      "name": "raster_158",
+      "input": {
+        "args": [
+          80,
+          0,
+          90
+        ]
+      },
+      "output": 72
+    },
+    {
+      "name": "raster_159",
+      "input": {
+        "args": [
+          80,
+          0,
+          100
+        ]
+      },
+      "output": 80
+    },
+    {
+      "name": "raster_160",
+      "input": {
+        "args": [
+          80,
+          5,
+          null
+        ]
+      },
+      "output": 80
+    },
+    {
+      "name": "raster_161",
+      "input": {
+        "args": [
+          80,
+          5,
+          15
+        ]
+      },
+      "output": 13
+    },
+    {
+      "name": "raster_162",
+      "input": {
+        "args": [
+          80,
+          5,
+          80
+        ]
+      },
+      "output": 65
+    },
+    {
+      "name": "raster_163",
+      "input": {
+        "args": [
+          80,
+          5,
+          90
+        ]
+      },
+      "output": 73
+    },
+    {
+      "name": "raster_164",
+      "input": {
+        "args": [
+          80,
+          5,
+          100
+        ]
+      },
+      "output": 81
+    },
+    {
+      "name": "raster_165",
+      "input": {
+        "args": [
+          80,
+          10,
+          null
+        ]
+      },
+      "output": 80
+    },
+    {
+      "name": "raster_166",
+      "input": {
+        "args": [
+          80,
+          10,
+          15
+        ]
+      },
+      "output": 14
+    },
+    {
+      "name": "raster_167",
+      "input": {
+        "args": [
+          80,
+          10,
+          80
+        ]
+      },
+      "output": 66
+    },
+    {
+      "name": "raster_168",
+      "input": {
+        "args": [
+          80,
+          10,
+          90
+        ]
+      },
+      "output": 74
+    },
+    {
+      "name": "raster_169",
+      "input": {
+        "args": [
+          80,
+          10,
+          100
+        ]
+      },
+      "output": 82
+    },
+    {
+      "name": "raster_170",
+      "input": {
+        "args": [
+          80,
+          20,
+          null
+        ]
+      },
+      "output": 80
+    },
+    {
+      "name": "raster_171",
+      "input": {
+        "args": [
+          80,
+          20,
+          15
+        ]
+      },
+      "output": 80
+    },
+    {
+      "name": "raster_172",
+      "input": {
+        "args": [
+          80,
+          20,
+          80
+        ]
+      },
+      "output": 68
+    },
+    {
+      "name": "raster_173",
+      "input": {
+        "args": [
+          80,
+          20,
+          90
+        ]
+      },
+      "output": 76
+    },
+    {
+      "name": "raster_174",
+      "input": {
+        "args": [
+          80,
+          20,
+          100
+        ]
+      },
+      "output": 84
+    },
+    {
+      "name": "raster_175",
+      "input": {
+        "args": [
+          95,
+          null,
+          null
+        ]
+      },
+      "output": 95
+    },
+    {
+      "name": "raster_176",
+      "input": {
+        "args": [
+          95,
+          null,
+          15
+        ]
+      },
+      "output": 95
+    },
+    {
+      "name": "raster_177",
+      "input": {
+        "args": [
+          95,
+          null,
+          80
+        ]
+      },
+      "output": 95
+    },
+    {
+      "name": "raster_178",
+      "input": {
+        "args": [
+          95,
+          null,
+          90
+        ]
+      },
+      "output": 95
+    },
+    {
+      "name": "raster_179",
+      "input": {
+        "args": [
+          95,
+          null,
+          100
+        ]
+      },
+      "output": 95
+    },
+    {
+      "name": "raster_180",
+      "input": {
+        "args": [
+          95,
+          0,
+          null
+        ]
+      },
+      "output": 95
+    },
+    {
+      "name": "raster_181",
+      "input": {
+        "args": [
+          95,
+          0,
+          15
+        ]
+      },
+      "output": 14.25
+    },
+    {
+      "name": "raster_182",
+      "input": {
+        "args": [
+          95,
+          0,
+          80
+        ]
+      },
+      "output": 76
+    },
+    {
+      "name": "raster_183",
+      "input": {
+        "args": [
+          95,
+          0,
+          90
+        ]
+      },
+      "output": 85.5
+    },
+    {
+      "name": "raster_184",
+      "input": {
+        "args": [
+          95,
+          0,
+          100
+        ]
+      },
+      "output": 95
+    },
+    {
+      "name": "raster_185",
+      "input": {
+        "args": [
+          95,
+          5,
+          null
+        ]
+      },
+      "output": 95
+    },
+    {
+      "name": "raster_186",
+      "input": {
+        "args": [
+          95,
+          5,
+          15
+        ]
+      },
+      "output": 14.5
+    },
+    {
+      "name": "raster_187",
+      "input": {
+        "args": [
+          95,
+          5,
+          80
+        ]
+      },
+      "output": 76.25
+    },
+    {
+      "name": "raster_188",
+      "input": {
+        "args": [
+          95,
+          5,
+          90
+        ]
+      },
+      "output": 85.75
+    },
+    {
+      "name": "raster_189",
+      "input": {
+        "args": [
+          95,
+          5,
+          100
+        ]
+      },
+      "output": 95.25
+    },
+    {
+      "name": "raster_190",
+      "input": {
+        "args": [
+          95,
+          10,
+          null
+        ]
+      },
+      "output": 95
+    },
+    {
+      "name": "raster_191",
+      "input": {
+        "args": [
+          95,
+          10,
+          15
+        ]
+      },
+      "output": 14.75
+    },
+    {
+      "name": "raster_192",
+      "input": {
+        "args": [
+          95,
+          10,
+          80
+        ]
+      },
+      "output": 76.5
+    },
+    {
+      "name": "raster_193",
+      "input": {
+        "args": [
+          95,
+          10,
+          90
+        ]
+      },
+      "output": 86
+    },
+    {
+      "name": "raster_194",
+      "input": {
+        "args": [
+          95,
+          10,
+          100
+        ]
+      },
+      "output": 95.5
+    },
+    {
+      "name": "raster_195",
+      "input": {
+        "args": [
+          95,
+          20,
+          null
+        ]
+      },
+      "output": 95
+    },
+    {
+      "name": "raster_196",
+      "input": {
+        "args": [
+          95,
+          20,
+          15
+        ]
+      },
+      "output": 95
+    },
+    {
+      "name": "raster_197",
+      "input": {
+        "args": [
+          95,
+          20,
+          80
+        ]
+      },
+      "output": 77
+    },
+    {
+      "name": "raster_198",
+      "input": {
+        "args": [
+          95,
+          20,
+          90
+        ]
+      },
+      "output": 86.5
+    },
+    {
+      "name": "raster_199",
+      "input": {
+        "args": [
+          95,
+          20,
+          100
+        ]
+      },
+      "output": 96
+    },
+    {
+      "name": "raster_200",
+      "input": {
+        "args": [
+          100,
+          null,
+          null
+        ]
+      },
+      "output": 100
+    },
+    {
+      "name": "raster_201",
+      "input": {
+        "args": [
+          100,
+          null,
+          15
+        ]
+      },
+      "output": 100
+    },
+    {
+      "name": "raster_202",
+      "input": {
+        "args": [
+          100,
+          null,
+          80
+        ]
+      },
+      "output": 100
+    },
+    {
+      "name": "raster_203",
+      "input": {
+        "args": [
+          100,
+          null,
+          90
+        ]
+      },
+      "output": 100
+    },
+    {
+      "name": "raster_204",
+      "input": {
+        "args": [
+          100,
+          null,
+          100
+        ]
+      },
+      "output": 100
+    },
+    {
+      "name": "raster_205",
+      "input": {
+        "args": [
+          100,
+          0,
+          null
+        ]
+      },
+      "output": 100
+    },
+    {
+      "name": "raster_206",
+      "input": {
+        "args": [
+          100,
+          0,
+          15
+        ]
+      },
+      "output": 15
+    },
+    {
+      "name": "raster_207",
+      "input": {
+        "args": [
+          100,
+          0,
+          80
+        ]
+      },
+      "output": 80
+    },
+    {
+      "name": "raster_208",
+      "input": {
+        "args": [
+          100,
+          0,
+          90
+        ]
+      },
+      "output": 90
+    },
+    {
+      "name": "raster_209",
+      "input": {
+        "args": [
+          100,
+          0,
+          100
+        ]
+      },
+      "output": 100
+    },
+    {
+      "name": "raster_210",
+      "input": {
+        "args": [
+          100,
+          5,
+          null
+        ]
+      },
+      "output": 100
+    },
+    {
+      "name": "raster_211",
+      "input": {
+        "args": [
+          100,
+          5,
+          15
+        ]
+      },
+      "output": 15
+    },
+    {
+      "name": "raster_212",
+      "input": {
+        "args": [
+          100,
+          5,
+          80
+        ]
+      },
+      "output": 80
+    },
+    {
+      "name": "raster_213",
+      "input": {
+        "args": [
+          100,
+          5,
+          90
+        ]
+      },
+      "output": 90
+    },
+    {
+      "name": "raster_214",
+      "input": {
+        "args": [
+          100,
+          5,
+          100
+        ]
+      },
+      "output": 100
+    },
+    {
+      "name": "raster_215",
+      "input": {
+        "args": [
+          100,
+          10,
+          null
+        ]
+      },
+      "output": 100
+    },
+    {
+      "name": "raster_216",
+      "input": {
+        "args": [
+          100,
+          10,
+          15
+        ]
+      },
+      "output": 15
+    },
+    {
+      "name": "raster_217",
+      "input": {
+        "args": [
+          100,
+          10,
+          80
+        ]
+      },
+      "output": 80
+    },
+    {
+      "name": "raster_218",
+      "input": {
+        "args": [
+          100,
+          10,
+          90
+        ]
+      },
+      "output": 90
+    },
+    {
+      "name": "raster_219",
+      "input": {
+        "args": [
+          100,
+          10,
+          100
+        ]
+      },
+      "output": 100
+    },
+    {
+      "name": "raster_220",
+      "input": {
+        "args": [
+          100,
+          20,
+          null
+        ]
+      },
+      "output": 100
+    },
+    {
+      "name": "raster_221",
+      "input": {
+        "args": [
+          100,
+          20,
+          15
+        ]
+      },
+      "output": 100
+    },
+    {
+      "name": "raster_222",
+      "input": {
+        "args": [
+          100,
+          20,
+          80
+        ]
+      },
+      "output": 80
+    },
+    {
+      "name": "raster_223",
+      "input": {
+        "args": [
+          100,
+          20,
+          90
+        ]
+      },
+      "output": 90
+    },
+    {
+      "name": "raster_224",
+      "input": {
+        "args": [
+          100,
+          20,
+          100
+        ]
+      },
+      "output": 100
+    }
+  ]
+}

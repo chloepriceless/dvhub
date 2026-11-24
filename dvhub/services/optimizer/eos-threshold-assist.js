@@ -63,7 +63,7 @@ export function eosThresholdForRule(rule) {
  * @param {(event:string, data?:object, level?:string) => void} [deps.pushLog]
  * @param {() => number} [deps.now]
  */
-export function createEosThresholdAssist({ state, getCfg, getAssist, pushLog = () => {}, now = Date.now }) {
+export function createEosThresholdAssist({ state, getCfg, getAssist, pushLog = () => {}, now = Date.now, getPeakShavingTargetW = () => null }) {
   let held = false;      // eigene Anforderung steht (beim Wächter angemeldet)
   let logKey = null;
 
@@ -77,7 +77,7 @@ export function createEosThresholdAssist({ state, getCfg, getAssist, pushLog = (
     else pushLog('eos_threshold', {
       thresholdW: info.thresholdW, requested: info.requested, reason: info.reason ?? null, coveredBy: info.coveredBy ?? null,
       text: info.requested || info.coveredBy
-        ? `EOS: Akku deckt über ${(info.thresholdW / 1000).toFixed(1).replace('.', ',')} kW${info.coveredBy ? ' (über den Netzanschluss-Wächter)' : ''}`
+        ? `EOS: Akku deckt über ${(info.thresholdW / 1000).toFixed(1).replace('.', ',')} kW${info.coveredBy === 'peak-shaving' ? ' (über Peak Shaving)' : info.coveredBy ? ' (über den Netzanschluss-Wächter)' : ''}`
         : `EOS-Schwelle ${(info.thresholdW / 1000).toFixed(1).replace('.', ',')} kW nicht wirksam (${info.reason})`
     });
   }
@@ -109,6 +109,22 @@ export function createEosThresholdAssist({ state, getCfg, getAssist, pushLog = (
     if (lever.setpoint !== true) {
       drop(assist);
       publish({ ...base, requested: false, reason: 'battery_not_steerable' });
+      return state.ctrl.eosThreshold;
+    }
+    // Peak Shaving (P2, Christin 24.11.2026): die Plan-Schwelle ist die kleinere
+    // Grenze aus Netzanschluss und Peak Shaving. Regelt Peak Shaving schon auf
+    // dieses oder ein strengeres Ziel, deckt es den Bezug darüber selbst ab —
+    // nach Viertelstunden-Budget (P1). Eine zweite Anforderung derselben Grenze
+    // würde das Budget aushebeln (Deckel wieder auf den Augenblickswert).
+    let psTargetW;
+    try { psTargetW = getPeakShavingTargetW?.() ?? null; } catch { psTargetW = null; }
+    // Ist Peak Shaving aktiv, decken es und der Netzanschluss-Wächter jede
+    // Grenze ab, die EOS kennt (EOS bekommt die kleinere der beiden). Eine
+    // tiefere Plan-Schwelle stammt dann aus einem älteren Plan (Grenze inzwischen
+    // angehoben/angepasst) und gilt nicht mehr.
+    if (Number.isFinite(Number(psTargetW)) && psTargetW !== null) {
+      drop(assist);
+      publish({ ...base, requested: false, reason: null, coveredBy: 'peak-shaving', peakShavingTargetW: Number(psTargetW) });
       return state.ctrl.eosThreshold;
     }
     // Wächter mit gleicher oder strengerer Grenze: er deckt den Bezug darüber

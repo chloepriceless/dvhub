@@ -91,6 +91,174 @@ final class InteropTests: XCTestCase {
         await conn.close()
     }
 
+    /// Zeitplan, E-Auto und Integrationen über die echte Gegenstelle: die Rechte
+    /// prüft der echte Agent (permissions.js), die Integrationen baut die echte
+    /// Sicht für die App (integrations-view.js) aus einer Übersicht voller Köder.
+    func testScheduleEvAndRedactedIntegrationsThroughTheRealAgent() async throws {
+        let (creds, _, conn, _) = try await pairAndConnect(via: .relay)
+        guard creds.canControl else {
+            let denied = try await conn.request("POST", "/api/schedule/rules", body: ["rules": []])
+            XCTAssertEqual(denied.body["error"]?.string, "control_not_allowed")
+            await conn.close()
+            throw XCTSkip("Harness ohne Recht „Steuern“ (HARNESS_PERMS=read,control)")
+        }
+        // Integrationen: nur die Sicht für die App — ohne Adressen und Kennungen.
+        let full = try await conn.request("GET", "/api/integrations/status")
+        XCTAssertEqual(full.status, 403)
+        let setup = try await conn.request("GET", "/api/mobile-link/integrations")
+        XCTAssertEqual(setup.status, 200)
+        let text = String(decoding: try setup.body.encoded(), as: UTF8.self)
+        for bait in ["10.11.12.", "koeder", "KOEDER", "://", "latitude", "53.55"] { XCTAssertFalse(text.contains(bait), "Köder \(bait) in der Antwort") }
+        XCTAssertEqual(setup.body["victron"]?["modelId"]?.string, "MultiPlus-II 48/5000")
+        XCTAssertEqual(setup.body["mqtt"]?["passwordSet"]?.bool, true)
+
+        // Zeitplan: Regel anlegen, ändern, umschalten, löschen — Plan-Regeln bleiben unberührt.
+        func schedule() async throws -> JSONValue { try await conn.request("GET", "/api/schedule").body }
+        func post(_ path: String, _ body: JSONValue) async throws -> WriteOutcome { WriteOutcome.from(try await conn.request("POST", path, body: body)) }
+        func evNow() async throws -> EVState {
+            let r = try await conn.request("GET", "/api/ev")
+            return try XCTUnwrap(EVState.from(r.body))
+        }
+        let before = ScheduleEdit.rules(from: try await schedule())
+        let planned = before.filter(\.isAutomation).map(\.raw)
+        XCTAssertFalse(planned.isEmpty)
+        let draft = ScheduleEdit.Draft(target: "gridSetpointW", start: "21:00", end: "23:30", value: -1500, stopSocPct: 30)
+        let scheduleBefore = try await schedule()
+        let add = try ScheduleEdit.payload(schedule: scheduleBefore, change: .add(draft), newId: { "app-interop" }).get()
+        let added = try await post("/api/schedule/rules", add)
+        XCTAssertEqual(added, .done)
+        var rules = ScheduleEdit.rules(from: try await schedule())
+        let mine = try XCTUnwrap(rules.first { $0.ruleId == "app-interop" })
+        XCTAssertEqual(mine.value, -1500)
+        XCTAssertEqual(mine.stopSocPct, 30)
+        XCTAssertTrue(mine.isEditable)
+        XCTAssertEqual(rules.filter(\.isAutomation).map(\.raw), planned)
+        XCTAssertEqual(rules.count, before.count + 1)
+
+        var changed = draft
+        changed.value = 2200
+        changed.stopSocPct = nil
+        let update = try ScheduleEdit.payload(schedule: try await schedule(), change: .update(mine, changed)).get()
+        let updated = try await post("/api/schedule/rules", update)
+        XCTAssertEqual(updated, .done)
+        // Die alte Fassung der Regel gilt jetzt als überholt: nichts wird geschickt.
+        let afterUpdate = try await schedule()
+        XCTAssertEqual(ScheduleEdit.payload(schedule: afterUpdate, change: .remove(mine)), .failure(.changedMeanwhile))
+        let toggled = try await conn.request("POST", "/api/schedule/rules/toggle", body: ["ids": ["app-interop"], "enabled": false])
+        XCTAssertEqual(toggled.status, 200)
+        rules = ScheduleEdit.rules(from: try await schedule())
+        let now = try XCTUnwrap(rules.first { $0.ruleId == "app-interop" })
+        XCTAssertEqual(now.value, 2200)
+        XCTAssertNil(now.stopSocPct)
+        XCTAssertFalse(now.enabled)
+        let remove = try ScheduleEdit.payload(schedule: try await schedule(), change: .remove(now)).get()
+        let removed = try await post("/api/schedule/rules", remove)
+        XCTAssertEqual(removed, .done)
+        rules = ScheduleEdit.rules(from: try await schedule())
+        XCTAssertNil(rules.first { $0.ruleId == "app-interop" })
+        // Danach steht alles wie vorher: dieselben Regeln (die Box stellt Regeln von Hand vor die Plan-Regeln,
+        // wie nach jedem Speichern in der Weboberfläche; Laufzeit-Markierungen gehen nicht mit zurück).
+        XCTAssertEqual(rules.filter(\.isAutomation).map(\.raw), planned)
+        XCTAssertEqual(rules.filter { !$0.isAutomation }.map { ScheduleEdit.clean($0.raw) }, before.filter { !$0.isAutomation }.map { ScheduleEdit.clean($0.raw) })
+
+        // Börsenautomatik lesen; Grundwerte schreiben und zurückstellen.
+        let auto = try await conn.request("GET", "/api/schedule/automation/config")
+        XCTAssertEqual(auto.status, 200)
+        XCTAssertNotNil(auto.body["config"]?["searchWindowStart"]?.string)
+        // Der Standort der Anlage steht in der Config der Automatik — die App bekommt und ändert ihn nicht.
+        XCTAssertNil(auto.body["config"]?["location"])
+        let autoText = String(decoding: try auto.body.encoded(), as: UTF8.self)
+        XCTAssertFalse(autoText.contains("latitude") || autoText.contains("koeder"), autoText)
+        let moveHouse = try await post("/api/schedule/automation/config", ["location": ["latitude": 1, "longitude": 2]])
+        if case .invalid(let e) = moveHouse { XCTAssertEqual(e, "field_not_allowed:location") } else { XCTFail("Standort wurde angenommen: \(moveHouse)") }
+        let reserve = try await post("/api/schedule/automation/config", ["minSocPct": 25.0])
+        XCTAssertEqual(reserve, .done)
+        _ = try await post("/api/schedule/automation/config", ["minSocPct": 20.0])
+        let scheduleNow = try await schedule()
+        let oldDefault = try XCTUnwrap(scheduleNow["config"]?["defaultGridSetpointW"]?.number)
+        let setDefault = try await post("/api/schedule/config", ["defaultGridSetpointW": -75])
+        XCTAssertEqual(setDefault, .done)
+        let newDefault = try await schedule()["config"]?["defaultGridSetpointW"]?.number
+        XCTAssertEqual(newDefault, -75)
+        _ = try await conn.request("POST", "/api/schedule/config", body: ["defaultGridSetpointW": .double(oldDefault)])
+
+        // E-Auto: Einmal-Ziel setzen und löschen; die Box lehnt Vergangenes ab.
+        let ev = try await evNow()
+        XCTAssertEqual(ev.week.count, 7)
+        let at = Date().addingTimeInterval(8 * 3600)
+        let once = try XCTUnwrap(EVEdit.once(at: at, minSocPct: 85))
+        let onceSet = try await post("/api/ev", once)
+        XCTAssertEqual(onceSet, .done)
+        let withOnce = try await evNow()
+        XCTAssertEqual(withOnce.onceMinSocPct, 85)
+        XCTAssertEqual(withOnce.nextSource, "once")
+        XCTAssertEqual(withOnce.once?.timeIntervalSince(at) ?? 99, 0, accuracy: 1)
+        let tooSoon: JSONValue = ["departure": ["once": .string(EVEdit.isoString(Date().addingTimeInterval(60))), "onceMinSocPct": 80]]
+        let soon = try await post("/api/ev", tooSoon)
+        if case .invalid = soon {} else { XCTFail("zu naher Termin wurde angenommen: \(soon)") }
+        let cleared = try await post("/api/ev", EVEdit.clearOnce())
+        XCTAssertEqual(cleared, .done)
+        let afterClear = try await evNow()
+        XCTAssertNil(afterClear.once)
+        // Wochenplan ganz: zweite Abfahrt am Montag anlegen (mit „Zuhause ab“ und Fahrt), ändern, löschen.
+        // Die Gegenstelle prüft und ordnet mit dem echten Code der Box (parseEvDeparturePatch).
+        let weekBefore = try await evNow().week
+        let addBody = try EVEdit.weekPlan(weekBefore, change: .add(.init(day: 1, departure: "16:30", minSocPct: 70, tripSocPct: 15, homeFrom: "12:00"))).get()
+        let addedDeparture = try await post("/api/ev", addBody)
+        XCTAssertEqual(addedDeparture, .done)
+        var week = try await evNow().week
+        XCTAssertEqual(week.count, weekBefore.count + 1)
+        let extra = try XCTUnwrap(week.first { $0.day == 1 && $0.departure == "16:30" })
+        XCTAssertEqual(extra.homeFrom, "12:00")
+        XCTAssertFalse(extra.homeFromPrevDay)
+        XCTAssertEqual(extra.tripSocPct, 15)
+        XCTAssertEqual(extra.minSocPct, 70)
+        let changeBody = try EVEdit.weekPlan(week, change: .update(index: extra.index, .init(day: 1, departure: "17:00", minSocPct: 70, tripSocPct: 15, homeFrom: "22:00", homeFromPrevDay: true))).get()
+        let changedDeparture = try await post("/api/ev", changeBody)
+        XCTAssertEqual(changedDeparture, .done)
+        week = try await evNow().week
+        let moved = try XCTUnwrap(week.first { $0.day == 1 && $0.departure == "17:00" })
+        XCTAssertEqual(moved.homeFrom, "22:00")
+        XCTAssertTrue(moved.homeFromPrevDay)
+        // Was die App vorher ablehnt, lehnt auch die Box ab („Zuhause ab“ am selben Tag nach der Abfahrt).
+        var wrong = moved.raw.object ?? [:]
+        wrong["homeFromPrevDay"] = false
+        let wrongList: [JSONValue] = week.map { $0.index == moved.index ? .object(wrong) : $0.raw }
+        let refused = try await post("/api/ev", ["departure": ["weeklyDepartures": .array(wrongList)]])
+        if case .invalid = refused {} else { XCTFail("ungültige Zeile wurde angenommen: \(refused)") }
+        let removeBody = try EVEdit.weekPlan(week, change: .remove(index: moved.index)).get()
+        let removedDeparture = try await post("/api/ev", removeBody)
+        XCTAssertEqual(removedDeparture, .done)
+        week = try await evNow().week
+        XCTAssertEqual(week.map(\.raw), weekBefore.map(\.raw))
+
+        // Sofort laden: starten (die Box begrenzt die Leistung), stoppen, beenden mit DELETE.
+        let limits = try XCTUnwrap(ev.overrideLimits)
+        let startBody = try XCTUnwrap(EVEdit.chargeNow(powerW: 50_000, durationMin: 60))
+        let started = try await conn.request("POST", "/api/ev/override", body: startBody)
+        XCTAssertEqual(WriteOutcome.from(started), .done)
+        XCTAssertEqual(started.body["override"]?["powerW"]?.number, limits.maxPowerW)
+        var charging = try await evNow()
+        XCTAssertEqual(charging.override?.stop, false)
+        XCTAssertEqual(charging.override?.powerW, limits.maxPowerW)
+        XCTAssertEqual(charging.override?.until?.timeIntervalSinceNow ?? 0, 3600, accuracy: 30)
+        let stopBody = try XCTUnwrap(EVEdit.stopCharging(durationMin: nil))
+        let stopped = try await post("/api/ev/override", stopBody)
+        XCTAssertEqual(stopped, .done)
+        charging = try await evNow()
+        XCTAssertEqual(charging.override, EVState.Override(stop: true, powerW: 0, until: nil))
+        let ended = try await conn.request("DELETE", "/api/ev/override")
+        XCTAssertEqual(WriteOutcome.from(ended), .done)
+        charging = try await evNow()
+        XCTAssertNil(charging.override)
+        // DELETE gibt es nur dort; die Vorschau bleibt zu.
+        let deleteElsewhere = try await conn.request("DELETE", "/api/ev")
+        XCTAssertEqual(deleteElsewhere.status, 405)
+        let preview = try await conn.request("POST", "/api/ev/preview", body: [:])
+        XCTAssertEqual(preview.status, 403)
+        await conn.close()
+    }
+
     func testPairAndConnectViaLan() async throws {
         let qr = try currentQR()
         let hasLan = qr.isEmpty ? true : !(try PairPayload(qr).lan.isEmpty)
@@ -203,5 +371,63 @@ final class InteropTests: XCTestCase {
         }
         XCTAssertGreaterThanOrEqual(lives, 2, "Sitzung nach paralleler Last nicht mehr nutzbar")
         await conn.close()
+    }
+
+    /// Einzelabruf ohne Dauer-Verbindung (Widgets, Hintergrundabruf, Kurzbefehle):
+    /// frischer Stand von der Box, daneben bleibt eine zweite Verbindung
+    /// desselben Geräts ungestört.
+    func testQuickSnapshotLiveAndSideBySide() async throws {
+        let (creds, signer, conn, _) = try await pairAndConnect(via: .relay)
+        let snap = try await QuickLink.snapshot(credentials: creds, signer: signer)
+        XCTAssertTrue(snap.live)
+        XCTAssertNotNil(snap.status.soc)
+        XCTAssertEqual(snap.perms?.contains("read"), true)
+        XCTAssertLessThan(abs(snap.at.timeIntervalSinceNow), 60)
+        // Die erste Verbindung (die „App“) lebt weiter.
+        let r = try await conn.request("GET", "/api/status")
+        XCTAssertEqual(r.status, 200)
+        await conn.close()
+    }
+
+    /// Not-Halt als Einzelabruf: Antwort auswerten, danach kommt der neue Stand
+    /// über dieselbe Verbindung; verbotene Pfade bleiben verboten.
+    func testQuickRequestEmergencyStopAndOutcome() async throws {
+        let (creds, signer, conn, _) = try await pairAndConnect(via: .relay)
+        await conn.close()
+        guard creds.canControl else { throw XCTSkip("Harness ohne Recht „control“ (HARNESS_PERMS=read,control)") }
+        let stop = try await QuickLink.request(credentials: creds, signer: signer, method: "POST", path: "/api/control/stop", body: [:])
+        XCTAssertTrue(ControlOutcome.from(stop.response).applied, "\(stop.response.status) \(stop.response.body)")
+        XCTAssertEqual(stop.after?.status.emergencyStop, true)
+        let resume = try await QuickLink.request(credentials: creds, signer: signer, method: "POST", path: "/api/control/resume", body: [:])
+        XCTAssertEqual(ControlOutcome.from(resume.response), .done)
+        XCTAssertEqual(resume.after?.status.emergencyStop, false)
+        let forbidden = try await QuickLink.request(credentials: creds, signer: signer, method: "POST", path: "/api/config", body: [:])
+        XCTAssertEqual(ControlOutcome.from(forbidden.response), .notAllowed)
+    }
+
+    /// Box nicht verbunden: Der Einzelabruf liefert den letzten Stand aus dem
+    /// Briefkasten (nicht live); Schalten meldet „nicht verbunden“.
+    func testQuickSnapshotFallsBackToMailbox() async throws {
+        guard let pidText = ProcessInfo.processInfo.environment["DVHUB_INTEROP_HARNESS_PID"], let pid = Int32(pidText) else {
+            throw XCTSkip("DVHUB_INTEROP_HARNESS_PID nicht gesetzt")
+        }
+        let (creds, signer, conn, _) = try await pairAndConnect(via: .relay)
+        try await Task.sleep(nanoseconds: 3_500_000_000)  // Briefkasten füllen lassen
+        await conn.close()
+        kill(pid, SIGUSR1)
+        defer { kill(pid, SIGUSR2) }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        var relayOnly = creds
+        relayOnly.lan = []
+        let snap = try await QuickLink.snapshot(credentials: relayOnly, signer: signer)
+        XCTAssertFalse(snap.live)
+        XCTAssertNotNil(snap.status.soc)
+        do {
+            _ = try await QuickLink.request(credentials: relayOnly, signer: signer, method: "POST", path: "/api/control/stop", body: [:])
+            XCTFail("ohne Box darf nicht geschaltet werden")
+        } catch LinkError.boxOffline {
+        } catch {
+            XCTFail("unerwarteter Fehler \(error)")
+        }
     }
 }

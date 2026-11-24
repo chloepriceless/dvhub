@@ -350,17 +350,47 @@ function stripManufacturerManagedFields(raw, warnings) {
   }
 }
 
+// Register-Ziele der DV-Abregelung unter dvControl (die gemanagten dvControl.*-Pfade oben).
+const DV_CONTROL_TARGET_KEYS = MANUFACTURER_MANAGED_PATHS
+  .filter((p) => p.startsWith('dvControl.'))
+  .map((p) => p.slice('dvControl.'.length));
+
+// E1 (S1, 18.11.2026): Hersteller-ID = Dateiname eines Profils in hersteller/ ohne .json — dieselbe Quelle wie das
+// Auswahlfeld (routes-api.js listManufacturerProfiles). Es gibt keine feste Liste mehr: ein vorhandenes Profil lädt
+// als es selbst, eine ID ohne Datei endet in „Profil fehlt" (valid:false, writeSafety gesperrt) — nie still als
+// victron. Das Muster hält Pfadtrenner, Großbuchstaben und Punktdateien (.shipped-hashes.json) draußen.
+const MANUFACTURER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+export function isManufacturerId(value) {
+  return typeof value === 'string' && MANUFACTURER_ID_PATTERN.test(value);
+}
+
 function resolveManufacturerProfilePath(configPath, manufacturer) {
   return path.join(path.dirname(configPath), 'hersteller', `${manufacturer}.json`);
 }
 
 function loadManufacturerProfile(profilePath) {
   const text = fs.readFileSync(profilePath, 'utf8');
-  const parsed = text.trim() ? JSON.parse(text) : {};
+  // Eine leere Datei ist kein Profil (abgebrochene Kopie, volle Platte). Früher galt sie als gültiges {}-Profil:
+  // writeSafety blieb aus, und die Victron-Werkskarte blieb am fremden Gerät wirksam.
+  if (!text.trim()) throw new Error('manufacturer profile is empty');
+  const parsed = JSON.parse(text);
   if (!isPlainObject(parsed)) {
     throw new Error('manufacturer profile root must be an object');
   }
   return parsed;
+}
+
+// R-T2.1 (VCL-Vertrag v6) / E2: Profil fehlt, ist kaputt oder leer, und der Hersteller ist NICHT victron → keine
+// Victron-Werkskarte. Lese- und Schreibblöcke leer, keine DV-Ziele, keine Geräteerkennung. Die Betreiberwerte
+// (dvControl.enabled, negativePriceProtection, victron.host …) bleiben stehen.
+function withoutVictronRegisterMap(config) {
+  const next = clone(config);
+  next.meter = {};
+  next.points = {};
+  next.controlWrite = {};
+  if (isPlainObject(next.dvControl)) for (const key of DV_CONTROL_TARGET_KEYS) delete next.dvControl[key];
+  delete next.identify;
+  return next;
 }
 
 function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
@@ -408,26 +438,60 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   }
   effectiveConfig.victron = deepMerge(profileVictron, victronOverride);
 
-  if (isPlainObject(manufacturerProfile?.meter)) effectiveConfig.meter = clone(manufacturerProfile.meter);
-  if (isPlainObject(manufacturerProfile?.points)) effectiveConfig.points = clone(manufacturerProfile.points);
-  if (isPlainObject(manufacturerProfile?.controlWrite)) effectiveConfig.controlWrite = clone(manufacturerProfile.controlWrite);
+  // E2 (S2, 18.11.2026): Die Werkskarte aus createDefaultConfig ist die VICTRON-Karte (meter 820, controlWrite 2716/
+  // 2705/2901/2704/2706, dvControl 2707/2708). Nur das Victron-Profil erbt sie für Blöcke, die es nicht angibt. Für
+  // jedes andere Profil gilt ein fehlender Block als leerer Block — sonst richtete applyVictronDefaults die Victron-
+  // Register auf Host und Unit-ID des fremden Geräts aus. Ausnahme `meter` bei transport=mqtt: dort liest polling.js
+  // das Netz aus dem MQTT-Cache (transport.readGrid), der Block adressiert nichts (bridge-mqtt/dvhub-mqtt haben
+  // keinen und bleiben unverändert).
+  const inheritsVictronMap = (persistedConfig?.manufacturer || 'victron') === 'victron';
+  const profileBlock = (key) => {
+    if (isPlainObject(manufacturerProfile?.[key])) return manufacturerProfile[key];
+    return inheritsVictronMap ? null : {};
+  };
+  const meterBlock = (!isPlainObject(manufacturerProfile?.meter) && effectiveConfig.victron?.transport === 'mqtt')
+    ? null : profileBlock('meter');
+  if (meterBlock) effectiveConfig.meter = clone(meterBlock);
+  const pointsBlock = profileBlock('points');
+  if (pointsBlock) effectiveConfig.points = clone(pointsBlock);
+  const controlWriteBlock = profileBlock('controlWrite');
+  if (controlWriteBlock) effectiveConfig.controlWrite = clone(controlWriteBlock);
   // identify (Sungrow, T-0422): Geräteerkennung und Schreib-Tor gehören zum
   // Profil — ein Profil ohne den Block hat auch keinen (kein Rest aus config.json).
   if (isPlainObject(manufacturerProfile?.identify)) effectiveConfig.identify = clone(manufacturerProfile.identify);
   else delete effectiveConfig.identify;
+  // peakShavingBuiltin (P5, Christin 24.11.2026): eingebaute Peak-Shaving-Register des Wechselrichters gehören zum
+  // Profil — auch zu Nur-Lese-Profilen (readOnly leert nur controlWrite/dvControl). Geschrieben werden sie nur mit
+  // Peak Shaving + Schalter peakShaving.builtin.enabled über das Schreibtor (services/peak-shaving/builtin.js).
+  if (isPlainObject(manufacturerProfile?.peakShavingBuiltin)) effectiveConfig.peakShavingBuiltin = clone(manufacturerProfile.peakShavingBuiltin);
+  else delete effectiveConfig.peakShavingBuiltin;
   // dvControl: Register-Verdrahtung kommt aus dem Profil, die beiden
   // Betreiber-Entscheidungen darin gewinnen. Nur AUSDRÜCKLICH persistierte
   // Werte überschreiben — ein fehlender Schlüssel heißt „Profil-Default gilt",
   // sonst würde ein frisch angelegtes config.json die Abregelung stumm
   // umkonfigurieren. Gleiches Muster wie victron oben (D-27).
-  if (isPlainObject(manufacturerProfile?.dvControl)) {
+  const dvControlBlock = profileBlock('dvControl');
+  if (dvControlBlock) {
     const persistedDv = isPlainObject(persistedConfig?.dvControl) ? persistedConfig.dvControl : {};
     const dvOverride = {};
     if (typeof persistedDv.enabled === 'boolean') dvOverride.enabled = persistedDv.enabled;
     if (isPlainObject(persistedDv.negativePriceProtection)) {
       dvOverride.negativePriceProtection = clone(persistedDv.negativePriceProtection);
     }
-    effectiveConfig.dvControl = deepMerge(clone(manufacturerProfile.dvControl), dvOverride);
+    effectiveConfig.dvControl = deepMerge(clone(dvControlBlock), dvOverride);
+  }
+
+  // Nur-Lese-Profil (`"readOnly": true`, für die neuen Lese-Hersteller): keine Schreibziele und keine
+  // DV-Abregelung, egal was Profil oder config.json sonst sagen. dvControl.enabled aus config.json schaltet hier
+  // nichts ein; negativePriceProtection ist aus, damit DVhub keine Abregelung meldet, die nicht stattfindet.
+  // Sichere Seite (Fable-Review 18.11.2026): jeder gesetzte Wert außer ausdrücklich `false` macht das Profil
+  // zum Nur-Lese-Profil — auch "true", 1 oder "ja". Vorher zählte nur das Boolean true; ein "true" als Text ließ
+  // die eigenen Schreibblöcke des Profils aktiv.
+  const profileReadOnly = manufacturerProfile?.readOnly !== undefined && manufacturerProfile?.readOnly !== null
+    && manufacturerProfile.readOnly !== false;
+  if (profileReadOnly) {
+    effectiveConfig.controlWrite = {};
+    effectiveConfig.dvControl = { enabled: false, negativePriceProtection: { enabled: false } };
   }
 
   return applyVictronDefaults(effectiveConfig);
@@ -1343,7 +1407,7 @@ function buildFieldDefinitions() {
       section: 'system',
       group: 'peakShaving',
       groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
-      groupDescription: 'Für Gewerbeanschlüsse mit Leistungsmessung (RLM): Der Leistungspreis richtet sich nach der höchsten Viertelstunden-Bezugsleistung im Jahr. DVhub lädt dann nie mehr aus dem Netz, als die Grenze zulässt, und lässt den Akku Spitzen abdecken, wenn er sonst gehalten oder gesperrt wäre. Not-Halt, §14a, Netzlade-Verbot und Mindest-Ladestand haben immer Vorrang. Wirkt bisher nur bei Victron.',
+      groupDescription: 'Für Gewerbeanschlüsse mit Leistungsmessung (RLM): Der Leistungspreis richtet sich nach der höchsten Viertelstunden-Bezugsleistung im Jahr. DVhub lädt dann nie mehr aus dem Netz, als die Grenze zulässt, und lässt den Akku Spitzen abdecken, wenn er sonst gehalten oder gesperrt wäre. Not-Halt, §14a, Netzlade-Verbot und Mindest-Ladestand haben immer Vorrang. Wirkt bei Victron (Netz-Sollwert und Entladegrenze), bei Profilen mit schreibbarem Netz-Sollwert oder Entladegrenze (z. B. Sungrow, MQTT-Bridge, DVhub-MQTT) über „Akku zuerst“ des Netzanschluss-Wächters und — ungetestet, mit eigenem Schalter — über die eingebaute Peak-Shaving-Funktion des Wechselrichters, wo das Herstellerprofil sie kennt.',
       beta: true,
       path: 'peakShaving.enabled',
       label: 'Bezugsgrenze einhalten',
@@ -1407,6 +1471,163 @@ function buildFieldDefinitions() {
       visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
       help: 'Unter diesem Ladestand deckt der Akku keine Spitzen mehr ab. Leer = der harte Mindest-Ladestand (Optimierer → harter SoC-Boden) gilt. Der höhere der beiden Werte zählt.'
     },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.billing15min',
+      label: 'Abrechnung nach 15-min-Mittelwert',
+      type: 'boolean',
+      default: true,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'An (Standard) = der Netzbetreiber rechnet den Leistungspreis auf den höchsten Viertelstunden-Mittelwert (so ist es bei RLM üblich). Dann darf der Bezug kurz über der Grenze liegen: DVhub zählt je Viertelstunde (:00/:15/:30/:45) die bezogene Energie mit, rechnet bis zum Ende der Viertelstunde hoch und greift erst ein, wenn der Mittelwert die Grenze minus Abstand reißen würde — dann mit genau der Leistung, die bis zum Ende fehlt. Der Akku wird so seltener gebraucht. Kann der Akku nicht sicher liefern (Ladestand nahe am Boden, Entladeleistung ausgeschöpft oder nicht eingetragen, Messlücken, letzte Minute der Viertelstunde), gilt sofort der Deckel auf den Augenblickswert. Aus = DVhub hält jeden Augenblick unter Grenze minus Abstand (wie bis 1.0.10). Dafür braucht DVhub die Entladeleistung des Akkus oder die Wechselrichter-Nennleistung.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.adaptToReachedPeak',
+      label: 'Grenze an erreichte Jahresspitze anpassen',
+      type: 'boolean',
+      default: false,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Ab Werk aus. Liegt die in diesem Jahr schon erreichte Spitze (Jahresspitze = höchster Viertelstunden-Mittelwert; bei Monatsleistungspreis die Spitze dieses Monats) über der eingestellten Grenze, richtet sich der Leistungspreis ohnehin nach ihr. An = DVhub regelt dann auf diese erreichte Spitze statt auf die Grenze; mit dem neuen Jahr (bzw. Monat) gilt wieder die Grenze. Das spart Akku-Einsatz und Zyklen, denn jede weitere Kappung unter die erreichte Spitze spart in diesem Zeitraum keinen Euro. Es kostet nichts am Leistungspreis dieses Zeitraums — aber Achtung: DVhubs Spitze stammt aus den eigenen Messwerten; liegt der Zähler des Netzbetreibers tiefer, wäre die Kappung bis zu dessen Wert noch etwas wert gewesen. Aus = DVhub hält die Grenze weiter, auch wenn das in diesem Zeitraum nichts mehr spart. EOS bekommt die angepasste Grenze mit.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.builtin.enabled',
+      label: 'Eingebaute Peak-Shaving-Funktion nutzen (ungetestet)',
+      type: 'boolean',
+      default: false,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Nur für Wechselrichter ohne eigenen DVhub-Akku-Hebel, deren Herstellerprofil eine eingebaute Peak-Shaving-Funktion kennt (Deye, GoodWe, Growatt, Solis, Sofar, SolaX). UNGETESTET: die Register stammen aus Herstellerdokumenten und Community-Quellen, an keinem Gerät geprüft. An = DVhub sichert die Ist-Werte, stellt die Bezugsgrenze (Grenze minus Abstand; angepasst, wenn der Jahresspitzen-Schalter wirkt) bzw. die Betriebsart „Peak Shaving“ im Wechselrichter ein und regelt nichts weiter — der Wechselrichter kappt selbst (Augenblickswert, kein Viertelstunden-Budget). Aus bzw. Peak Shaving aus = DVhub schreibt die gesicherten Werte einmal zurück. Diese Register liegen oft im Flash: DVhub schreibt nur bei Änderung, höchstens alle 15 min. Bei Solis/Sofar/SolaX schaltet DVhub nur die Betriebsart; die Grenze selbst wird am Gerät eingestellt. Not-Halt: DVhub fasst die Funktion nicht an.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.builtin.reserveSocPct',
+      empty: 'null',
+      label: 'Reserve-Ladestand der eingebauten Funktion (%)',
+      type: 'number',
+      min: 0,
+      max: 100,
+      step: 1,
+      visibleWhenPath: { path: 'peakShaving.builtin.enabled', equals: true },
+      help: 'Nur GoodWe (47544) und Growatt (3310): Ladestand, den der Wechselrichter fürs Peak Shaving zurückhält. Leer = DVhub schreibt ihn nicht (Werkseinstellung bzw. Gerätewert gilt). DVhub setzt ihn nie zurück.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.tariff.model',
+      label: 'Abrechnung des Leistungspreises',
+      type: 'select',
+      default: 'year',
+      options: [
+        { value: 'year', label: 'Jahresleistungspreis (Jahresspitze, Stufe nach 2.500 h)' },
+        { value: 'month', label: 'Monatsleistungspreis (Monatsspitze, StromNEV § 19 Abs. 1)' }
+      ],
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Steht im Preisblatt bzw. Vertrag des Netzbetreibers. Jahresleistungspreis (üblich): Leistungspreis × höchste Viertelstunden-Spitze im Jahr, Stufe nach der Benutzungsdauer (Jahresarbeit ÷ Jahresspitze) unter bzw. ab 2.500 h. Monatsleistungspreis: je Monat Leistungspreis × Monatsspitze. Danach richten sich die €-Anzeige in Leitstand und Historie und der Schalter „Grenze an erreichte Jahresspitze anpassen“ (dann Monatsspitze).'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.tariff.lpLowEurPerKwYear',
+      empty: 'null',
+      label: 'Leistungspreis unter 2.500 h (€/kW·a)',
+      type: 'number',
+      min: 0,
+      max: 10000,
+      step: 0.01,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Netto aus dem Preisblatt des Netzbetreibers, Stufe Benutzungsdauer unter 2.500 h (z. B. Netz Leipzig 2026 Niederspannung: 19,17). Leer = unbekannt, dann zeigt DVhub keine € an.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.tariff.apLowCtPerKwh',
+      empty: 'null',
+      label: 'Arbeitspreis unter 2.500 h (ct/kWh)',
+      type: 'number',
+      min: 0,
+      max: 1000,
+      step: 0.01,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Netto, Stufe unter 2.500 h (z. B. Netz Leipzig 2026 NS: 5,96).'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.tariff.lpHighEurPerKwYear',
+      empty: 'null',
+      label: 'Leistungspreis ab 2.500 h (€/kW·a)',
+      type: 'number',
+      min: 0,
+      max: 10000,
+      step: 0.01,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Netto, Stufe ab 2.500 h (z. B. Netz Leipzig 2026 NS: 82,02). Eine gekappte kW ist in dieser Stufe so viel wert.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.tariff.apHighCtPerKwh',
+      empty: 'null',
+      label: 'Arbeitspreis ab 2.500 h (ct/kWh)',
+      type: 'number',
+      min: 0,
+      max: 1000,
+      step: 0.01,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Netto, Stufe ab 2.500 h (z. B. Netz Leipzig 2026 NS: 3,44).'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.tariff.lpMonthEurPerKwMonth',
+      empty: 'null',
+      label: 'Monatsleistungspreis (€/kW·Monat)',
+      type: 'number',
+      min: 0,
+      max: 10000,
+      step: 0.01,
+      visibleWhenPath: { path: 'peakShaving.tariff.model', equals: 'month' },
+      help: 'Nur bei Monatsleistungspreis: netto je kW Monatsspitze (z. B. Netz Leipzig 2026 NS: 13,67). DVhub leitet ihn nicht ab.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.tariff.apMonthCtPerKwh',
+      empty: 'null',
+      label: 'Arbeitspreis beim Monatsleistungspreis (ct/kWh)',
+      type: 'number',
+      min: 0,
+      max: 1000,
+      step: 0.01,
+      visibleWhenPath: { path: 'peakShaving.tariff.model', equals: 'month' },
+      help: 'Nur bei Monatsleistungspreis: netto (z. B. Netz Leipzig 2026 NS: 3,44).'
+    },
 
     // Sungrow-Steuermodus (T-0422, Christin 11.11.2026): External EMS mit
     // Herzschlag (Standard) oder Forced mode. Betreiber-einstellbar und deshalb
@@ -1422,12 +1643,13 @@ function buildFieldDefinitions() {
       path: 'sungrow.controlMode',
       label: 'Steuermodus',
       type: 'select',
-      default: 'external',
+      default: 'auto',
       options: [
-        { value: 'external', label: 'External EMS (empfohlen)' },
+        { value: 'auto', label: 'Automatisch (empfohlen)' },
+        { value: 'external', label: 'External EMS' },
         { value: 'forced', label: 'Forced mode' }
       ],
-      help: 'External EMS (empfohlen): mit Herzschlag — fällt DVhub aus, schaltet der Wechselrichter nach der Herzschlag-Frist selbst auf Eigenverbrauch zurück. Braucht eine Firmware, die das Herzschlag-Register (13080) kennt; fehlt es, steuert DVhub den Akku nicht und meldet das im Protokoll. Forced mode: ohne Herzschlag, auch für ältere Firmware; der letzte Befehl läuft bei einem Ausfall von DVhub weiter. Ein Wechsel stellt den Wechselrichter zuerst auf Eigenverbrauch zurück.'
+      help: 'Automatisch (empfohlen): Bei ZWEI Wechselrichtern fährt DVhub Forced-Split (Dauer-Modus 2, beide Akkus geladen/entladen); bei EINEM Wechselrichter External EMS mit Herzschlag (geräteeigener Rückfall, sicherer). External EMS: mit Herzschlag — fällt DVhub aus, schaltet der Wechselrichter nach der Herzschlag-Frist selbst auf Eigenverbrauch zurück. Braucht eine Firmware, die das Herzschlag-Register (13080) kennt; fehlt es, steuert DVhub den Akku nicht und meldet das im Protokoll. Forced mode: ohne Herzschlag, auch für ältere Firmware; der letzte Befehl läuft bei einem Ausfall von DVhub weiter. Ein Wechsel stellt den Wechselrichter zuerst auf Eigenverbrauch zurück.'
     },
     {
       section: 'victron',
@@ -1445,6 +1667,267 @@ function buildFieldDefinitions() {
       step: 5,
       default: 30,
       help: 'Nur bei External EMS: so lange wartet der Wechselrichter auf die nächste Meldung von DVhub, bevor er selbst auf Eigenverbrauch zurückschaltet. DVhub meldet sich alle 10 s; 30 s (Standard) verkraftet zwei verpasste Meldungen, ohne dass der Wechselrichter zurückfällt, und beendet einen Lade- oder Entladebefehl nach einem Ausfall spätestens nach einer halben Minute. Erlaubt 20–300 s.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.maxPowerW',
+      label: 'Maximale Akku-Leistung (W)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      help: 'Obergrenze für die Lade-/Entladeleistung, die DVhub dem Wechselrichter vorgibt — für ALLE Quellen (EOS, Regeln, §14a, Netzanschluss, Hand-Sollwert). Leer/0 = die Nennleistung des Geräts (bei zwei WR die Summe beider) gilt. Nützlich zur Inbetriebnahme, um die Leistung vorsichtig zu begrenzen. Es gilt immer der kleinste Wert aus Geräte-Nennleistung und dieser Vorgabe.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.socFloorBufferPct',
+      label: 'Puffer über Geräte-Untergrenze (%)',
+      type: 'number',
+      min: 0,
+      max: 50,
+      step: 1,
+      default: 0,
+      help: 'Abstand, den DVhub beim Entladen über der geräteeigenen SoC-Untergrenze des Wechselrichters hält (effektiver Entlade-Boden = max(harter Boden, Geräte-Untergrenze + Puffer)). Der Puffer hält nur beim Entladen: Im Stillstand sinkt der Ladestand durch den Eigenverbrauch des Wechselrichters trotzdem bis zur Geräte-Untergrenze. Dort lädt der Wechselrichter von selbst aus dem Netz nach (Notladung). Standard 0 = DVhub entlädt bis zur Geräte-Untergrenze. Gilt für beide Wechselrichter und auch für die EOS-Planung.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.regulateEveryMs',
+      label: 'Regeltakt',
+      type: 'select',
+      default: 0,
+      options: [
+        { value: 0, label: 'Automatisch (1–5 s nach Antwortzeit)' },
+        { value: 1000, label: '1 Sekunde' },
+        { value: 2000, label: '2 Sekunden' },
+        { value: 5000, label: '5 Sekunden' }
+      ],
+      help: 'Wie oft DVhub die Akku-Vorgabe an den Wechselrichter nachführt. Automatisch (Standard): DVhub wählt 1–5 s anhand der gemessenen Modbus-Antwortzeit. Fest 1 s regelt am schnellsten auf Lastsprünge (mit den Block-Reads bleibt die Modbus-Last niedrig); 5 s ist als Dauertakt träge (das Netz schwankt bei Lastsprüngen). Die Modbus-Gesundheit in der Wechselrichter-Kachel zeigt, ob der gewählte Takt wirklich gehalten wird (wirksamer Takt vs. Antwortzeit).'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.regulateEveryMs',
+      label: 'Regeltakt zweiter Wechselrichter',
+      type: 'select',
+      default: 0,
+      options: [
+        { value: 0, label: 'Wie erster Wechselrichter' },
+        { value: 1000, label: '1 Sekunde' },
+        { value: 2000, label: '2 Sekunden' },
+        { value: 5000, label: '5 Sekunden' }
+      ],
+      help: 'Optional ein eigener Regeltakt für den zweiten (Slave-)Wechselrichter. „Wie erster Wechselrichter" (Standard) übernimmt den oben gewählten Takt. Nur nötig, wenn der zweite Wechselrichter einen anderen Takt braucht als der erste.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.heartbeatWriteFc',
+      label: 'Herzschlag-Schreibfunktion (13080)',
+      type: 'select',
+      default: 'auto',
+      options: [
+        { value: 'auto', label: 'Automatisch (erst FC 06, sonst FC 16)' },
+        { value: '6', label: 'FC 06 (Write Single)' },
+        { value: '16', label: 'FC 16 (Write Multiple)' }
+      ],
+      help: 'Nur bei External EMS: wie DVhub das Herzschlag-Register 13080 schreibt. Manche Sungrow (u. a. SH10RT-20) übernehmen 13080 nur per „Write Multiple" (FC 16). Automatisch (Standard): DVhub versucht beim ersten Mal FC 06 und bei Nichtübernahme einmal FC 16 und merkt sich, was funktioniert. Übernimmt der Wechselrichter gar keinen Wert, bricht DVhub External EMS sicher ab.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.acceptDeviceHeartbeatS',
+      label: 'Letzter Ausweg: geräteeigene Herzschlag-Frist akzeptieren (s)',
+      type: 'number',
+      min: 0,
+      max: 600,
+      step: 10,
+      help: 'Nur setzen, wenn der Wechselrichter den Herzschlag-Wert partout nicht übernimmt (nach Rücksprache). Dann fährt DVhub External EMS mit der geräteeigenen Frist, solange sie ≤ diesem Wert ist — der Rückfall-Schutz greift bei einem Ausfall dann erst nach dieser (längeren) Frist, nicht nach 30 s. 0/leer = aus (DVhub bricht bei Nichtübernahme sicher ab).'
+    },
+
+    // Zweiter Sungrow-WR im Master/Slave-Parallelbetrieb (T-0422, Feldabnahme). Der Master mit dem Smart Meter
+    // regelt (bestehende Verbindung victron.*); der zweite WR wird NUR gelesen. host leer = ein WR wie bisher.
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.host',
+      label: 'Zweiter Sungrow-WR: Adresse (Master/Slave-Parallelbetrieb)',
+      type: 'text',
+      help: 'Nur für zwei Sungrow-Hybrid-WR im Master/Slave-Verbund: IP/Name des ZWEITEN WR (Slave). Der erste WR (der mit dem Smart Meter = Master) bleibt die normale Verbindung oben; der zweite WR wird ausgelesen UND mitgeregelt — DVhub verteilt die Vorgabe selbst auf BEIDE WR und steuert jeden einzeln (der Master verteilt NICHT intern, Feldbefund). Leer = ein WR wie bisher.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.strategyCharge',
+      label: 'Aufteilung beim Laden',
+      type: 'select',
+      default: 'soc-balance',
+      options: [
+        { value: 'soc-balance', label: 'Ladestand ausgleichen (Standard)' },
+        { value: 'by-capacity', label: 'Nach Akku-Kapazität' },
+        { value: 'by-power', label: 'Nach max. Ladeleistung' },
+        { value: 'ratio', label: 'Festes Verhältnis (Master-Anteil %)' },
+        { value: 'priority-master', label: 'Master zuerst, Rest Slave' },
+        { value: 'priority-slave', label: 'Slave zuerst, Rest Master' },
+        { value: 'master-only', label: 'Nur Master (Slave im Eigenverbrauch)' }
+      ],
+      help: 'Wie DVhub eine Lade-Vorgabe auf beide WR verteilt (jeder WR wird einzeln gesteuert, weil der Master nach Kundenaussage nicht verteilt). „Ladestand ausgleichen" (Standard) füllt den WR mit mehr freiem Platz stärker; „Nach Akku-Kapazität" im Verhältnis der Kapazitäten; „Nach max. Ladeleistung" im Verhältnis der Leistungsgrenzen; „Festes Verhältnis" nach dem eingestellten Master-Anteil; „Master/Slave zuerst" lastet erst den einen voll aus, der Rest geht an den anderen; „Nur Master" lässt den Slave im Eigenverbrauch (Modus 0). Jeder WR hält seine eigene Grenze; der Überlauf geht an den anderen. Scheitert der SLAVE (Herzschlag, Rücklesen, fremder Modus), geht nur er in den Eigenverbrauch und der Master regelt mit dessen Anteil weiter; scheitert der MASTER (die Führung), gehen BEIDE sicher in den Eigenverbrauch zurück.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.strategyDischarge',
+      label: 'Aufteilung beim Entladen',
+      type: 'select',
+      default: 'soc-balance',
+      options: [
+        { value: 'soc-balance', label: 'Ladestand ausgleichen (Standard)' },
+        { value: 'by-capacity', label: 'Nach Akku-Kapazität' },
+        { value: 'by-power', label: 'Nach max. Entladeleistung' },
+        { value: 'ratio', label: 'Festes Verhältnis (Master-Anteil %)' },
+        { value: 'priority-master', label: 'Master zuerst, Rest Slave' },
+        { value: 'priority-slave', label: 'Slave zuerst, Rest Master' },
+        { value: 'master-only', label: 'Nur Master (Slave im Eigenverbrauch)' }
+      ],
+      help: 'Wie DVhub eine Entlade-Vorgabe auf beide WR verteilt. „Ladestand ausgleichen" (Standard) entlädt den WR mit mehr nutzbarer Reserve stärker (gleicht die Ladestände an). Übrige Werte wie beim Laden. Leer/nicht gesetzt = wie beim Laden.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.ratioMasterPct',
+      label: 'Master-Anteil bei „Festes Verhältnis" (%)',
+      type: 'number',
+      default: 50,
+      min: 0,
+      max: 100,
+      help: 'Nur für die Strategie „Festes Verhältnis": Anteil der Vorgabe, den der Master übernimmt (Rest der Slave). 50 = je zur Hälfte. Jeder WR hält seine Grenze; der Überlauf geht an den anderen.'
+    },
+    // A7 (Christin 21.11.2026, Option b): Frist, nach der der Master allein regelt, obwohl der nicht geführte Slave
+    // nicht auf Stopp bestätigt ist (services/inverter/sungrow.js sungrowMasterAloneAfterMs).
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.slaveUnconfirmedMasterAloneAfterMin',
+      label: 'Zweiter WR nicht bestätigt: Master regelt allein nach (min)',
+      type: 'number',
+      default: 30,
+      min: 0,
+      max: 1440,
+      step: 1,
+      help: 'Nur für zwei Wechselrichter. Führt DVhub den Slave gerade nicht selbst (Strategie „Nur Master", Slave-Fehler, keine Slave-Werte), setzt es seinen Befehl vor dem Eintritt des Masters auf Stopp und liest das zurück. Gelingt das nicht (Slave nicht erreichbar, Rücklesung scheitert), bleibt der Master in Modus 0 bzw. tritt zurück — höchstens so viele Minuten. Dasselbe gilt, wenn DVhub einen vorgefundenen Zwangsbetrieb (Modus 2) übernimmt. Danach regelt der Master allein weiter; ein alter Befehl am Slave (etwa aus der App) kann dann mitlaufen. DVhub warnt beim Wechsel und alle 15 min, prüft den Slave weiter und stoppt einen solchen Befehl, sobald er antwortet; dann beginnt die Frist neu. Bis dahin bleibt der Master allein, auch nach einer Notladung des Slave oder einer Pause. Vor dem Eintritt wartet der Master in Notladung des Slave und im Not-Halt (die Frist zählt dort nicht); nach einem Not-Halt beginnt sie neu. Standard 30 min, 0 = sofort, höchstens 1440 (1 Tag). Die Frist zählt nur im laufenden Betrieb; nach einem Neustart beginnt sie neu.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.aggregateTelemetry',
+      label: 'Zweiter WR: Werte zur Systemsumme zusammenzählen',
+      type: 'boolean',
+      help: 'Nur einschalten, wenn am Gerät geprüft ist, dass der Master NICHT bereits die Summe beider WR meldet (jeder WR meldet dann nur seine eigene PV-/Akku-Leistung). An = DVhub zählt PV, Akku-Leistung, SoC und Hauslast beider WR zusammen und nimmt die Summe beider BDC-Nennleistungen als Leistungsgrenze. Aus = nur die Werte des Masters.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.batteryCapacityWh',
+      label: 'Akkukapazität zweiter WR (Wh)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      help: 'Nutzbare Akkukapazität des ZWEITEN WR. Zusammen mit der Kapazität der Hauptanlage (Optimierer) bildet sie die Systemkapazität für den Netzstrom-im-Akku-Zähler und den kapazitätsgewichteten System-SoC. DVhub liest die Kapazität beider WR aus Register 5639 und zeigt sie als Vorschlag (Leitstand/Installateur-Portal) an — bitte den gelesenen Wert prüfen und hier eintragen (nicht automatisch gesetzt).'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.maxChargeW',
+      label: 'Max. Ladeleistung zweiter WR (W)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      help: 'Maximale Akku-Ladeleistung des ZWEITEN WR (Datenblatt/HA-Konfig, z. B. 5000 W). Die Lade-Leistungsgrenze des Systems ist die Summe aus Haupt- und zweitem WR (begrenzt durch Nennleistung und sungrow.maxPowerW). Leer/0 = der zweite WR zählt nicht zur Ladegrenze.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.maxDischargeW',
+      label: 'Max. Entladeleistung zweiter WR (W)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      help: 'Maximale Akku-Entladeleistung des ZWEITEN WR. Die Entlade-Leistungsgrenze des Systems ist die Summe aus Haupt- und zweitem WR (begrenzt durch Nennleistung und sungrow.maxPowerW). Leer/0 = der zweite WR zählt nicht zur Entladegrenze.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.pvKwp',
+      label: 'PV-Größe zweiter WR (kWp)',
+      type: 'number',
+      min: 0,
+      step: 0.1,
+      help: 'Installierte PV-Leistung am ZWEITEN WR (kWp). Für die Prognose zählt DVhub sie zur PV-Gesamtgröße dazu; den Ist-Ertrag je WR liest DVhub aus Register 5017. Wichtig: Sind unter Prognose die PV-Strings im Detail-Modus konfiguriert, decken diese bereits BEIDE WR ab — dann wird dieser Wert NICHT zusätzlich addiert (sonst Doppelzählung). Nur im einfachen/Standard-Modus beschreibt die PV-Gesamtgröße allein den Haupt-WR und dieser Wert kommt obendrauf. Leer/0 = keine eigene PV am zweiten WR.'
     },
 
     // B-1112 Stufe 2 — Nulleinspeisung bei Abregelung (Christin 2026-07-19).
@@ -1534,14 +2017,15 @@ function buildFieldDefinitions() {
       groupLabel: 'Fern-Support · Voreinstellungen',
       groupDescription: 'Optionaler, vom Kunden kontrollierter Support-Zugang.',
       path: 'support.tunnel.autoCloseMin',
-      label: 'Tunnel-Auto-Schließung (Minuten)',
+      label: 'Standard-Tunnel-Dauer (Minuten)',
       type: 'select',
       options: [
         { value: 30, label: '30 Minuten' },
         { value: 60, label: '60 Minuten (Standard)' },
-        { value: 120, label: '120 Minuten' }
+        { value: 120, label: '120 Minuten' },
+        { value: 240, label: '240 Minuten (4 Stunden)' }
       ],
-      help: 'Spätestens nach dieser Zeit schließt sich ein geöffneter Support-Tunnel automatisch wieder. Du kannst ihn jederzeit vorher manuell beenden.'
+      help: 'Standard-Laufzeit eines Support-Tunnels, wenn beim Öffnen KEINE Dauer gewählt wurde. Wird der Tunnel über das Support-Portal mit einer Dauer geöffnet (30 min / 1 h / 2 h / 4 h), gilt immer diese gewählte Dauer. Du kannst den Tunnel jederzeit vorher manuell beenden.'
     },
 
     {
@@ -1820,18 +2304,20 @@ function buildFieldDefinitions() {
       path: 'manufacturer',
       label: 'Hersteller',
       type: 'select',
-      // Statische Fallback-Liste — die API liefert die echten Optionen dynamisch
-      // aus dem hersteller/-Ordner (routes-api.js configMetaPayload), damit ein
-      // neu abgelegtes Profil ohne Code-Änderung auswählbar ist (D-27).
+      // Statische Fallback-Liste NUR für die Anzeige — die API liefert die echten
+      // Optionen dynamisch aus dem hersteller/-Ordner (routes-api.js
+      // configMetaPayload), damit ein neu abgelegtes Profil ohne Code-Änderung
+      // auswählbar ist (D-27). Geprüft wird gegen den Ordner, nicht gegen diese
+      // Liste (E1: sanitizeManufacturerId + loadConfigFile).
       options: [
         { value: 'victron', label: 'Victron' },
         { value: 'bridge-mqtt', label: 'Universal (MQTT-Bridge)' },
-        { value: 'dvhub-mqtt', label: 'Universal (DVhub-MQTT-Schema: HA/Loxone) — Beta' },
-        { value: 'fronius', label: 'Fronius GEN24 (SunSpec) — Beta' },
-        { value: 'deye-lv', label: 'Deye SUN-…SG04LP3 (LV, 3-phasig) — Beta' },
-        { value: 'sungrow', label: 'Sungrow SH Hybrid (Modbus TCP) — Beta' }
+        { value: 'dvhub-mqtt', label: 'Universal (DVhub-MQTT-Schema: HA/Loxone)' },
+        { value: 'fronius', label: 'Fronius GEN24 (SunSpec)' },
+        { value: 'deye-lv', label: 'Deye SUN-…SG04LP3 (LV, 3-phasig)' },
+        { value: 'sungrow', label: 'Sungrow SH Hybrid (Modbus TCP)' }
       ],
-      help: 'Victron wird nativ (Modbus) unterstützt. „Universal (MQTT-Bridge)" bindet jeden anderen Wechselrichter über eine kleine MQTT-Bridge an (z. B. Node-RED, siehe Doku DEYE-NODERED-BRIDGE). ⚠️ Fronius GEN24 (SunSpec), Deye LV-3ph (RS485-Gateway) und Sungrow SH Hybrid (Modbus TCP über LAN oder WiNet-S) sind BETA-Profile, deren Test an echter Hardware noch aussteht — Fronius und Deye aktuell nur Telemetrie/Anzeige (Fronius derzeit OHNE aktive Abregelung); Sungrow steuert zusätzlich Akku (EMS-Modus) und Einspeisebegrenzung. Wer testen möchte, bitte melden (info@bikinibottom.capital); in einer Produktivumgebung bitte noch nicht einsetzen. Die technischen Werte kommen aus der Herstellerdatei.'
+      help: 'Victron wird nativ (Modbus) unterstützt. „Universal (MQTT-Bridge)" bindet jeden anderen Wechselrichter über eine kleine MQTT-Bridge an (z. B. Node-RED, siehe Doku DEYE-NODERED-BRIDGE). Fronius GEN24 (SunSpec), Deye LV-3ph (RS485-Gateway) und Sungrow SH Hybrid (Modbus TCP über LAN oder WiNet-S): Fronius und Deye aktuell nur Telemetrie/Anzeige (Fronius derzeit OHNE aktive Abregelung); Sungrow steuert zusätzlich Akku (EMS-Modus) und Einspeisebegrenzung. Wer testen möchte, bitte melden (info@bikinibottom.capital). Die technischen Werte kommen aus der Herstellerdatei.'
     },
     {
       section: 'victron',
@@ -2662,10 +3148,29 @@ function buildFieldDefinitions() {
       step: 1000,
       help: 'So lange wartet DVhub auf eine Antwort des Optimierers. Ein vollständiger Rechenlauf dauert mehrere Minuten, die einzelnen Abfragen hier sind aber kurz. Zu knapp = der Fahrplan kommt nie an, DVhub fällt auf die eingebaute Planung zurück. Standard: 30 Sekunden.'
     },
+    {
+      section: 'schedule',
+      group: 'eosProxy',
+      groupLabel: 'DV-EOS-Optimierer (Beta)',
+      groupDescription: 'Der eigene EOS-Fork als Planer: DVhub schickt ihm Prognosen und Preise und übernimmt seinen Fahrplan. Noch im Feldtest — erscheint und wirkt nur im Bleeding-Edge-Kanal.',
+      groupOrder: 11,
+      beta: true,
+      path: 'optimizer.eosProxy.mode',
+      label: 'Betriebsart des Optimierers',
+      type: 'select',
+      default: 'local',
+      options: [
+        { value: 'local', label: 'Python-EOS mit Rust-Kern (Standard)' },
+        { value: 'local-native', label: 'Reiner Rust-Dienst, ohne Python (1.0.11)' }
+      ],
+      help: '„Reiner Rust-Dienst“ lässt den mitgelieferten nativen Optimierer (dvhub-optimize) direkt als EOS-Dienst laufen — ohne Python-Laufzeit (spart ~170–230 MB RAM), mit gleicher Schnittstelle. Er rechnet wie EOS 0.4.0rc3 mit DVhubs Erweiterungen (Schwellen-Spitzenkappung, Wertstufen fürs E-Auto). Die Auswahl allein stellt nichts um: Bei einer normalen Installation braucht es zusätzlich die Freigabe durch root (Datei /etc/dvhub-release/eos-native-optin) und einen DVhub-Neustart; im Docker-Stack schaltet stattdessen die Überlagerung docker/compose.eos-localnative.yml um. Gibt es für diese Box kein passendes Programm oder scheitert die Einrichtung, rechnet weiter Python-EOS. Zurück: hier „Python-EOS mit Rust-Kern“ wählen (bzw. Freigabe-Datei löschen oder die Überlagerung weglassen). Standard: Python-EOS mit Rust-Kern.'
+    },
     // Fernbetrieb im DVhub-Rechendienst (optimizer.eosProxy.mode = 'remote' und
     // optimizer.eosProxy.remote.*) gibt es seit 1.0.10 nicht mehr (Christin
     // 11.11.2026): DVhub-EOS rechnet mit dem Rust-Kern überall schnell genug
     // lokal. Gespeicherte Werte migriert migrateEosRemoteMode beim Laden.
+    // Die Betriebsart 'local-native' (reiner Rust-Dienst) gibt es seit 1.0.11;
+    // wirksam nur mit root-Freigabe (eos-provision.sh) bzw. Docker-Überlagerung.
 
     {
       section: 'schedule',
@@ -2742,9 +3247,11 @@ function buildFieldDefinitions() {
         { value: 'auto', label: 'Automatisch (mindestens 6 h, bis zur Frist von E-Auto oder Gerät)' },
         { value: 6, label: '6 Stunden' },
         { value: 12, label: '12 Stunden' },
-        { value: 24, label: '24 Stunden' }
+        { value: 24, label: '24 Stunden' },
+        // 1.0.11: Tage im Voraus planen (eos-forecast-bridge.js extendIntoForecast).
+        { value: 'forecast', label: 'Bis in die Preisprognose (Tage im Voraus, 2–4× Rechenzeit)' }
       ],
-      help: 'Wie weit EOS den Akku Slot für Slot plant. Standard: so weit, wie Börsenpreise bekannt sind — vormittags bis Mitternacht, ab etwa 13 Uhr bis Mitternacht des Folgetags (gut 30 h). Dahinter bewertet EOS die Restladung über den Prognose-Schwanz. Die Rechenzeit wächst mit dem Steuerzeitraum etwa im selben Verhältnis (gemessen auf einem eHive mit E-Auto: 10 h ≈ 15 min, 24 h ≈ 30–40 min je Lauf). „Automatisch“: mindestens 6 h und bis zur Abfahrt des E-Autos bzw. bis zum Fensterende eines planbaren Geräts, höchstens so weit, wie Börsenpreise bekannt sind. Über ein Jahr gerechnet so gut wie der ganze Preiszeitraum, braucht aber deutlich weniger Rechenzeit — für schwache Boards die erste Wahl. Eine feste Grenze (6/12/24 h) gilt dagegen immer, auch wenn eine Abfahrt dahinter liegt; dann verlangt EOS das Ladeziel schon am Ende des Steuerzeitraums.'
+      help: 'Wie weit EOS den Akku Slot für Slot plant. Standard: so weit, wie Börsenpreise bekannt sind — vormittags bis Mitternacht, ab etwa 13 Uhr bis Mitternacht des Folgetags (gut 30 h). Dahinter bewertet EOS die Restladung über den Prognose-Schwanz. Die Rechenzeit wächst mit dem Steuerzeitraum etwa im selben Verhältnis (gemessen auf einem eHive mit E-Auto: 10 h ≈ 15 min, 24 h ≈ 30–40 min je Lauf). „Automatisch“: mindestens 6 h und bis zur Abfahrt des E-Autos bzw. bis zum Fensterende eines planbaren Geräts, höchstens so weit, wie Börsenpreise bekannt sind. Über ein Jahr gerechnet so gut wie der ganze Preiszeitraum, braucht aber deutlich weniger Rechenzeit — für schwache Boards die erste Wahl. Eine feste Grenze (6/12/24 h) gilt dagegen immer, auch wenn eine Abfahrt dahinter liegt; dann verlangt EOS das Ladeziel schon am Ende des Steuerzeitraums. „Bis in die Preisprognose“: EOS plant auch die nächsten Tage Slot für Slot, mit den vorhergesagten Preisen von dvhub.online (höchstens 120 h, so weit auch PV- und Verbrauchsprognose reichen). Ausgeführt wird weiter nur, was auf festen Börsenpreisen liegt; alle 15 Minuten rechnet EOS neu. Die Rechenzeit steigt dabei etwa auf das Zwei- bis Vierfache (mit dem schnellen Rechenkern auf einer Radxa A7S grob 20–40 s statt 7–10 s je Lauf). Ohne Preisprognose (andere Preiszone, unter EPEX ausgeschaltet, keine Verbindung) wie der Standard. Ist die Preisprognose an, steht unter diesem Feld und unter dem EOS-Fahrplan im Leitstand, wie lange ein Lauf damit auf diesem Gerät etwa dauern würde (aus den gemessenen letzten Läufen hochgerechnet).'
     },
     {
       section: 'schedule',
@@ -2759,9 +3266,13 @@ function buildFieldDefinitions() {
         { value: 0, label: 'Automatisch: Steuerzeitraum + 48 h, höchstens 72 h (Standard)' },
         { value: 48, label: '48 Stunden' },
         { value: 60, label: '60 Stunden' },
-        { value: 72, label: '72 Stunden' }
+        { value: 72, label: '72 Stunden' },
+        // 1.0.11: Preisschwanz aus der Residuallast-Prognose reicht ~5 Tage.
+        { value: 96, label: '96 Stunden (4 Tage)' },
+        { value: 120, label: '120 Stunden (5 Tage)' },
+        { value: 144, label: '144 Stunden (6 Tage, bis Ende der Preisprognose)' }
       ],
-      help: 'Wie weit EOS Prognosen und Preise liest (EOS prediction.hours, bisher fest 48 h): Steuerzeitraum plus Schwanz, in dem EOS den Wert der Restladung abschätzt. So weit schreibt DVhub auch die Börsenpreise fort. Hinter dem Steuerzeitraum bleiben immer mindestens 12 h Schwanz — reicht der Prognosehorizont dafür nicht, kürzt DVhub den Steuerzeitraum. Ein kurzer Schwanz lässt EOS die Restladung im Akku nur zum Einspeisewert bewerten. Kostet wenig Rechenzeit — den Schwanz rechnet EOS je Lauf nur einmal durch; das meiste kostet der Steuerzeitraum. Im Fernbetrieb (Rechendienst) gilt fest 48 h, der Steuerzeitraum dann höchstens 36 h.'
+      help: 'Wie weit EOS vorausschaut: Steuerzeitraum plus „Schwanz“. Im Schwanz plant EOS nicht mehr Slot für Slot, sondern schätzt nur, was die Restladung im Akku später noch wert ist. Dort, wo noch keine Börsenpreise feststehen, nimmt DVhub die Preisprognose von dvhub.online (aus Wetter, Wind und Sonne vorhergesagt; nur für die deutsche Preiszone; an/aus unter EPEX → „Preisprognose von dvhub.online“). Hinter dem Steuerzeitraum bleiben immer mindestens 12 h Schwanz — reicht der Prognosehorizont dafür nicht, kürzt DVhub den Steuerzeitraum. Längere Werte (96–144 h) lassen EOS mehrere Tage vorausschauen. Das kostet kaum Rechenzeit, bringt aber nur etwas, wenn auch die PV-Prognose so weit reicht (pvnode bis 6 Tage, andere Anbieter meist 2–4 Tage): EOS schaut nur so weit, wie Preise, PV- und Verbrauchsprognose alle reichen; wie weit tatsächlich, steht auf der EOS-Karte im Leitstand. Die Verbrauchsprognose verlängert DVhub dafür automatisch (hinter dem ersten Tag ist sie das übliche Tagesprofil). Auf einer Anlage mit echten Daten brachte ein längerer Schwanz bisher keinen messbaren Vorteil; Standard bleibt darum automatisch. Im Fernbetrieb (Rechendienst) gilt fest 48 h, der Steuerzeitraum dann höchstens 36 h.'
     },
     {
       section: 'schedule',
@@ -3227,7 +3738,7 @@ function buildFieldDefinitions() {
       min: 0,
       max: 50,
       step: 0.5,
-      help: 'F\u00fcr \u201eMax-Ladestand, wenn g\u00fcnstig\u201c sch\u00e4tzt DVhub, was eine zus\u00e4tzliche kWh im Auto an sp\u00e4teren Ladekosten spart (Preise und PV der n\u00e4chsten 7 Tage). Davon geht dieser Abschlag ab, weil Preise hinter dem Day-Ahead nur gesch\u00e4tzt sind. H\u00f6her = vorsichtiger, das Auto wird seltener \u00fcber das Mindestziel geladen.'
+      help: 'F\u00fcr \u201eMax-Ladestand, wenn g\u00fcnstig\u201c sch\u00e4tzt DVhub, was eine zus\u00e4tzliche kWh im Auto an sp\u00e4teren Ladekosten spart: mit Preisen und PV bis zu 7 Tage \u00fcber die Abfahrt hinaus, so weit die festen B\u00f6rsenpreise und die Preisprognose von dvhub.online reichen (meist 4\u20135 Tage). Ohne Preisprognose (andere Preiszone, Prognose aus oder l\u00e4nger ausgefallen) nur so weit wie die festen Preise; reichen sie nicht einen Tag \u00fcber die Abfahrt hinaus, l\u00e4dt EOS nur bis zum Mindestziel. Von dem Wert geht dieser Abschlag ab, weil Preise hinter dem Day-Ahead nur vorhergesagt sind. H\u00f6her = vorsichtiger, das Auto wird seltener \u00fcber das Mindestziel geladen.'
     },
     {
       section: 'schedule',
@@ -3853,6 +4364,56 @@ function buildFieldDefinitions() {
     },
     {
       section: 'pricing',
+      group: 'mode',
+      groupLabel: 'Eigener Strompreis',
+      groupDescription: 'Festpreis, mit dem die Historie den dynamischen Tarif vergleicht.',
+      path: 'userEnergyPricing.comparisonFixedCtKwh',
+      label: 'Vergleichs-Festpreis (ct/kWh)',
+      type: 'number',
+      step: 0.01,
+      min: 0,
+      empty: 'null',
+      help: 'Brutto-Arbeitspreis eines Festpreis-Tarifs, mit dem die Historie deinen dynamischen Tarif vergleicht (nur Arbeitspreis, ohne Grundgebühr). Leer = automatisch: der Festpreis des letzten Festpreis-Zeitraums vor dem dynamischen Tarif, sonst der Feste Bruttopreis des Standard-Tarifs.'
+    },
+    {
+      section: 'pricing',
+      group: 'mode',
+      groupLabel: 'Eigener Strompreis',
+      groupDescription: 'Ab wann der Standard-Tarif gilt.',
+      path: 'userEnergyPricing.validFrom',
+      label: 'Standard-Tarif gilt ab',
+      type: 'text',
+      empty: 'null',
+      help: 'Erster Tag (JJJJ-MM-TT), an dem der dynamische Tarif bzw. der Anbieterpreis des Standard-Tarifs gilt. Davor rechnet DVhub an Tagen ohne eigenen Zeitraum mit dem festen Bruttopreis des Standard-Tarifs, nie rückwirkend mit dem dynamischen Tarif. Leer = automatisch: ab dem ersten gespeicherten Anbieterpreis bzw. ab dem Tag nach dem letzten Festpreis-Zeitraum; ohne solchen Hinweis gilt er für die ganze Historie.'
+    },
+    {
+      section: 'pricing',
+      group: 'mode',
+      groupLabel: 'Eigener Strompreis',
+      groupDescription: 'Grundgebühr des Standard-Tarifs.',
+      path: 'userEnergyPricing.baseFeeEurMonth',
+      label: 'Grundgebühr (€/Monat)',
+      type: 'number',
+      step: 0.01,
+      min: 0,
+      empty: 'null',
+      help: 'Feste Grundgebühr je Monat (brutto) des Standard-Tarifs. Die Historie rechnet sie tageweise zu den Energiekosten des Monats; der Ø Arbeitspreis bleibt ohne Grundgebühr. Ein Zeitraum hat eine eigene Grundgebühr. Leer = unbekannt.'
+    },
+    {
+      section: 'pricing',
+      group: 'mode',
+      groupLabel: 'Eigener Strompreis',
+      groupDescription: 'Grundgebühr des Festpreis-Tarifs für den Vergleich in der Historie.',
+      path: 'userEnergyPricing.comparisonFixedBaseFeeEurMonth',
+      label: 'Vergleichs-Grundgebühr (€/Monat)',
+      type: 'number',
+      step: 0.01,
+      min: 0,
+      empty: 'null',
+      help: 'Grundgebühr je Monat (brutto) des Festpreis-Tarifs, mit dem die Historie vergleicht. Leer = die Grundgebühr des Festpreis-Zeitraums, aus dem der Vergleichspreis stammt; sonst kein Vergleich mit Grundgebühr.'
+    },
+    {
+      section: 'pricing',
       group: 'marketPremium',
       groupLabel: 'PV-Anlagen für Marktprämie',
       groupDescription: 'Mehrere PV-Anlagen mit Inbetriebnahme und Leistung für den gewichteten anzulegenden Wert.',
@@ -3864,6 +4425,24 @@ function buildFieldDefinitions() {
         { value: 'monthly', label: 'Monatsmarktwert' }
       ],
       help: 'Legt global fest, ob DVhub die Marktprämie mit Jahres- oder Monatsmarktwerten berechnet.'
+    },
+    {
+      // 19.11.2026 (Christin): anzulegende Werte zentral von dvhub.online, wie die
+      // Börsenpreise wählbar. Ohne eigene Wahl folgt die Quelle einer öffentlichen
+      // Preisquelle (migrateApplicableValueSource) — wer dvhub.online meidet, bleibt dabei.
+      section: 'pricing',
+      group: 'marketPremium',
+      groupLabel: 'PV-Anlagen für Marktprämie',
+      groupDescription: 'Mehrere PV-Anlagen mit Inbetriebnahme und Leistung für den gewichteten anzulegenden Wert.',
+      path: 'referenceData.applicableValueSource',
+      label: 'Quelle der anzulegenden Werte',
+      type: 'select',
+      default: 'dvhub',
+      options: [
+        { value: 'dvhub', label: 'DVhub (dvhub.online)' },
+        { value: 'public', label: 'Direkt von der Bundesnetzagentur' }
+      ],
+      help: 'Woher DVhub die anzulegenden Werte der Bundesnetzagentur (je Inbetriebnahmemonat und Leistungsstufe) für Marktprämie und Einspeisevergütung holt. DVhub: fertig geprüft von dvhub.online (eine kleine Anfrage pro Woche); ist dvhub.online nicht erreichbar, holt DVhub sie automatisch direkt bei der Bundesnetzagentur. Direkt: ohne dvhub.online, DVhub lädt dann die Archivseite und die Veröffentlichungen mit den Werten (heute 7 Dateien) selbst. Geholt wird nur, wenn unten eine PV-Anlage mit Leistung und Inbetriebnahme eingetragen ist, danach wöchentlich.'
     },
     {
       section: 'pricing',
@@ -4336,7 +4915,10 @@ function buildFieldDefinitions() {
       path: 'forecast.solcast.enabled',
       label: 'Solcast aktiv',
       type: 'boolean',
-      help: 'Aktiviert den Solcast-Dienst f\u00fcr PV-Vorhersagen. Erfordert API-Key und Site-ID.'
+      // Ohne gespeicherten Wert gilt Solcast mit API-Key + Site-ID als eingeschaltet
+      // (pv-provider-setup.js) \u2014 die Anzeige zeigt das auch so.
+      default: true,
+      help: 'Nimmt Solcast in die PV-Prognose auf. Wirkt nur mit API-Key und Site-ID (Integrationen \u2192 PV-Forecast-Provider). Aus = Solcast wird nicht abgefragt und z\u00e4hlt nicht im Ensemble.'
     },
     {
       section: 'forecast',
@@ -4649,7 +5231,7 @@ function buildFieldDefinitions() {
       label: 'Preiszone',
       type: 'dynamicSelect',
       dynamicOptionsUrl: '/api/epex/zones',
-      help: 'EPEX Day-Ahead Bidding Zone. Wird von dvhub.online geladen.'
+      help: 'EPEX Day-Ahead Bidding Zone. Wird von dvhub.online geladen. Hinweis: Die Preisprognose für die kommenden Tage (Preisschwanz für EOS, gestrichelte Linie im Leitstand) gibt es nur für die deutsche Zone DE-LU. In anderen Zonen plant EOS nur so weit, wie Börsenpreise feststehen.'
     },
     {
       section: 'epex',
@@ -4665,7 +5247,7 @@ function buildFieldDefinitions() {
         { value: 'public', label: 'Öffentlich (Energy-Charts)' },
         { value: 'luox', label: 'LUOX-Kundenportal (Day-Ahead DE-LU, Rückfall auf DVhub)' }
       ],
-      help: 'DVhub: Preise von dvhub.online (mit Energy-Charts als automatischem Fallback). Öffentlich: direkt von der freien Quelle Energy-Charts (api.energy-charts.info), ohne dvhub.online. LUOX: Day-Ahead-Viertelstundenpreise direkt aus dem LUOX-Kundenportal mit den eigenen Zugangsdaten (Einstellungen → LUOX, nur Preiszone DE-LU); liefert LUOX nicht, springt dvhub.online/Energy-Charts ein. Hinweis: Zonen-Liste, Lücken-Anzeige und Backfill funktionieren nur mit DVhub.'
+      help: 'DVhub: Preise von dvhub.online (mit Energy-Charts als automatischem Fallback). Öffentlich: direkt von der freien Quelle Energy-Charts (api.energy-charts.info), ohne dvhub.online — die Preisprognose für die kommenden Tage ist dann ab Werk aus, lässt sich aber unten unter „Preisprognose von dvhub.online“ einschalten. LUOX: Day-Ahead-Viertelstundenpreise direkt aus dem LUOX-Kundenportal mit den eigenen Zugangsdaten (Einstellungen → LUOX, nur Preiszone DE-LU); liefert LUOX nicht, springt dvhub.online/Energy-Charts ein. Hinweis: Zonen-Liste, Lücken-Anzeige und Backfill funktionieren nur mit DVhub.'
     },
     {
       section: 'epex',
@@ -4680,6 +5262,26 @@ function buildFieldDefinitions() {
         { value: 'https://dvhub.online', label: 'DVhub (dvhub.online)' }
       ],
       help: 'DVhub Price API Endpunkt. Standard: https://dvhub.online'
+    },
+    {
+      // 1.0.11 (Christin 12.11.2026): eigener Schalter, unabhängig von der
+      // Preisquelle. „automatisch“ (auch: Feld fehlt) = an bei DVhub und LUOX,
+      // aus bei „Öffentlich“ — genau wie vor dem Schalter
+      // (price-outlook.js outlookDisabledReason).
+      section: 'epex',
+      group: 'market',
+      groupLabel: 'EPEX',
+      groupDescription: 'Day-Ahead-Preisfeed für Preise, Prognosen und Negativpreis-Logik.',
+      path: 'epex.priceOutlook',
+      label: 'Preisprognose von dvhub.online',
+      type: 'select',
+      default: 'auto',
+      options: [
+        { value: 'auto', label: 'Automatisch: an bei Preisquelle DVhub und LUOX, aus bei „Öffentlich“ (Standard)' },
+        { value: 'on', label: 'An (auch bei Preisquelle „Öffentlich“)' },
+        { value: 'off', label: 'Aus' }
+      ],
+      help: 'Börsenpreise für die Tage hinter den festen Day-Ahead-Preisen, vorhergesagt aus Wetter, Wind, Sonne und Verbrauch (dvhub.online, je Stunde, etwa 5 Tage voraus; nur Preiszone DE-LU). Damit bewertet EOS die Restladung im Akku hinter den festen Preisen und kann auf Wunsch Tage im Voraus planen (Prognosehorizont, Steuerzeitraum „Bis in die Preisprognose“); auch „Max-Ladestand wenn günstig“ beim E-Auto rechnet damit. DVhub fragt sie 4× täglich ab und schickt dabei nur Programmname und Version, keine Daten der Anlage. Aus: EOS plant nur so weit, wie Börsenpreise feststehen. Funktioniert mit jeder Preisquelle; die Preise selbst kommen weiter aus der gewählten Quelle.'
     },
     // LUOX/Lumenaza (T-0417, services/tariff-provider/luox-service.js): eigene
     // Kundendaten aus dem LUOX-Kundenportal; Partner-API vorbereitet.
@@ -4837,8 +5439,10 @@ export function createDefaultConfig() {
     // Mechanismus selbst wird vom Herstellerprofil freigeschaltet
     // (dvControl.zeroFeedIn.enabled, aktuell Fronius GEN24). Lives in
     // createDefaultConfig → automatisch ALLOWED_CONFIG_ROOTS + Save-Roundtrip.
-    // Sungrow-Steuermodus (T-0422): External EMS mit Herzschlag ist der Standard.
-    sungrow: { controlMode: 'external', heartbeatTimeoutS: 30 },
+    // Sungrow-Steuermodus (T-0422 / Befund 4 16.11.): 'auto' lässt resolveSungrowControl
+    // entscheiden — zwei WR → Forced-Split, ein WR → External EMS. Der feste Default
+    // 'external' hatte zuvor die Zwei-WR-Automatik maskiert (Repro c2.mjs belegt).
+    sungrow: { controlMode: 'auto', heartbeatTimeoutS: 30 },
     zeroFeedIn: {
       socThresholdPct: 95,
       socHysteresisPct: 5,
@@ -4852,7 +5456,11 @@ export function createDefaultConfig() {
     // Netzanschluss (services/grid-connection): ab Werk leer = DVhub begrenzt nicht.
     gridConnection: { limitKw: null, marginW: null, phaseLimitA: null, releaseHysteresisW: 1000, baseLoadW: 1000, order: 'wallbox_first', batteryPhases: '' },
     // Peak Shaving (GitHub #28, services/peak-shaving): ab Werk aus, ohne Grenze.
-    peakShaving: { enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null },
+    peakShaving: { enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null, billing15min: true, adaptToReachedPeak: false,
+      // Leistungsentgelt in € (P4): leer = unbekannt, DVhub rät keine Preise.
+      tariff: { model: 'year', lpLowEurPerKwYear: null, apLowCtPerKwh: null, lpHighEurPerKwYear: null, apHighCtPerKwh: null, lpMonthEurPerKwMonth: null, apMonthCtPerKwh: null },
+      // Eingebaute Peak-Shaving-Funktion des Wechselrichters (P5, ungetestet): ab Werk aus.
+      builtin: { enabled: false, reserveSocPct: null } },
     multiGx: { enabled: false, host: '', port: 502, unitId: 100, batteryCapacityWh: 0, maxChargeW: 0, maxDischargeW: 0, minSocPct: 10, rampWPerS: 200, deadbandW: 300, exportHandoffAtFloor: false },
     // Ladestand des E-Autos über evccs Fahrzeug-Treiber (services/vehicle-evcc):
     // aus, bis jemand eine Marke einrichtet; evcc wird erst dann geladen.
@@ -5007,10 +5615,10 @@ export function createDefaultConfig() {
       // 2903 = 10 %). Nur der Entlade-Wächter liest sie (setpoint-follow-watchdog).
       activeSocLimitPct: { enabled: true, fc: 4, address: 2903, quantity: 1, signed: false, scale: 0.1, offset: 0 },
       // T-0118: live readback of Cerbo reg 2704 (com.victronenergy.settings
-      // /Settings/CGwacs/MaxDischargePower). signed int16 so the -1 "unlimited"
-      // sentinel decodes correctly (0xFFFF -> -1, not 65535). 0 = hold, positive
-      // = AC discharge cap in W. Same register controlWrite.maxDischargeW writes.
-      maxDischargeW: { enabled: true, fc: 4, address: 2704, quantity: 1, signed: true, scale: 1, offset: 0 },
+      // /Settings/CGwacs/MaxDischargePower). Wie hersteller/victron.json: 10-W-Schritte (scale 10), 0 = Entladung
+      // gesperrt und raw 0xFFFF/32767 = unbegrenzt (−1) unskaliert. Same register controlWrite.maxDischargeW writes.
+      // Abgleich mit dem Profil: test/victron-vorgaben-abgleich.test.js (vorher scale 1, Codex a5803519 P1).
+      maxDischargeW: { enabled: true, fc: 4, address: 2704, quantity: 1, signed: true, scale: 10, offset: 0, rawSentinels: [-1, 0], rawSentinelMap: { '-1': 32767 } },
       selfConsumptionW: { enabled: true, fc: 4, address: 817, quantity: 3, signed: false, scale: 1, offset: 0, sumRegisters: true }
     },
     controlWrite: {
@@ -5021,10 +5629,10 @@ export function createDefaultConfig() {
       gridSetpointW: { enabled: true, fc: 16, address: 2716, writeType: 'int32', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
       chargeCurrentA: { enabled: true, fc: 6, address: 2705, writeType: 'int16', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
       minSocPct: { enabled: true, fc: 6, address: 2901, writeType: 'uint16', signed: false, scale: 0.1, offset: 0, wordOrder: 'be' },
-      // Cerbo reg 2704 — AC-side discharge cap (com.victronenergy.settings).
-      // 0 = no discharge (hold), positive int = cap in W, -1 (0xFFFF) = unlimited.
-      // Same register evcc batteryDischargeControl writes; see docs/research/inverter-control-landscape-eu.csv.
-      maxDischargeW: { enabled: true, fc: 6, address: 2704, writeType: 'int16', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
+      // Cerbo reg 2704 — AC-side discharge cap (com.victronenergy.settings). Wie hersteller/victron.json: Register
+      // zählt 10-W-Schritte (scale 10); 0 = Entladung sperren geht unskaliert, −1 = unbegrenzt geht als raw 32767
+      // (Victron verwirft raw −1). Same register evcc batteryDischargeControl writes.
+      maxDischargeW: { enabled: true, fc: 6, address: 2704, writeType: 'int16', signed: true, scale: 10, offset: 0, wordOrder: 'be', rawSentinels: [0], rawSentinelMap: { '-1': 32767 } },
       // Cerbo reg 2706 — /Settings/CGwacs/MaxFeedInPower, Einspeisegrenze, zählt
       // in 100-W-Schritten (Victron-Skala 0.01), -1 = unbegrenzt. Nur für die
       // LUOX-Teilvorgabe des Direktvermarkters (dv-interface-luox.js); der Wert
@@ -5097,6 +5705,15 @@ export function createDefaultConfig() {
     userEnergyPricing: {
       mode: 'fixed',
       fixedGrossImportCtKwh: 30,
+      // Festpreis für den Vergleich in der Historie (brutto ct/kWh, 1.0.11).
+      // null = automatisch: letzter Festpreis-Zeitraum vor dem dynamischen Tarif.
+      comparisonFixedCtKwh: null,
+      // Standard-Tarif gilt ab (YYYY-MM-DD, lokaler Tag); null = automatisch
+      // (Historie) bzw. immer. Christin 23.11.2026 (T1).
+      validFrom: null,
+      // Grundgebühren je Monat (brutto €), null = unbekannt (T5).
+      baseFeeEurMonth: null,
+      comparisonFixedBaseFeeEurMonth: null,
       periods: [],
       marketValueMode: 'annual',
       pvPlants: [],
@@ -5196,7 +5813,14 @@ export function createDefaultConfig() {
       bzn: 'DE-LU',
       timezone: 'Europe/Berlin',
       priceSource: 'dvhub',
+      // Preisprognose von dvhub.online (1.0.11): 'auto' | 'on' | 'off'.
+      priceOutlook: 'auto',
       priceApiUrl: 'https://dvhub.online'
+    },
+    // Referenzdaten (19.11.2026): Quelle der anzulegenden Werte der BNetzA —
+    // 'dvhub' (dvhub.online, Rückfall direkt) | 'public' (direkt).
+    referenceData: {
+      applicableValueSource: 'dvhub'
     },
     // Nur noch die StatsForecast-Lastprognose (services/forecast/load-forecast.js).
     // Der Name 'ml' bleibt, damit bestehende Configs unverändert weiter gelten;
@@ -5424,7 +6048,13 @@ export function createDefaultConfig() {
       enabled: false,
       sources: [],
       groups: [],
-      backfillDays: 730
+      backfillDays: 730,
+      // T-MPPT-TELEMETRY: Per-MPPT/String-Logging der SunSpec-WR-Familie (Fronius
+      // GEN24, Kostal, SolarEdge, SMA) ueber Model 160. Das LOGGEN selbst steuert
+      // das Herstellerprofil (points.mppt, z. B. hersteller/fronius.json) — hier
+      // liegen nur Anzeige-Metadaten je Modulnummer (Beschriftung, kWp) fuer den
+      // Leitstand und die pvnode-CSV. labels/kwp sind nach Modulnummer verschluesselt.
+      mppt: { labels: {}, kwp: {} }
     },
     // Plan 08-04 Task 2 Step 5: Host-header + CORS + trust-proxy allowlists.
     // Defaults stay permissive for LAN-first installs (empty arrays = no check);
@@ -5585,6 +6215,25 @@ function applyVictronDefaults(config) {
   for (const [key, item] of Object.entries(next.dvControl || {})) {
     if (key !== 'enabled' && key !== 'negativePriceProtection') apply(item);
   }
+  // E14 (Lese-Engine, 18.11.2026): acPv*-Adressen, acPvSource2 und pvCoupling beschreiben das VICTRON-System
+  // (GX-Registerblöcke 808–816, „PV-Anbindung am Victron-System“). Sie gelten nur für das Victron-Datenmodell:
+  // Profil victron oder ein MQTT-Transport (Venus/DVhub-Schema mit denselben Punktnamen; die Adresse adressiert dort
+  // nichts). Bei jedem anderen Modbus-Profil hätte die Zwangsadresse Register 808 am fremden Gerät gelesen, und
+  // pvCoupling „Nur AC“ schaltete dessen PV-Register ab (Fronius/Sungrow/Deye: PV = 0).
+  const victronPointModel = (next.manufacturer || 'victron') === 'victron' || next.victron?.transport === 'mqtt';
+  if (victronPointModel) applyVictronPointModel(next);
+
+  // Akku-Ausbaustufen (Christin 2026-08-07): die heute gültige Stufe IST die
+  // aktuelle Kapazität. Damit lesen EOS-Sync, Optimizer, Freeze-Watchdog und
+  // Leitstand automatisch den richtigen Wert — es gibt weiterhin genau ein
+  // Feld, das sie abfragen. Die persistierte Config bleibt unangetastet; nur
+  // die EFFEKTIVE bekommt den abgeleiteten Wert (applyVictronDefaults läuft auf
+  // einem clone()). Leere Liste ⇒ der manuelle Wert bleibt stehen.
+  applyBatteryStages(next);
+  return next;
+}
+
+function applyVictronPointModel(next) {
   // Issue #5: AC-PV-Register-Basisadresse nach Verdrahtungsposition (GX unit-id 100).
   // on-output 808-810 (Default) / on-grid(input) 811-813 / on-genset 814-816.
   // Deterministisch aus victron.acPvSource abgeleitet, damit ein Kunde den
@@ -5626,13 +6275,9 @@ function applyVictronDefaults(config) {
   if (coupling === 'ac' && next.points) {
     if (next.points.pvPowerW) next.points.pvPowerW.enabled = false;
   }
+}
 
-  // Akku-Ausbaustufen (Christin 2026-08-07): die heute gültige Stufe IST die
-  // aktuelle Kapazität. Damit lesen EOS-Sync, Optimizer, Freeze-Watchdog und
-  // Leitstand automatisch den richtigen Wert — es gibt weiterhin genau ein
-  // Feld, das sie abfragen. Die persistierte Config bleibt unangetastet; nur
-  // die EFFEKTIVE bekommt den abgeleiteten Wert (applyVictronDefaults läuft auf
-  // einem clone()). Leere Liste ⇒ der manuelle Wert bleibt stehen.
+function applyBatteryStages(next) {
   if (isPlainObject(next.optimizer) && Array.isArray(next.optimizer.batteryStages)
       && next.optimizer.batteryStages.length) {
     const derived = resolveCurrentBatteryCapacityWh(
@@ -5641,8 +6286,6 @@ function applyVictronDefaults(config) {
     );
     if (Number.isFinite(derived) && derived > 0) next.optimizer.batteryCapacityWh = derived;
   }
-
-  return next;
 }
 
 function coerceBoolean(value) {
@@ -5869,6 +6512,17 @@ function sanitizeUserEnergyPricingWindows(value, warnings) {
   return out;
 }
 
+// Grundgebühr je Monat (brutto €): leer/ungültig/negativ = null (unbekannt).
+function sanitizeBaseFeeEurMonth(value, path, warnings) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    warnings.push(`${path}: invalid number, field was reset`);
+    return null;
+  }
+  return n;
+}
+
 function sanitizeUserEnergyPricingPeriods(value, warnings) {
   if (!Array.isArray(value)) return [];
 
@@ -5933,6 +6587,10 @@ function sanitizeUserEnergyPricingPeriods(value, warnings) {
         }
       }
 
+      if (entry.baseFeeEurMonth != null && entry.baseFeeEurMonth !== '') {
+        const fee = sanitizeBaseFeeEurMonth(entry.baseFeeEurMonth, `userEnergyPricing.periods.${next.id}.baseFeeEurMonth`, warnings);
+        if (fee != null) next.baseFeeEurMonth = fee;
+      }
       if (entry.usesParagraph14aModule3 != null) next.usesParagraph14aModule3 = coerceBoolean(entry.usesParagraph14aModule3);
       if (entry.module3Windows != null) next.module3Windows = sanitizeUserEnergyPricingWindows(entry.module3Windows, warnings);
       if (entry.costs != null) next.costs = sanitizePricingCosts(
@@ -6057,6 +6715,31 @@ function sanitizeUserEnergyPricing(value, warnings) {
       warnings.push('userEnergyPricing.fixedGrossImportCtKwh: invalid number, field was reset');
       delete next.fixedGrossImportCtKwh;
     }
+  }
+  // Vergleichs-Festpreis für die Historie (1.0.11): leer = automatisch.
+  if (next.comparisonFixedCtKwh == null || next.comparisonFixedCtKwh === '') {
+    next.comparisonFixedCtKwh = null;
+  } else {
+    const cmp = Number(next.comparisonFixedCtKwh);
+    if (!Number.isFinite(cmp) || cmp < 0) {
+      warnings.push('userEnergyPricing.comparisonFixedCtKwh: invalid number, field was reset');
+      next.comparisonFixedCtKwh = null;
+    } else {
+      next.comparisonFixedCtKwh = cmp;
+    }
+  }
+  // Standard-Tarif gilt ab (T1, Christin 23.11.2026): leer = null.
+  if (next.validFrom == null || next.validFrom === '') {
+    next.validFrom = null;
+  } else if (!isIsoDateOnly(String(next.validFrom))) {
+    warnings.push('userEnergyPricing.validFrom: must use YYYY-MM-DD, field was reset');
+    next.validFrom = null;
+  } else {
+    next.validFrom = String(next.validFrom);
+  }
+  // Grundgebühren (T5): Zahl ≥ 0 oder null.
+  for (const key of ['baseFeeEurMonth', 'comparisonFixedBaseFeeEurMonth']) {
+    next[key] = sanitizeBaseFeeEurMonth(next[key], `userEnergyPricing.${key}`, warnings);
   }
   if (next.usesParagraph14aModule3 != null) next.usesParagraph14aModule3 = coerceBoolean(next.usesParagraph14aModule3);
   next.periods = sanitizeUserEnergyPricingPeriods(next.periods, warnings);
@@ -6235,6 +6918,18 @@ function migrateLegacyPriceApiUrl(raw) {
   }
 }
 
+// Anzulegende Werte (19.11.2026): Ohne eigene Wahl gilt 'dvhub'. Wer seine
+// Börsenpreise bewusst „Öffentlich (ohne dvhub.online)“ holt, soll nach dem
+// Update nicht plötzlich dvhub.online fragen — er bekommt 'public' (sichtbar in
+// den Einstellungen, gespeichert beim nächsten Speichern). Eine eigene Wahl
+// bleibt unberührt; andere Configs bekommen keinen neuen Schlüssel.
+function migrateApplicableValueSource(raw) {
+  if (raw?.epex?.priceSource !== 'public') return;
+  if (raw.referenceData != null && !isPlainObject(raw.referenceData)) return;
+  if (raw.referenceData?.applicableValueSource != null && raw.referenceData.applicableValueSource !== '') return;
+  raw.referenceData = { ...(raw.referenceData || {}), applicableValueSource: 'public' };
+}
+
 // E-Auto-Wochenplan (ev-departure.js migrateWeeklyConfig): seit T-0427 ist die
 // Zeile der Tag der ABFAHRT (evWeeklyDepartures). Ein alter Plan (evWeeklyPlan,
 // Zeile = Tag der Ankunft; auch noch mit Ziel targetValue in der Einheit von
@@ -6267,8 +6962,57 @@ function migrateEosRemoteMode(raw, warnings) {
   const proxy = raw?.optimizer?.eosProxy;
   if (!isPlainObject(proxy) || !('mode' in proxy)) return;
   if (proxy.mode === 'remote') warnings.push(EOS_REMOTE_MODE_MIGRATION_WARNING);
-  // Jeder andere Wert als 'local' ist ebenso ungültig (früher: Feldprüfung).
-  proxy.mode = 'local';
+  // Gültig: 'local' (Python-EOS + Rust-Wheel, Standard) und 'local-native'
+  // (reiner Rust-Dienst dvhub-optimize, 1.0.11, PLAN rust-1.1 §6.2 E2). Alles
+  // andere — auch das alte 'remote' — fällt auf 'local' zurück.
+  if (proxy.mode !== 'local' && proxy.mode !== 'local-native') proxy.mode = 'local';
+}
+
+// M11 (Feld 16.11.): forecast.pv.totalKwp blieb beim Speichern der detaillierten Strings auf dem alten Wert stehen
+// (Lizenz/Portal zeigten „12,3 kWp" statt 24,2 = Summe zweier Strings 12,32 + 11,88). Die Prognose rechnet in der
+// Detail-Ansicht schon mit den einzelnen Strings; nur totalKwp (von Lizenz/Portal und der einfachen/Standard-
+// Prognose gelesen) hing nach. Sind Strings konfiguriert, ist ihre kWp-Summe die maßgebliche Anlagengröße → totalKwp
+// daraus ableiten (bei LADEN = Migration bestehender Boxen UND bei SPEICHERN = synchron halten), wenn sie abweicht.
+// Nur der gemeldete kWp-Wert wird korrigiert; Tier-/Limit-Logik bleibt unberührt.
+function migratePvTotalKwp(raw) {
+  const pv = raw?.forecast?.pv;
+  if (!isPlainObject(pv) || !Array.isArray(pv.strings) || pv.strings.length === 0) return;
+  const sum = pv.strings.reduce((a, s) => a + (Number(s?.kwp) > 0 ? Number(s.kwp) : 0), 0);
+  if (sum > 0 && Math.abs(sum - (Number(pv.totalKwp) || 0)) > 1e-6) pv.totalKwp = Math.round(sum * 100) / 100;
+}
+
+// E1 (S1): `manufacturer` wird NICHT gegen die feste Optionsliste geprüft. Früher setzte der select-Zweig jede
+// unbekannte ID still auf victron zurück — die Victron-Schreibkarte zielte dann auf das fremde Gerät, und die
+// Config galt als gültig. Jetzt bleibt die ID stehen; ob es das Profil gibt, entscheidet loadConfigFile am
+// hersteller/-Ordner (fehlt es: valid:false, writeSafety gesperrt). Nur „leer" heißt Standard victron.
+function sanitizeManufacturerId(raw, value, warnings) {
+  const id = String(value ?? '').trim().toLowerCase();
+  if (!id) {
+    warnings.push('manufacturer: invalid option, field was reset to default');
+    deletePath(raw, 'manufacturer');
+    return;
+  }
+  if (!isManufacturerId(id)) {
+    warnings.push('manufacturer: not a valid profile id (a-z, 0-9, - and _) — no manufacturer profile is loaded, device writes stay blocked');
+  }
+  setPath(raw, 'manufacturer', id);
+}
+
+// Christin 19.11.2026 („nicht eingerichtete PV-Dienste nicht ins Ensemble“): Der Schalter „Solcast aktiv“
+// (forecast.solcast.enabled) wirkt jetzt — die Prognose liest ihn (services/forecast/pv-provider-setup.js).
+// Bis dahin las ihn nie jemand, und das Integrationen-Fenster schrieb seit 21.05.2026 beim Speichern von
+// Key + Site-ID still `enabled: false` (es hat keinen Schalter). Solche Anlagen liefen trotzdem mit Solcast.
+// Damit sie nach dem Update nicht still ohne Solcast dastehen, einmal auf den bisher WIRKSAMEN Stand heben:
+// Key + Site-ID + false → true. Die Marke enabledHonored sorgt dafür, dass ein danach bewusst gesetztes
+// „aus“ nicht erneut umgestellt wird (sie wandert mit jedem Speichern mit). Ohne Key/Site-ID bleibt der
+// Wert, wie er ist — Solcast ist dann ohnehin nicht eingerichtet.
+function migrateSolcastEnabled(raw) {
+  const sc = raw?.forecast?.solcast;
+  if (!isPlainObject(sc) || sc.enabledHonored === true) return;
+  const hasKey = typeof sc.apiKey === 'string' && sc.apiKey.trim() !== '';
+  const hasSite = typeof sc.siteId === 'string' && sc.siteId.trim() !== '';
+  if (hasKey && hasSite && (sc.enabled === false || sc.enabled === 'false')) sc.enabled = true;
+  sc.enabledHonored = true;
 }
 
 function sanitizeRawConfig(rawInput) {
@@ -6278,7 +7022,10 @@ function sanitizeRawConfig(rawInput) {
   migrateSetpointWatchdog(raw);
   migrateDatenspendeClientType(raw);
   migrateLegacyPriceApiUrl(raw);
+  migrateApplicableValueSource(raw);
   migrateEvWeeklyPlan(raw);
+  migratePvTotalKwp(raw);
+  migrateSolcastEnabled(raw);
   // Sweep package 6: shape-level schema checks run FIRST, on the raw parsed
   // config — before the FIELD_DEFINITIONS coercion pass below, which would
   // otherwise silently string-coerce a wrong-typed scalar (e.g. a numeric
@@ -6321,6 +7068,11 @@ function sanitizeRawConfig(rawInput) {
       } else {
         setPath(raw, field.path, num);
       }
+      continue;
+    }
+
+    if (field.path === 'manufacturer') {
+      sanitizeManufacturerId(raw, currentValue, warnings);
       continue;
     }
 
@@ -6626,14 +7378,65 @@ function computeDynamicGrossImportWithModule3CtKwh(marketCtKwh, components = {},
   return roundCtKwh(base * (1 + (Number(components.vatPct || 0) / 100)) + Number(windowGrossCtKwh || 0));
 }
 
+// ── Standard-Tarif „gilt ab“ (T1, Christin 23.11.2026) ──────────────────────
+// Ein Tarif zählt erst ab dem eingestellten Zeitpunkt. Ist der Standard-Tarif
+// dynamisch oder vom Anbieter und liegt der Tag vor userEnergyPricing.validFrom
+// (und in keinem Zeitraum), gilt der feste Bruttopreis des Standard-Tarifs —
+// nie rückwirkend der dynamische Tarif. Ohne Datum gilt er wie bisher immer.
+// Modul-3-Fenster gelten davor nicht: beim dynamischen Tarif ist ihr Preis nur
+// das Netzentgelt, im Festpreis-Modus wäre er der ganze Endpreis.
+function baseTariffStartsAfter(pricing, localDate) {
+  const mode = pricing?.mode;
+  if (mode !== 'dynamic' && mode !== 'provider') return false;
+  const from = pricing?.validFrom;
+  return isIsoDateOnly(from) && Boolean(localDate) && localDate < from;
+}
+
+function buildBeforeValidFromPricing(pricing) {
+  return { ...buildEffectiveUserEnergyPricing(pricing), mode: 'fixed', usesParagraph14aModule3: false, module3Windows: {} };
+}
+
 export function resolveActiveUserEnergyPricingForTimestamp(ts, pricing = {}, options = {}) {
   const timeZone = options.timeZone || BERLIN_TIME_ZONE;
   const localDate = formatLocalDate(ts, timeZone);
   if (!localDate) return null;
   const periods = Array.isArray(pricing?.periods) ? pricing.periods : [];
   const match = periods.find((period) => period?.startDate <= localDate && period?.endDate >= localDate);
-  if (!match) return null;
+  if (!match) return baseTariffStartsAfter(pricing, localDate) ? buildBeforeValidFromPricing(pricing) : null;
   return deepMerge(buildEffectiveUserEnergyPricing(pricing), clone(match));
+}
+
+function addDaysToIsoDate(date, days) {
+  const [y, m, d] = String(date).split('-').map(Number);
+  const next = new Date(Date.UTC(y, m - 1, d + days));
+  return next.toISOString().slice(0, 10);
+}
+
+// Ab wann der Standard-Tarif gilt — eingetragen oder aus den Daten abgeleitet
+// (Übergang für Konfigurationen ohne Datum, T1). Abgeleitet wird nur aus
+// eindeutigen Hinweisen; der spätere gewinnt:
+//   fixed_period   Tag nach dem Ende des letzten vergangenen Festpreis-Zeitraums
+//                  (der Vertrag vor dem Wechsel),
+//   provider_data  erster gespeicherter Anbieterpreis (Standard-Tarif „vom
+//                  Stromanbieter“: davor gäbe es nur Schätzungen).
+// Ohne Hinweis: { date: null, source: 'none' } — dann gilt der Tarif wie bisher
+// für die ganze Historie, und die Oberfläche bittet um ein Datum.
+export function resolveBaseTariffValidFrom(pricing = {}, { today = null, firstProviderPriceDate = null } = {}) {
+  const mode = pricing?.mode;
+  if (mode !== 'dynamic' && mode !== 'provider') return { date: null, source: null };
+  if (isIsoDateOnly(pricing?.validFrom)) return { date: pricing.validFrom, source: 'configured' };
+  let best = null;
+  const periods = Array.isArray(pricing?.periods) ? pricing.periods : [];
+  for (const period of periods) {
+    if (period?.mode !== 'fixed' || !isIsoDateOnly(period?.endDate)) continue;
+    if (today && !(period.endDate < today)) continue;
+    const next = addDaysToIsoDate(period.endDate, 1);
+    if (!best || next > best.date) best = { date: next, source: 'fixed_period' };
+  }
+  if (mode === 'provider' && isIsoDateOnly(firstProviderPriceDate)) {
+    if (!best || firstProviderPriceDate > best.date) best = { date: firstProviderPriceDate, source: 'provider_data' };
+  }
+  return best || { date: null, source: 'none' };
 }
 
 // Zwischenspeicher für den Slot-Preis (2026-10-03): die Historie fragt den
@@ -6646,27 +7449,62 @@ const SLOT_PRICING_CACHE = new WeakMap(); // pricing → { base, byPeriod: Map, 
 function slotPricingCache(pricing) {
   let entry = SLOT_PRICING_CACHE.get(pricing);
   if (!entry) {
-    entry = { base: null, byPeriod: new Map(), windows: new WeakMap() };
+    entry = { base: null, before: null, byPeriod: new Map(), windows: new WeakMap() };
     SLOT_PRICING_CACHE.set(pricing, entry);
   }
   return entry;
 }
 
-function cachedEffectivePricingForTimestamp(ts, pricing, timeZone) {
+// Tarif eines lokalen Tages: wirksame Preis-Einstellungen plus woher sie
+// stammen (Zeitraum, Standard-Tarif, Standard-Tarif vor „gilt ab“).
+function cachedTariffContextForTimestamp(ts, pricing, timeZone) {
   const cache = slotPricingCache(pricing);
   const localDate = formatLocalDate(ts, timeZone);
   const periods = Array.isArray(pricing?.periods) ? pricing.periods : [];
   const match = localDate ? periods.find((period) => period?.startDate <= localDate && period?.endDate >= localDate) : null;
   if (!match) {
-    cache.base ||= buildEffectiveUserEnergyPricing(pricing);
+    if (baseTariffStartsAfter(pricing, localDate)) {
+      cache.before ||= {
+        effective: buildBeforeValidFromPricing(pricing),
+        tariffKey: 'base:before',
+        tariffLabel: 'Standard-Tarif vor „gilt ab“',
+        baseFeeEurMonth: null,
+        beforeValidFrom: true
+      };
+      return cache.before;
+    }
+    cache.base ||= {
+      effective: buildEffectiveUserEnergyPricing(pricing),
+      tariffKey: 'base',
+      tariffLabel: 'Standard-Tarif',
+      baseFeeEurMonth: finiteFeeOrNull(pricing?.baseFeeEurMonth),
+      beforeValidFrom: false
+    };
     return cache.base;
   }
-  let merged = cache.byPeriod.get(match);
-  if (!merged) {
-    merged = deepMerge(buildEffectiveUserEnergyPricing(pricing), clone(match));
-    cache.byPeriod.set(match, merged);
+  let ctx = cache.byPeriod.get(match);
+  if (!ctx) {
+    ctx = {
+      effective: deepMerge(buildEffectiveUserEnergyPricing(pricing), clone(match)),
+      tariffKey: `period:${match.id ?? ''}`,
+      tariffLabel: match.label ? String(match.label) : `Zeitraum ${match.startDate}–${match.endDate}`,
+      // Ein Zeitraum ist ein eigener Vertrag: die Grundgebühr wird nicht geerbt.
+      baseFeeEurMonth: finiteFeeOrNull(match.baseFeeEurMonth),
+      beforeValidFrom: false
+    };
+    cache.byPeriod.set(match, ctx);
   }
-  return merged;
+  return ctx;
+}
+
+function cachedEffectivePricingForTimestamp(ts, pricing, timeZone) {
+  return cachedTariffContextForTimestamp(ts, pricing, timeZone).effective;
+}
+
+function finiteFeeOrNull(value) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 function cachedModule3Windows(pricing, effectivePricing) {
@@ -6677,6 +7515,114 @@ function cachedModule3Windows(pricing, effectivePricing) {
     cache.windows.set(effectivePricing, windows);
   }
   return windows;
+}
+
+// Preislogik, die für den Slot gilt ('fixed' | 'dynamic' | 'provider') — aus
+// dem passenden Zeitraum, sonst aus dem Standard-Tarif. Für den Festpreis-
+// Vergleich der Historie: verglichen werden nur Slots mit variablem Tarif.
+export function resolveUserImportTariffModeForTimestamp(ts, pricing = {}, options = {}) {
+  const timeZone = options.timeZone || BERLIN_TIME_ZONE;
+  const effectivePricing = pricing && typeof pricing === 'object'
+    ? cachedEffectivePricingForTimestamp(ts, pricing, timeZone)
+    : buildEffectiveUserEnergyPricing(pricing);
+  const mode = effectivePricing?.mode;
+  return mode === 'dynamic' || mode === 'provider' ? mode : 'fixed';
+}
+
+function finiteCtOrNull(value) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Vergleichs-Festpreis (brutto ct/kWh) für einen Tag mit variablem Tarif
+// (Christin 13.11.2026, Ziel 1.0.11): „was hätte ein Festpreis gebracht?“
+//   1. userEnergyPricing.comparisonFixedCtKwh, wenn eingetragen,
+//   2. sonst der Festpreis des letzten Festpreis-Zeitraums, der VOR diesem Tag
+//      endet (der Vertrag vor dem Wechsel),
+//   3. sonst der Festpreis des Standard-Tarifs,
+//   4. sonst keiner (null) — dann zeigt die Historie keinen Vergleich.
+// Zeiträume überlappen nie (sanitizeUserEnergyPricingPeriods), daher ist „vor
+// dem Tag“ für alle Tage eines variablen Zeitraums derselbe Festpreis-Zeitraum.
+export function resolveComparisonFixedPriceForDate(localDate, pricing = {}) {
+  const configured = finiteCtOrNull(pricing?.comparisonFixedCtKwh);
+  if (configured != null && configured >= 0) {
+    return { ctKwh: roundCtKwh(configured), source: 'configured', periodId: null, label: null };
+  }
+  const periods = Array.isArray(pricing?.periods) ? pricing.periods : [];
+  let best = null;
+  for (const period of periods) {
+    if (period?.mode !== 'fixed' || !(String(period.endDate || '') < String(localDate || ''))) continue;
+    const ct = finiteCtOrNull(period.fixedGrossImportCtKwh);
+    if (ct == null) continue;
+    if (!best || String(period.endDate) > String(best.endDate)) best = { ...period, ct };
+  }
+  if (best) {
+    return { ctKwh: roundCtKwh(best.ct), source: 'period', periodId: best.id == null ? null : String(best.id), label: best.label ? String(best.label) : null };
+  }
+  const base = finiteCtOrNull(pricing?.fixedGrossImportCtKwh);
+  if (base != null) return { ctKwh: roundCtKwh(base), source: 'base', periodId: null, label: null };
+  return null;
+}
+
+// Grundgebühr des Vergleichs-Festpreises (T5): eigenes Feld, sonst die des
+// Festpreis-Zeitraums, aus dem der Vergleichspreis stammt, sonst keine (null).
+export function resolveComparisonBaseFeeForDate(localDate, pricing = {}) {
+  const configured = finiteFeeOrNull(pricing?.comparisonFixedBaseFeeEurMonth);
+  if (configured != null) return { eurMonth: configured, source: 'configured' };
+  const cmp = resolveComparisonFixedPriceForDate(localDate, pricing);
+  if (cmp?.source !== 'period') return null;
+  const period = (Array.isArray(pricing?.periods) ? pricing.periods : [])
+    .find((entry) => String(entry?.id) === cmp.periodId);
+  const fee = finiteFeeOrNull(period?.baseFeeEurMonth);
+  return fee == null ? null : { eurMonth: fee, source: 'period' };
+}
+
+// Beschreibung des Bezugstarifs einer Viertelstunde für die Auswertung des
+// dynamischen Tarifs in der Historie (T2/T10, Christin 23.11.2026): welcher
+// Tarif (Zeitraum oder Standard-Tarif), welches §14a-Modul-3-Fenster, welche
+// MwSt (für den Netto-Faktor der Formel) und welche Grundgebühr.
+export function describeUserImportTariffForSlot(ts, pricing = {}, options = {}) {
+  const timeZone = options.timeZone || BERLIN_TIME_ZONE;
+  const safePricing = pricing && typeof pricing === 'object' ? pricing : {};
+  const ctx = cachedTariffContextForTimestamp(ts, safePricing, timeZone);
+  const effective = ctx.effective;
+  const mode = effective?.mode === 'dynamic' || effective?.mode === 'provider' ? effective.mode : 'fixed';
+  const minuteOfDay = localMinutesOfDay(ts, timeZone);
+  const window = cachedModule3Windows(safePricing, effective)
+    .find((entry) => slotMinuteMatchesWindow(minuteOfDay, entry)) || null;
+  const vat = Number(effective?.dynamicComponents?.vatPct);
+  const vatPct = effective?.dynamicComponents?.vatPct != null && effective.dynamicComponents.vatPct !== '' && Number.isFinite(vat) ? vat : 19;
+  // T11 (Christin 23.11.2026): Netzentgelt-Abweichung des §14a-Modul-3-Fensters
+  // gegen das Standard-Netzentgelt (beide brutto): δ = Fensterpreis −
+  // Netzentgelt × (1 + MwSt). Der Festpreis-Vergleich rechnet F + δ, „ohne
+  // §14a“ p − δ. Bekannt nur, wo der Preisrechner das Netzentgelt selbst
+  // einsetzt (dynamisch, Anbieter „nur Energiepreis“) — beim Anbieter-Endpreis
+  // steckt Modul 3 im Preis und das Netzentgelt der Einstellungen ist oft nur
+  // der Standardwert (Codex 3cbbdef3). MwSt wie im Preisrechner: leer = 0 %.
+  const usesGridCharge = mode === 'dynamic'
+    || (mode === 'provider' && effective?.provider?.priceBasis === 'net_energy');
+  const grid = effective?.dynamicComponents?.gridChargesCtKwh;
+  const deltaVat = Number(effective?.dynamicComponents?.vatPct || 0);
+  // δ nach der dynamischen Formel — gilt auch beim Anbieter-Endpreis, wenn
+  // DVhub mangels Preis und Schätzmodell selbst so rechnet (Codex 90e9b9c4).
+  const module3FormulaDeltaCtKwh = window && grid != null && grid !== '' && Number.isFinite(Number(grid)) && Number.isFinite(deltaVat)
+    ? Math.round((window.priceCtKwh - Number(grid) * (1 + deltaVat / 100)) * 10000) / 10000
+    : null;
+  const module3DeltaCtKwh = usesGridCharge ? module3FormulaDeltaCtKwh : null;
+  return {
+    mode,
+    tariffKey: ctx.tariffKey,
+    tariffLabel: ctx.tariffLabel,
+    vatPct,
+    baseFeeEurMonth: ctx.baseFeeEurMonth,
+    windowId: window ? window.id : null,
+    windowLabel: window ? window.label : null,
+    module3Active: Boolean(window),
+    module3DeltaCtKwh,
+    module3FormulaDeltaCtKwh,
+    beforeValidFrom: ctx.beforeValidFrom
+  };
 }
 
 export function resolveUserImportPriceCtKwhForSlot(row, pricing = {}, options = {}) {
@@ -6798,16 +7744,37 @@ export function loadConfigFile(configPath) {
   scrubStoredPlaceholders(parsed);
   const normalized = normalizeConfigInput(parsed);
   const manufacturer = normalized.persistedConfig.manufacturer || 'victron';
-  const manufacturerProfilePath = resolveManufacturerProfilePath(configPath, manufacturer);
+  // Keine gültige ID (Pfadtrenner o. Ä.): kein Dateizugriff außerhalb von hersteller/, Zustand „Profil fehlt".
+  const manufacturerProfilePath = isManufacturerId(manufacturer)
+    ? resolveManufacturerProfilePath(configPath, manufacturer) : null;
   let effectiveConfig = normalized.effectiveConfig;
 
   try {
+    if (!manufacturerProfilePath) throw new Error('manufacturer is not a valid profile id');
     manufacturerProfile = loadManufacturerProfile(manufacturerProfilePath);
     effectiveConfig = applyManufacturerProfile(normalized.persistedConfig, manufacturerProfile);
   } catch (error) {
     manufacturerProfileError = error.message;
     valid = false;
     if (!parseError) parseError = `manufacturer profile error: ${error.message}`;
+    // R-T2.1: für einen anderen Hersteller bleibt die Victron-Werkskarte nicht stehen (Lese- und Schreibblöcke
+    // leer). Victron selbst behält sie: Lesen geht weiter, Schreiben sperrt writeSafety unten.
+    if (manufacturer !== 'victron') effectiveConfig = withoutVictronRegisterMap(effectiveConfig);
+  }
+
+  // C2 (Christin 16.11.2026): Bei ungültiger Konfiguration (kaputte config.json ODER kaputtes/fehlendes
+  // Herstellerprofil) trägt die WIRKSAME Config Default-Register (z. B. Victron 2716) — ein Schreibpfad würde dann
+  // an ein möglicherweise FREMDES Gerät schreiben. Deshalb die Gültigkeit AN DER wirksamen Config markieren, damit
+  // der zentrale Schreib-Chokepoint (schedule-eval) jeden Hardware-Write hart sperrt und laut meldet. Nur bei
+  // valid:false gesetzt — eine gültige Config bleibt unverändert (rückwärtskompatibel, kein Feld).
+  if (valid !== true && effectiveConfig && typeof effectiveConfig === 'object') {
+    effectiveConfig.writeSafety = {
+      ok: false,
+      reason: broken ? 'config_broken'
+        : manufacturerProfileError ? 'manufacturer_profile_error'
+          : 'config_invalid',
+      manufacturer
+    };
   }
 
   return {

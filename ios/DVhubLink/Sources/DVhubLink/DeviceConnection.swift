@@ -62,6 +62,8 @@ public actor DeviceConnection {
     public var perms: [String] { (welcome?["perms"]?.array ?? []).compactMap { $0.string } }
     /// Rechte laut Begrüßung; nil, wenn die Box das Feld nicht mitschickt.
     public var welcomePerms: [String]? { welcome?["perms"]?.array?.compactMap { $0.string } }
+    /// Anlagenname laut Begrüßung.
+    public var welcomeBoxName: String? { welcome?["box"]?["name"]?.string }
 
     init(channel: RelayChannel, route: LinkRoute, credentials: LinkCredentials, signer: LinkSigner) throws {
         self.channel = channel

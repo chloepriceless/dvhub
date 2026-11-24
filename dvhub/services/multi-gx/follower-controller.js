@@ -37,7 +37,8 @@
  * aufnehmen kann (voll oder an der Ladegrenze).
  *
  * Vorzeichen wie in DVhub: + = Laden/Bezug, − = Entladen/Einspeisen. Ganze Watt,
- * kein -0. `nowMs` ist die einzige Zeitquelle.
+ * kein -0. `nowMs` ist die einzige Zeitquelle — eine monotone Uhr (A23 b, Christin 23.11.2026: der Dienst gibt
+ * monoNow, damit ein Sprung der Systemzeit dt nicht aufbläht und die Rampe nicht übersprungen wird).
  *
  * @module services/multi-gx/follower-controller
  */

@@ -1,0 +1,128 @@
+{
+  "label": "Huawei SUN2000 + LUNA2000 (direkt) — nur Anzeige",
+  "beta": true,
+  "readOnly": true,
+  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz (Huawei-Smart-Meter am Wechselrichter), PV, Akku-Leistung und SoC direkt am SUN2000 (Modbus TCP, Port 502, Unit-ID 1) und rechnet die Hauslast aus der Energiebilanz. DVhub schreibt nichts an den Wechselrichter. Vorzeichen von Netz und Akku stammen aus Community-Quellen und sind am Gerät noch nicht bestätigt. Anleitung: docs/hersteller/huawei-sun2000.md.",
+  "_doc": [
+    "Huawei SUN2000 direkt am Wechselrichter (Residential L1/M1, C&I MB0/MAP0) mit LUNA2000-S0/-S1 und Huawei-Smart-Meter",
+    "(DTSU666-H/DDSU666-H). NICHT für SmartLogger3000 (eigene Registerwelt) und nicht über EMMA (eigene Karte).",
+    "NUR LESEN: readOnly erzwingt leere Schreibziele und schaltet die DV-Abregelung ab, auch mit dvControl.enabled in der",
+    "config.json. Beta: erscheint nur im Bleeding-Edge-Kanal, weil es an keinem Gerät getestet ist.",
+    "",
+    "Quellen (abgerufen 18.11.2026): [SPEC] Huawei „Solar Inverter Modbus Interface Definitions“ über die daraus",
+    "abgeleitete Registerkarte wlcrs/huawei-solar-lib · [COMM] evcc templates/definition/meter/huawei-sun2000-hybrid.yaml",
+    "(liest 37113 und 37765 je int32 mit scale −1, 32064 int32, 37760 uint16 × 0,1, alles holding) · [DECOMP]",
+    "Plexlog-Treiber (nur gelesen, invertiert 37113 und 37765). Zusammenfassung:",
+    ".planning/docs/research/2026-11-15-huawei-modbus-control-spec.md §2–3 und 2026-11-18-hersteller-lesend-luecken.md §3.6.",
+    "",
+    "Transport: Modbus TCP 502, Unit-ID 1 (SDongle; manche Firmware am internen WLAN/FE-Port: 0), FC 03, High-Wort",
+    "zuerst. Modbus TCP muss am Gerät freigegeben sein (Installateur-Zugang). Nur EIN Modbus-Client: eine zweite",
+    "Verbindung (Home Assistant, evcc, zweites DVhub) kappt die Sitzung. Zeitlimit 5 s wie evcc.",
+    "",
+    "„Kein Wert“: Huawei meldet ihn mit dem Höchstwert des Typs — I32 0x7FFFFFFF, U16 0xFFFF, U32 0xFFFFFFFF",
+    "(wlcrs register_definitions/number.py); evcc int32nan nimmt zusätzlich 0x80000000. notAvailableRaw macht daraus",
+    "einen leeren Wert (Zähler: Lesefehler) statt −2 147 483 647 W oder 6553,5 %.",
+    "",
+    "Bewusst NICHT gelesen bzw. nicht abbildbar:",
+    "- Pause nach dem Verbindungsaufbau: Plexlog wartet 500 ms, evcc 1 s (connectdelay), bevor es liest. Seit E7",
+    "  wartet DVhub 1 s (victron.requestPacing.connectDelayMs).",
+    "- Phasen 37132/37134/37136: nur bei dreiphasigem Zähler belegt und je eine Anfrage mehr am Ein-Client-Gerät;",
+    "  bleiben leer, bis der Gerätetest die Grundwerte bestätigt (ließen sich als meter.phases nachtragen).",
+    "- Hauslast: kein Lastregister in der Spec → Energiebilanz (Last = PV + Bezug − Einspeisung − Akku).",
+    "- Gerätekennung 30000 (Modellname): DVhub prüft nicht, ob ein SUN2000 antwortet (E10)."
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 502,
+    "unitId": 1,
+    "timeoutMs": 5000,
+    "requestPacing": {
+      "_comment": "E7: Pause nach jedem (Neu-)Aufbau der Verbindung vor der ersten Lesung. evcc huawei-sun2000-hybrid.yaml wartet 1 s (connectdelay) [COMM], Plexlog 500 ms (DelayAfterConnect) [DECOMP]; DVhub nimmt den längeren Wert. Ein Abstand zwischen Lesungen ist nicht belegt (Plexlogs ~500 ms gelten Writes).",
+      "connectDelayMs": 1000
+    }
+  },
+
+  "meter": {
+    "_comment": "Netz gesamt, Register 37113 „Active power“ des Huawei-Smart-Meters (I32, 1 W) [SPEC]. UNSICHER (am Gerät prüfen): Vorzeichen. Annahme Rohwert + = Einspeisung — evcc liest 37113 mit scale −1 bei evcc-Konvention + = Bezug [COMM], Plexlog invertiert ebenso [DECOMP]; die Spec nennt die Richtung nur „je Konvention“ [GERÄT]. DVhub erwartet + = Bezug, daher sign −1. Zeigt DVhub bei Netzbezug Einspeisung, gehört sign weg. Ohne Smart-Meter (37100 = 0) ist der Wert 0 W.",
+    "layout": "point",
+    "fc": 3,
+    "address": 37113,
+    "quantity": 2,
+    "readType": "int32",
+    "sign": -1,
+    "notAvailableRaw": [2147483647, 2147483648]
+  },
+
+  "points": {
+    "soc": {
+      "_comment": "SoC aller LUNA2000-Module, Register 37760 (U16, 0,1 %) [SPEC]; evcc ebenso (scale 0.1) [COMM].",
+      "enabled": true,
+      "fc": 3,
+      "address": 37760,
+      "quantity": 1,
+      "signed": false,
+      "scale": 0.1,
+      "offset": 0,
+      "notAvailableRaw": [65535]
+    },
+    "batteryPowerW": {
+      "_comment": "Akku Lade-/Entladeleistung gesamt, Register 37765 (I32, 1 W) [SPEC]. UNSICHER (am Gerät prüfen): Vorzeichen. Annahme Rohwert + = Laden — evcc liest 37765 mit scale −1 bei evcc-Konvention + = Entladen [COMM], Plexlog invertiert auf + = Entladen [DECOMP]. Das ist bereits DVhubs Konvention (+ = Laden), daher kein sign. Zeigt DVhub beim Laden einen negativen Wert, gehört sign −1 dazu.",
+      "enabled": true,
+      "fc": 3,
+      "address": 37765,
+      "quantity": 2,
+      "readType": "int32",
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [2147483647, 2147483648]
+    },
+    "pvPowerW": {
+      "_comment": "PV-Eingangsleistung gesamt (DC), Register 32064 „Input power“ (I32, 1 W) [SPEC]; evcc liest es als PV [COMM].",
+      "enabled": true,
+      "fc": 3,
+      "address": 32064,
+      "quantity": 2,
+      "readType": "int32",
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [2147483647, 2147483648]
+    },
+    "selfConsumptionW": {
+      "_comment": "Kein Lastregister in der Spec. Hauslast = PV + Bezug − Einspeisung − Akku (+ = Laden), jeden Takt neu (E6).",
+      "enabled": false,
+      "derive": "energy_balance"
+    },
+    "deviceMaxChargeW": {
+      "_comment": "Eingestellte maximale Ladeleistung, Register 47075 (U32, 1 W) [SPEC]; Plexlog liest es nur [DECOMP]. Nur Anzeige. Ohne LUNA2000 liefert das Gerät hier vermutlich einen Fehler.",
+      "enabled": true,
+      "fc": 3,
+      "address": 47075,
+      "quantity": 2,
+      "readType": "uint32",
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [4294967295],
+      "pollEveryMs": 60000
+    },
+    "deviceMaxDischargeW": {
+      "_comment": "Eingestellte maximale Entladeleistung, Register 47077 (U32, 1 W) [SPEC]; Plexlog liest es nur [DECOMP]. Nur Anzeige.",
+      "enabled": true,
+      "fc": 3,
+      "address": 47077,
+      "quantity": 2,
+      "readType": "uint32",
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [4294967295],
+      "pollEveryMs": 60000
+    }
+  },
+
+  "controlWrite": {},
+
+  "dvControl": {
+    "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
+    "enabled": false
+  }
+}

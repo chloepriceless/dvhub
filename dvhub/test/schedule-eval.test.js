@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { createScheduleEvaluator } from '../schedule-eval.js';
+import { createGridShareTracker } from '../services/optimizer/grid-share.js';
 import { activeWindow } from './helpers/active-window.js';
 
 // makeCtx — a fake ctx matching the real createScheduleEvaluator destructure:
@@ -140,6 +144,53 @@ test('T-0075 2b: stop-SoC rule stays active when SoC is fresh + above threshold 
   assert.equal(findLog(logs, 'schedule_stop_soc_reached').length, 0);
 });
 
+// --- M1-Geist: Zeitplan-SoC-Bedingung gegen den ECHTEN SoC (Sungrow-Fenster) ------
+// Sungrow meldet den SoC fensterrelativ: gemeldet 15 % = real 23,5 % (Fenster 10–100).
+// Die Stop-SoC-Bedingung muss gegen den ECHTEN SoC prüfen (planningSocPct), sonst stoppt
+// „bis SoC 20" viel zu früh. Für Victron/andere ist echt = gemeldet → kein Verhaltenswechsel.
+
+test('Sungrow Stop-SoC prüft den ECHTEN SoC — gemeldet 15 % (= real 23,5 %) bleibt über Schwelle 20', async () => {
+  const { ctx, state, logs } = makeCtx({
+    mutate: ({ state, cfg }) => {
+      cfg.manufacturer = 'sungrow';
+      state.victron.device = { vendor: 'sungrow', minSocPctDevice: 10, maxSocPctDevice: 100 };
+      state.schedule.rules = [{
+        id: 'stopsoc-sg', enabled: true, target: 'gridSetpointW',
+        ...activeWindow(), value: -8000, source: 'manual', stopSocPct: 20
+      }];
+      state.victron.soc = 15;             // gemeldet; real = 10 + 15·0,9 = 23,5 %
+      state.victron.fieldUpdatedAt = { soc: Date.now() };
+    }
+  });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(state.schedule.rules[0].enabled, true,
+    'echter SoC 23,5 % ≥ 20 → Regel bleibt aktiv (gemeldeter 15 % hätte sie fälschlich abgeschaltet)');
+  assert.equal(findLog(logs, 'schedule_stop_soc_reached').length, 0);
+});
+
+test('Sungrow Stop-SoC schaltet ab, wenn der ECHTE SoC unter die Schwelle fällt — und loggt den echten Wert', async () => {
+  const { ctx, state, logs } = makeCtx({
+    mutate: ({ state, cfg }) => {
+      cfg.manufacturer = 'sungrow';
+      state.victron.device = { vendor: 'sungrow', minSocPctDevice: 10, maxSocPctDevice: 100 };
+      state.schedule.rules = [{
+        id: 'stopsoc-sg', enabled: true, target: 'gridSetpointW',
+        ...activeWindow(), value: -8000, source: 'manual', stopSocPct: 20
+      }];
+      state.victron.soc = 5;              // gemeldet; real = 10 + 5·0,9 = 14,5 % < 20
+      state.victron.fieldUpdatedAt = { soc: Date.now() };
+    }
+  });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(state.schedule.rules[0].enabled, false,
+    'echter SoC 14,5 % < 20 → Regel abgeschaltet');
+  const ev = findLog(logs, 'schedule_stop_soc_reached');
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].payload.reason, 'below_stop_soc');
+  assert.ok(Math.abs(Number(ev[0].payload.soc) - 14.5) < 0.01,
+    'Log zeigt den echten SoC (14,5 %), nicht den gemeldeten 5 %');
+});
+
 // --- T-0118 sell-price floor ---
 
 test('T-0118: forced grid export is suppressed (held) when the spot price is below minSellPriceCtKwh', async () => {
@@ -255,6 +306,56 @@ test('T-0118: an EOS-sourced export is STILL blocked at a negative spot price (n
     'negative-price protection clamps even EOS exports to the npp limit (-40)');
   assert.equal(findLog(logs, 'negative_price_protection_on').length, 1,
     'negative_price_protection_on must fire regardless of source');
+});
+
+// --- M15: manuelle Regeln behalten den Vorrang vor Automatik/EOS --------------
+// Nach einem EOS-Lauf stehen die Plan-Regeln (opt-…) VOR den manuellen im
+// rules-Array (server.js setzt forecast_optimizer zuerst). effectiveTargetValue
+// muss trotzdem die manuelle Regel wählen.
+
+test('M15: manuelle Regel behält Vorrang, obwohl die EOS-Regel VOR ihr im Array steht', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ cfg, state }) => {
+      cfg.optimizer.enabled = true; // EOS-Regeln sind scharf
+      state.schedule.rules = [
+        // Reihenfolge wie nach einem optimizer_run: EOS zuerst …
+        { id: 'opt-eos-1', enabled: true, target: 'gridSetpointW', ...activeWindow(), value: -40, source: 'forecast_optimizer', optimizer: 'eos', autoManaged: true },
+        // … danach die laufende manuelle Regel (Netz −2000 W).
+        { id: 'manual-netz-2000', enabled: true, target: 'gridSetpointW', ...activeWindow(), value: -2000, source: 'manual' },
+      ];
+    }
+  });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  const w = state.schedule.active.gridSetpointW;
+  assert.ok(w, 'ein gridSetpointW-Write muss anliegen');
+  assert.equal(Number(w.value), -2000, 'die manuelle Regel (−2000) überstimmt die EOS-Regel (−40)');
+  assert.match(String(w.source), /manual-netz-2000/, 'Quelle ist die manuelle Regel');
+});
+
+test('M15: ohne manuelle Regel greift die EOS-Regel weiter (keine Regression)', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ cfg, state }) => {
+      cfg.optimizer.enabled = true;
+      state.schedule.rules = [
+        { id: 'opt-eos-1', enabled: true, target: 'gridSetpointW', ...activeWindow(), value: -40, source: 'forecast_optimizer', optimizer: 'eos', autoManaged: true },
+      ];
+    }
+  });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), -40, 'die EOS-Regel wirkt, wenn keine manuelle Regel passt');
+});
+
+test('M15: auch Börsenautomatik verliert gegen eine manuelle Regel', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ state }) => {
+      state.schedule.rules = [
+        { id: 'sma-1', enabled: true, target: 'gridSetpointW', ...activeWindow(), value: -16000, source: 'small_market_automation', autoManaged: true },
+        { id: 'manual-netz-2000', enabled: true, target: 'gridSetpointW', ...activeWindow(), value: -2000, source: 'manual' },
+      ];
+    }
+  });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), -2000, 'die manuelle Regel schlägt die Börsenautomatik');
 });
 
 // --- Abregelungs-Puffer (Christin, 2026-07-29) --------------------------------
@@ -1181,6 +1282,97 @@ test('Akku halten: veraltete Hauslast → 0 (Eigenverbrauch), kein blinder Netzb
   assert.equal(Number(state.schedule.active.gridSetpointW.value), 0);
 });
 
+// --- Netzstrom-Sperre und EOS-„Halten" (Entscheidung Christin 20.11.2026) ---
+// M8 (Feld 16.11.) setzte EOS-„Halten" aus, solange der Netzstrom-Anteil im Akku gesperrt war: Eigenverbrauch statt
+// Halten, Hinweis im Leitstand. Christin 20.11.2026: „Netzstrom zuerst ins Haus, halten darf auch dann aktiv sein und
+// muss nicht ausgesetzt werden, halten macht ja genau das, deckt den Eigenverbrauch aus dem Netz“. Beim Halten kommt
+// die Last aus dem Netz und aus dem Akku fließt nichts ins Netz; die Sperre (nur Akku→Netz) hat nichts zu verhindern.
+// Die Sperre fällt seitdem über die Zählregel „Netzstrom zuerst ins Haus“ (grid-share.js), nicht über ausgesetztes Halten.
+
+test('Netzstrom-Sperre: EOS-Halten läuft trotzdem nach Plan (eos_grid_hold, Live-Last − PV − Puffer)', async () => {
+  const { ctx, state, logs } = holdCtx({ load: 1500, pv: 200 });
+  ctx.gridShare = { isLocked: () => true, summary: () => ({ gridKwh: 2.19 }) };
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  const gp = state.schedule.active.gridSetpointW;
+  assert.equal(gp.source, 'eos_grid_hold', 'Halten nicht ausgesetzt');
+  assert.equal(Number(gp.value), 1000, '1500 − 200 − 300: die Last kommt aus dem Netz');
+  assert.equal(state.ctrl.eosGridHold?.valueW, 1000, 'Halte-Signal für den Entlade-Wächter');
+  assert.equal('eosGridShareSuspend' in state.ctrl, false, 'kein Aussetz-Hinweis mehr');
+  assert.ok(!logs.some((l) => l.event === 'eos_grid_hold_suspended'), 'kein Aussetz-Log');
+  assert.equal(findLog(logs, 'grid_share_export_capped').length, 0, 'der positive Halte-Sollwert ist keine Einspeisung');
+});
+
+test('Netzstrom-Sperre mit Ladestrom-Standard: Halten in jedem Takt, Halte-Log nur einmal', async () => {
+  // Prod 19.11.: der zweite Schleifendurchlauf (chargeCurrentA mit Standardwert) darf das Halten nicht stören.
+  const { ctx, state, logs } = holdCtx({ load: 1500, pv: 200 });
+  ctx.gridShare = { isLocked: () => true, summary: () => ({ gridKwh: 3.5 }) };
+  state.schedule.config.defaultChargeCurrentA = 550;
+  const ev = createScheduleEvaluator(ctx);
+  for (let i = 0; i < 3; i++) {
+    await ev.evaluateSchedule();
+    assert.equal(state.schedule.active.gridSetpointW.source, 'eos_grid_hold', `Takt ${i + 1}: Halten läuft`);
+    assert.equal(Number(state.schedule.active.gridSetpointW.value), 1000, `Takt ${i + 1}: Live-Last − PV − Puffer`);
+  }
+  assert.equal(logs.filter((l) => l.event === 'eos_grid_hold').length, 1, 'Halte-Log nur einmal');
+  assert.equal(logs.filter((l) => l.event === 'eos_grid_hold_suspended').length, 0, 'kein Aussetz-Log');
+});
+
+test('Sperre frei → EOS-Halten wie bisher', async () => {
+  const { ctx, state } = holdCtx({ load: 1500, pv: 200 });
+  ctx.gridShare = { isLocked: () => false };
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(state.schedule.active.gridSetpointW.source, 'eos_grid_hold');
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), 1000);
+});
+
+test('echter Zähler: Halten läuft gesperrt und nach dem Boden-Reset (M10) gleich (gemeinsamer Akzeptanztest)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-m8m10-'));
+  try {
+    const trackerCfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
+    const tracker = createGridShareTracker({ getCfg: () => trackerCfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.now();
+    tracker.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 19290, floorPct: 11 });
+    tracker.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 19290, floorPct: 11 });
+    assert.equal(tracker.isLocked(), true, 'erst gesperrt');
+    const locked = holdCtx({ load: 1500, pv: 200 });
+    locked.ctx.gridShare = tracker;
+    await createScheduleEvaluator(locked.ctx).evaluateSchedule();
+    assert.equal(locked.state.schedule.active.gridSetpointW.source, 'eos_grid_hold', 'gesperrt: Halten läuft');
+    assert.equal(Number(locked.state.schedule.active.gridSetpointW.value), 1000);
+    // Akku bis knapp unter den Boden entleeren (real 10,95 %, Boden 11 %), idle → M10 löst die Sperre.
+    for (let i = 1; i <= 8; i++) tracker.tick({ nowMs: t0 + 60_000 + i * 10_000, victron: {}, socPct: 10.95, capacityWh: 19290, floorPct: 11 });
+    assert.equal(tracker.isLocked(), false, 'M10: Sperre gefallen bei leerem Akku');
+    const { ctx, state } = holdCtx({ load: 1500, pv: 200 });
+    ctx.gridShare = tracker;
+    await createScheduleEvaluator(ctx).evaluateSchedule();
+    assert.equal(state.schedule.active.gridSetpointW.source, 'eos_grid_hold', 'frei: Halten läuft');
+    assert.equal(Number(state.schedule.active.gridSetpointW.value), 1000);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Feld Nebeling 18./19.11.: die Sperre verbietet nur, Netzstrom aus dem Akku ins Netz zu geben — Laden aus dem Netz
+// ist gewollt. Netzladen auszusetzen hielt einen fast leeren Akku leer, die Sperre fiel nie (Stillstand ~11 h).
+function eosChargeCtx(gridKwh = 1.875) {
+  return makeCtx({ mutate: ({ state: st, cfg, ctx: c }) => {
+    st.victron.soc = 6; st.victron.selfConsumptionW = 1000; st.victron.pvTotalW = 0;
+    st.victron.fieldUpdatedAt = { ...(st.victron.fieldUpdatedAt || {}), selfConsumptionW: Date.now(), pvTotalW: Date.now() };
+    st.schedule.rules = [{ id: 'eos-charge', enabled: true, target: 'gridSetpointW', ...activeWindow(), value: 3000, optimizer: 'eos', source: 'forecast_optimizer', autoManaged: true }];
+    cfg.optimizer = { enabled: true, allowGridCharge: true, allowGridDischarge: true };
+    c.gridShare = { isLocked: () => true, summary: () => ({ gridKwh }) };
+  } });
+}
+
+test('M8: gridShare gesperrt → EOS-Netzladen läuft trotzdem nach Plan (Feld Nebeling 19.11.)', async () => {
+  const { ctx, state, logs } = eosChargeCtx();
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  const gp = state.schedule.active.gridSetpointW;
+  assert.notEqual(gp.source, 'eos_grid_charge_suspended', 'Netzladen nicht ausgesetzt');
+  assert.equal(Number(gp.value), 3000, 'der geplante Netzbezug');
+  assert.ok(!logs.some((l) => l.event === 'eos_grid_charge_suspended'), 'kein Aussetz-Log');
+});
+
 // Entlade-Wächter (Gegenprüfung 415a2f25): der Halte-Zweig meldet sich selbst
 // in state.ctrl.eosGridHold — auch wenn der Sollwert danach umgeschrieben wird
 // (negativer Preis), und mit `known`, damit der Wächter „Last unbekannt →
@@ -1282,4 +1474,82 @@ test('§14a-Speicherbedarf: ohne Sollwert-Ziel unbekannt (nicht 0)', async () =>
   state.ctrl.p14aBatteryWantW = { w: 0, at: 1 };
   await createScheduleEvaluator(ctx).evaluateSchedule();
   assert.equal(state.ctrl.p14aBatteryWantW, null);
+});
+
+// --- Punkt 1: Netzlade-Tor — Bezug bis zur Hauslast ist kein Netzladen (Sungrow) ---------------------
+
+function sungrowGateCtx({ allowGridCharge = false, loadW = 2000, pvW = 0, fresh = true, emulate = 'sungrow-ems' } = {}) {
+  const calls = [];
+  const now = Date.now();
+  const r = makeCtx({
+    mutate: ({ state, cfg, ctx }) => {
+      cfg.controlWrite.gridSetpointW = { enabled: true, emulate, keepaliveMs: 30000 };
+      cfg.optimizer = { enabled: false, allowGridCharge, allowGridDischarge: true };
+      cfg.victron = { host: 'x', port: 502, unitId: 1, telemetryMaxAgeMs: 90000 };
+      state.schedule.rules = [];
+      state.victron.selfConsumptionW = loadW;
+      state.victron.pvTotalW = pvW;
+      state.victron.pvPowerW = pvW;
+      state.victron.soc = 50;
+      state.victron.fieldUpdatedAt = fresh
+        ? { soc: now, selfConsumptionW: now, pvTotalW: now }
+        : { soc: now, selfConsumptionW: now - 200000, pvTotalW: now - 200000 };
+      ctx.sungrowEms = {
+        applySetpoint: (v, s, opts) => { calls.push({ v, s, opts }); return { ok: true }; },
+        revoke: () => ({ ok: true }), acceptSeq: () => 0, tick: () => ({ ok: true }), emergencyStop: () => ({ ok: true }),
+      };
+    }
+  });
+  return { ...r, calls, evaluator: createScheduleEvaluator(r.ctx) };
+}
+
+test('Netzlade-Tor: +1000 bei Last 2000 / PV 0 → 1000 durch, noGridCharge=true (deckt nur die Last)', async () => {
+  const g = sungrowGateCtx({ loadW: 2000, pvW: 0 });
+  const res = await g.evaluator.applyControlTarget('gridSetpointW', 1000, 'manual');
+  assert.equal(res.ok, true);
+  assert.equal(g.calls.length, 1);
+  assert.equal(g.calls[0].v, 1000);                 // min(1000, 2000−300) = 1000
+  assert.equal(g.calls[0].opts.noGridCharge, true);
+  assert.equal(findLog(g.logs, 'control_write_rejected').length, 0);
+});
+
+test('Netzlade-Tor: +1000 bei Last 600 → auf ~600−Puffer (300) gedeckelt, Log grid_charge_capped_to_load', async () => {
+  const g = sungrowGateCtx({ loadW: 600, pvW: 0 });
+  await g.evaluator.applyControlTarget('gridSetpointW', 1000, 'manual');
+  assert.equal(g.calls[0].v, 300);                  // 600 − 300 Puffer
+  assert.equal(g.calls[0].opts.noGridCharge, true);
+  const capped = findLog(g.logs, 'grid_charge_capped_to_load');
+  assert.equal(capped.length, 1);
+  assert.deepEqual([capped[0].payload.requested, capped[0].payload.cappedTo, capped[0].payload.loadW], [1000, 300, 600]);
+});
+
+test('Netzlade-Tor: +1000 ohne frische Last → abgelehnt (grid_charge_not_allowed), kein Write', async () => {
+  const g = sungrowGateCtx({ loadW: 2000, pvW: 0, fresh: false });
+  const res = await g.evaluator.applyControlTarget('gridSetpointW', 1000, 'manual');
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'grid_charge_not_allowed');
+  assert.equal(g.calls.length, 0);
+});
+
+test('Netzlade-Tor: allowGridCharge=true → unverändert durch, kein noGridCharge-Zwang', async () => {
+  const g = sungrowGateCtx({ allowGridCharge: true, loadW: 600, pvW: 0 });
+  await g.evaluator.applyControlTarget('gridSetpointW', 1000, 'manual');
+  assert.equal(g.calls[0].v, 1000);                 // nicht gedeckelt
+  assert.equal(g.calls[0].opts.noGridCharge, false);
+});
+
+test('Netzlade-Tor: Victron (kein Sungrow-EMS) → positiver Sollwert weiter abgelehnt', async () => {
+  const g = sungrowGateCtx({ loadW: 2000, pvW: 0, emulate: null });
+  const res = await g.evaluator.applyControlTarget('gridSetpointW', 1000, 'manual');
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'grid_charge_not_allowed');
+});
+
+test('Netzlade-Tor (Punkt 4): Last 0 bei Netzbezug → als unbekannt behandelt, nicht auf 0 gedeckelt', async () => {
+  const g = sungrowGateCtx({ loadW: 0, pvW: 0 });
+  g.state.victron.gridImportW = 2000; // Netz bezieht → Last 0 ist unplausibel (Umschaltung/Slave fehlt)
+  const res = await g.evaluator.applyControlTarget('gridSetpointW', 1000, 'manual');
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'grid_charge_not_allowed'); // abgelehnt, NICHT auf 0 gedeckelt
+  assert.equal(g.calls.length, 0);
 });

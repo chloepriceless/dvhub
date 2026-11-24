@@ -115,3 +115,49 @@ test('Freigabe wartet auf Rücklesung: Hinweis im Detail', () => {
   const v = load().view({ ...base, acting: true, lift: { liftedW: 4300, since: Date.now(), waiting: 'readback' } });
   assert.match(v.detail, /sobald 2704 lesbar ist/);
 });
+
+test('Viertelstunden-Budget (P1): verbraucht/Budget, Restzeit, erlaubte Leistung — oder Grund für den Augenblickswert', () => {
+  const { view } = load();
+  const v = view({ ...base, budget: { mode: 'budget', reason: null, usedWh: 417, budgetWh: 2500, remainingS: 600, allowedW: 12000 } });
+  assert.equal(v.budget, '0,4 kWh von 2,5 kWh · noch 10:00 · bis zum Ende höchstens 12,0 kW');
+  assert.equal(v.budgetMode, 'budget');
+  const i = view({ ...base, budget: { mode: 'instant', reason: 'soc_near_floor', reasonText: 'Akku nahe am Mindest-Ladestand' } });
+  assert.equal(i.budget, 'Augenblickswert — Akku nahe am Mindest-Ladestand');
+  assert.equal(view({ ...base, budget: { mode: 'instant', reason: 'billing_instant' } }).budget, 'Augenblickswert (eingestellt)');
+  assert.equal(view(base).budget, '', 'ohne Budget-Daten keine Zeile');
+});
+
+test('P3: gut sichtbarer Hinweis auf den Schalter, wenn die Jahresspitze schon über der Grenze liegt', () => {
+  const { view } = load();
+  const v = view({ ...base, adapt: { on: false, suggest: true, active: false, scope: 'year', reachedPeakW: 12345, effectiveLimitW: 10000 } });
+  assert.match(v.adaptNote, /Jahresspitze 12,3 kW liegt schon über der Grenze 10,0 kW/);
+  assert.match(v.adaptNote, /Grenze an erreichte Jahresspitze anpassen/);
+  assert.equal(v.adaptSuggest, true);
+  const a = view({ ...base, adapt: { on: true, suggest: false, active: true, scope: 'month', reachedPeakW: 11000, effectiveLimitW: 11000 } });
+  assert.equal(a.adaptNote, 'Grenze an die Monatsspitze angepasst: 11,0 kW (eingestellt 10,0 kW) — weitere Kappung darunter spart diesen Monat nichts.');
+  assert.equal(view({ ...base, adapt: { on: false, suggest: false, active: false } }).adaptNote, '');
+});
+
+test('P4: Leistungsentgelt in der Kachel (Jahresleistungspreis, laufendes Jahr)', () => {
+  const { view } = load();
+  const v = view({ ...base, billing: { model: 'year', tariffComplete: true, year: {
+    running: true, peakW: 50000, lpEurPerKwYear: 82.02, demandChargeEur: 4101, usageHours: 1500, usageHoursProjected: 3000,
+    tier: 'high', effectiveCtPerKwh: 6.17, avoidedEur: 820.2, uncappedPeakW: 60000 }, month: null } });
+  assert.equal(v.billing.charge, '4.101 € im Jahr (50,0 kW × 82,02 €)');
+  assert.equal(v.billing.usage, '1.500 h bisher · 3.000 h hochgerechnet (Stufe ab 2.500 h)');
+  assert.equal(v.billing.effective, '6,17 ct/kWh');
+  assert.equal(v.billing.avoided, '820 € im Jahr (ohne Akku 60,0 kW)');
+  const m = view({ ...base, billing: { model: 'month', tariffComplete: false, year: { lpEurPerKwMonth: 13.67 }, month: { totalEur: 1113.5, demandChargeEur: 683.5, peakW: 50000, avoidedEur: 136.7, uncappedPeakW: 60000 } } });
+  assert.equal(m.billing.charge, '684 € diesen Monat (50,0 kW × 13,67 €)', 'nur das Leistungsentgelt (Codex f2bf3ea5 P2)');
+  assert.match(m.billing.note, /Preise/);
+  assert.equal(view(base).billing, null);
+});
+
+test('P5: eingebaute Funktion in der Kachel als „ungetestet“ gekennzeichnet', () => {
+  const { view } = load();
+  const off = view({ ...base, active: false, reason: 'builtin_disabled', builtin: { status: 'ungetestet' } });
+  assert.equal(off.state, 'Eingebaut, aus');
+  assert.match(off.detail, /ungetestet/);
+  const on = view({ ...base, builtin: { status: 'ungetestet', active: true, targetW: 9700 } });
+  assert.equal(on.detail, 'Eingebaute Funktion des Wechselrichters (ungetestet): Bezug höchstens 9,7 kW');
+});

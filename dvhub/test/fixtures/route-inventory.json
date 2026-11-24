@@ -57,6 +57,7 @@
     "GET /api/history/raw/export.csv",
     "GET /api/history/raw/export.parquet",
     "GET /api/history/summary",
+    "GET /api/history/tariff-scatter",
     "GET /api/history/viz/*",
     "GET /api/input/status",
     "GET /api/integration/emhass",

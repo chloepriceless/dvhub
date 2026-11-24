@@ -1,0 +1,33 @@
+# scripts/ci/kleine-platte/compose.override.yml — Test-Ergänzung zu docker/compose.yml
+# des geprüften Stands. Ändert NICHTS an den Diensten selbst außer:
+#   * Volumes dvhub-db/-data/-config liegen als Bind auf der nachgestellten
+#     kleinen Platte (Loop-Dateisystem in der Colima-VM) → echte statfs-Werte
+#   * DVhub im Lese-Modus, Zeitgeber der Speicher-Wache verkürzt (timer-shim)
+#   * eigene Ports (HTTP 18399, DB auf 127.0.0.1:KP_DB_PORT)
+services:
+  db:
+    pull_policy: never
+  dvhub:
+    pull_policy: never
+    environment:
+      DVHUB_READ_ONLY: "1"
+      DVHUB_DB_TIMESCALEDB: "${KP_DB_TIMESCALEDB:-true}"
+      NODE_OPTIONS: "--import=/kp-shim/timer-shim.mjs"
+      KP_SHIM_FIRST_MS: "${KP_SHIM_FIRST_MS:-20000}"
+      KP_SHIM_INTERVAL_MS: "${KP_SHIM_INTERVAL_MS:-45000}"
+      KP_SHIM_MATCH: "${KP_SHIM_MATCH:-storage|speicher|telemetry-tier}"
+      # Läufe der Wache erst, wenn der Test den Füllstand eingestellt hat (Datei im Datenordner).
+      KP_SHIM_GATE: /var/lib/dvhub/kp-gate-open
+      KP_SHIM_GATE_MATCH: "${KP_SHIM_GATE_MATCH:-storage|speicher}"
+    volumes:
+      - ${KP_SHIM_DIR:?}:/kp-shim:ro
+volumes:
+  dvhub-db:
+    driver: local
+    driver_opts: { type: none, o: bind, device: "${KP_DB_DIR:?}" }
+  dvhub-data:
+    driver: local
+    driver_opts: { type: none, o: bind, device: "${KP_DATA_DIR:?}" }
+  dvhub-config:
+    driver: local
+    driver_opts: { type: none, o: bind, device: "${KP_CONFIG_DIR:?}" }

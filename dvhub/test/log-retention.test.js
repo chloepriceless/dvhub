@@ -67,6 +67,20 @@ test('Verdichtet tageweise bis zum 14-Tage-Stichtag', async () => {
   assert.deepEqual(agg.map((c) => c.params[0]), ['2026-03-10', '2026-03-11']);
 });
 
+// Portal 19.11.: „[MQTT] Connected to …“ (Stufe info) lief als Fehler ins Fehlerprotokoll. [MQTT]-Meldungen
+// zählen nur ab Warnung.
+test('[MQTT]-Meldungen zählen nur ab Warnung als Fehler', () => {
+  assert.match(AUDIT_ERROR_SQL, /event_type LIKE '\[MQTT\]%' AND severity IN \('warn', 'error', 'critical'\)/);
+  assert.doesNotMatch(AUDIT_ERROR_SQL, /OR event_type LIKE '\[MQTT\]%'\s*\n?\)/);
+});
+
+// Codex 0752f9c0 P2: Info-[MQTT]-Meldungen fallen aus der Fehler-Regel — sie müssen dann ins Rauschen
+// (Tageszähler), sonst bleiben sie für immer roh liegen.
+test('Info-[MQTT]-Meldungen gehören zum Rauschen (Aufbewahrung)', () => {
+  assert.match(AUDIT_NOISE_SQL, /OR event_type LIKE '\[MQTT\]%'/);
+  assert.match(AUDIT_NOISE_SQL, /AND NOT/);
+});
+
 test('Rauschen und Fehler sind getrennt', () => {
   assert.match(AUDIT_NOISE_SQL, /AND NOT/);
   assert.match(AUDIT_ERROR_SQL, /_error/);
@@ -137,4 +151,22 @@ test('Laufreihen: je Tag bleibt ein Plan (Day-Ahead vom Vortag), nicht der letzt
   await createLogRetention({ getDb: () => db, getCfg: cfg, now: () => NOW }).runOnce();
   assert.ok(!db.calls.some((c) => /row_number\(\) OVER/.test(c.sql)), 'kein „letzter Lauf je Tag“ mehr');
   assert.ok(db.calls.some((c) => /count\(DISTINCT optimizer_run_id\) > 1/.test(c.sql)), 'sucht Tage mit mehreren Läufen');
+});
+
+// Speicher-Konzept S5 c (Christin 23.11.2026): „Vollständig“ ruht bei wenig Platz.
+test('„Vollständig“: bei Speicher „wenig“/„kritisch“ läuft die Standard-Aufbewahrung, sonst nicht', async () => {
+  const full = () => ({ timeZone: 'Europe/Berlin', telemetry: { logRetention: { mode: 'full' } } });
+  const logs = [];
+  let lvl = 'ok';
+  const db = fakeDb();
+  const lr = createLogRetention({ getDb: () => db, getCfg: full, now: () => NOW, getStorageLevel: () => lvl, pushLog: (e) => logs.push(e) });
+  assert.equal((await lr.runOnce()).skipped, 'full');
+  lvl = 'wenig';
+  const r = await lr.runOnce();
+  assert.notEqual(r.skipped, 'full', 'Standard greift');
+  assert.ok(db.calls.length > 0);
+  await lr.runOnce();
+  assert.equal(logs.filter((e) => e === 'log_retention_full_suspended').length, 1, 'einmal gemeldet');
+  lvl = 'knapp';
+  assert.equal((await lr.runOnce()).skipped, 'full', 'danach wieder vollständig');
 });

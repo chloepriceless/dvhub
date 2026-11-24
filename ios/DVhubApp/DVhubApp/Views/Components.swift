@@ -1,79 +1,45 @@
-// Components.swift — Kacheln und Verbindungsanzeige.
+// Components.swift — Verbindungsanzeige.
 
 import SwiftUI
 import DVhubLink
-
-struct Tile<Content: View>: View {
-    let title: String
-    let icon: String
-    let tint: Color
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: icon)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(tint)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-            content
-        }
-        .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
-        .padding(14)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-}
-
-struct BigValue: View {
-    let value: String
-    var caption: String?
-    var id: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(value)
-                .font(.system(.title, design: .rounded).weight(.semibold))
-                .monospacedDigit()
-                .contentTransition(.numericText())
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-                .accessibilityIdentifier(id ?? "")
-            if let caption {
-                Text(caption).font(.footnote).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
-            }
-        }
-    }
-}
 
 struct ConnectionBadge: View {
     let controller: SystemController
 
     var body: some View {
-        HStack(spacing: 8) {
-            Circle().fill(color).frame(width: 10, height: 10)
-            Text(text).font(.footnote)
+        HStack(spacing: 7) {
+            Circle().fill(color).frame(width: 8, height: 8)
+                .shadow(color: color.opacity(0.8), radius: 4)
+            Text(text).font(.caption.weight(.semibold)).foregroundStyle(Brand.text).lineLimit(1).minimumScaleFactor(0.75)
             Spacer(minLength: 0)
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Capsule().fill(color.opacity(0.12)))
+        .overlay(Capsule().strokeBorder(color.opacity(0.35), lineWidth: 1))
         .accessibilityElement(children: .combine)
+        .accessibilityLabel(text)
         .accessibilityIdentifier("connectionState")
     }
 
     private var color: Color {
         switch controller.state {
-        case .online: return .green
-        case .connecting, .idle: return .yellow
-        case .boxOffline: return .orange
-        case .offline: return .red
+        case .online(.demo): return Brand.violet
+        case .online: return Brand.green
+        case .connecting, .idle: return Brand.yellow
+        case .boxOffline: return Brand.orange
+        case .offline: return Brand.red
         }
     }
 
     private var text: String {
         switch controller.state {
-        case .idle: return "Getrennt"
-        case .connecting: return "Verbinde …"
-        case .online(let k): return k == .lan ? "Verbunden im Heimnetz" : "Verbunden über Relay"
-        case .boxOffline(let k): return k == .lan ? "Anlage antwortet nicht (Heimnetz)" : "Anlage nicht mit dem Relay verbunden"
-        case .offline(let e): return "Keine Verbindung – \(e)"
+        case .idle: return String(localized: "Getrennt")
+        case .connecting: return String(localized: "Verbinde …")
+        case .online(.demo): return String(localized: "Demo läuft – im Gerät, ohne Netz")
+        case .online(let k): return k == .lan ? String(localized: "Verbunden im Heimnetz") : String(localized: "Verbunden über Relay")
+        case .boxOffline(let k): return k == .lan ? String(localized: "Anlage antwortet nicht (Heimnetz)") : String(localized: "Anlage nicht mit dem Relay verbunden")
+        case .offline(let e): return String(localized: "Keine Verbindung – \(e)")
         }
     }
 }

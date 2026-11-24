@@ -4,6 +4,10 @@
 
 Stand: 2026-07-04 | Zielgruppe: Betreiber mit Deye-Hybrid-Wechselrichter, der bereits über Node-RED ausgelesen/gesteuert wird | Schwierigkeitsgrad: fortgeschritten (Node-RED-Kenntnisse nötig)
 
+> Nur Werte anzeigen, ohne Node-RED: Für Deye HP3 (Hochvolt, 3-phasig) und Deye LP1 (1-phasig) gibt es die
+> Lese-Profile `deye-hp3` und `deye-lp1` (Beta, keine Steuerung), siehe [DEYE-NUR-ANZEIGE.md](DEYE-NUR-ANZEIGE.md).
+> Für Deye LP3 (Niedervolt, 3-phasig) gibt es das Profil `deye-lv`.
+
 ---
 
 ## 1. Funktionsprinzip

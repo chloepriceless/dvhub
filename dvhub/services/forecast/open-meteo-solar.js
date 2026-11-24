@@ -2,6 +2,20 @@
 // Uses GHI/DNI/DHI weather data (already fetched by weather-fetch.js) to estimate
 // PV power output using a simple irradiance-to-power model.
 // Free, no API key, no additional API calls needed (reuses weather data).
+import { effectivePvKwp } from './effective-pv.js';
+
+/**
+ * kWp für die Open-Meteo-Schätzung: forecast.pv.totalKwp, sonst Summe pvPlants, plus PV am zweiten
+ * Sungrow-WR (Punkt 5). Ausgelagert (19.11.2026) für die Einrichtungs-Regel (pv-provider-setup.js).
+ */
+export function openMeteoSolarKwp(cfg) {
+  const pv = cfg?.forecast?.pv || {};
+  let kwp = pv.totalKwp;
+  if (!kwp && Array.isArray(cfg?.userEnergyPricing?.pvPlants)) {
+    kwp = cfg.userEnergyPricing.pvPlants.reduce((sum, p) => sum + (p.kwp || 0), 0);
+  }
+  return effectivePvKwp(cfg, kwp);
+}
 
 /**
  * Create Open-Meteo solar forecast estimator.
@@ -55,11 +69,8 @@ export function createOpenMeteoSolar(ctx, { store }) {
     const cfg = getCfg();
     const pv = cfg.forecast?.pv || {};
 
-    // Get kWp from config or pvPlants
-    let kwp = pv.totalKwp;
-    if (!kwp && Array.isArray(cfg.userEnergyPricing?.pvPlants)) {
-      kwp = cfg.userEnergyPricing.pvPlants.reduce((sum, p) => sum + (p.kwp || 0), 0);
-    }
+    // Get kWp from config or pvPlants (Punkt 5: + PV am zweiten Sungrow-WR)
+    const kwp = openMeteoSolarKwp(cfg);
     if (!kwp) {
       pushLog('open_meteo_solar_skip', { reason: 'no_kwp' });
       return null;
@@ -122,7 +133,11 @@ export function createOpenMeteoSolar(ctx, { store }) {
         );
       }
 
-      pushLog('open_meteo_solar_ok', { slots: slots.length, kwp, strings: strings.length });
+      // M13 (Feld 16.11.): Im Detail-Modus wird PRO STRING gerechnet (strings[]), der Zweit-WR
+      // ist dort bereits in den Strings enthalten. Der Log muss die WIRKLICH gerechnete Summe
+      // zeigen (Summe der genutzten Strings), nicht die um den Zweit-WR aufgeblähte kWp.
+      const usedKwp = Math.round(strings.reduce((s, x) => s + (Number(x?.kwp) || 0), 0) * 100) / 100;
+      pushLog('open_meteo_solar_ok', { slots: slots.length, kwp: usedKwp, strings: strings.length });
       return slots;
 
     } catch (e) {

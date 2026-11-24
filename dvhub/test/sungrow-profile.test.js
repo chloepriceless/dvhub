@@ -56,11 +56,12 @@ function evaluatorFor(cfg, transport, device = sungrowDevice()) {
 
 // --- Profil ------------------------------------------------------------------
 
-test('Profil: Beta, Modbus, Draht-Adresse = Doku − 1 für jeden Punkt', () => {
+test('Profil: Stable (kein Beta-Flag), Modbus, Draht-Adresse = Doku − 1 für jeden Punkt', () => {
   const raw = JSON.parse(fs.readFileSync(SHIPPED, 'utf8'));
-  assert.equal(raw.beta, true);
+  // 1.0.12: Sungrow (wie alle Hersteller-Treiber) aus der Beta — kein "beta": true
+  // mehr, damit das Profil im Stable-Kanal erscheint (listManufacturerProfiles).
+  assert.equal(raw.beta, undefined);
   assert.match(raw.label, /Sungrow/);
-  assert.match(raw.label, /Beta/);
   const cfg = loadSungrowConfig();
   assert.equal(cfg.victron.transport, 'modbus');
   assert.equal(cfg.victron.port, 502);
@@ -108,8 +109,8 @@ test('Profil: Steuerung nur über Holding-Register, Sollwert nachgebildet, kein 
       assert.equal(st.restoreDefault, undefined, 'ohne Sicherung nie eine Grenze abschalten');
     }
   }
-  // Sperren: zuerst Grenze 0, zuletzt einschalten (0xAA = 170).
-  assert.deepEqual(seq['0'].map((s) => [s.point, s.value]), [['feedInLimitRatio', 0], ['feedInLimitW', 0], ['feedInLimitEnable', 170]]);
+  // Sperren: zuerst alle Grenzwerte 0 (Quote 13088, Watt 13074, Wide-Range 31222), zuletzt einschalten (0xAA = 170).
+  assert.deepEqual(seq['0'].map((s) => [s.point, s.value]), [['feedInLimitRatio', 0], ['feedInLimitW', 0], ['feedInLimitWideRange', 0], ['feedInLimitEnable', 170]]);
   assert.equal(cfg.dvControl.dontFeedExcessAcPv.enabled, false);
   // Netzanschluss „Akku zuerst“ erkennt den nachgebildeten Sollwert als Hebel.
   const lever = resolveBatteryLever(cfg);
@@ -123,18 +124,20 @@ test('identify kommt nur aus dem Profil: config.json kann das Schreib-Tor nicht 
   assert.equal(cfg.identify.requiredForWrites, true);
 });
 
-test('Beta-Gate: Sungrow nur im Bleeding-Edge-Kanal wählbar, aktiv immer sichtbar', () => {
+test('Freischaltung 1.0.12: Sungrow erscheint im Stable-Kanal (kein Beta-Gate mehr)', () => {
   const cfgPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-sg-gate-')), 'config.json');
   const dir = path.join(path.dirname(cfgPath), 'hersteller');
   fs.mkdirSync(dir);
   for (const f of ['victron.json', 'sungrow.json']) fs.copyFileSync(path.join(__dirname, '..', 'hersteller', f), path.join(dir, f));
   const ctx = (updateChannel, manufacturer = 'victron') => ({ getConfigPath: () => cfgPath, getRawCfg: () => ({ updateChannel, manufacturer }) });
   const values = (c) => listManufacturerProfiles(c).map((o) => o.value);
-  assert.ok(!values(ctx('stable')).includes('sungrow'), 'stable: ausgeblendet');
+  // 1.0.12: das Profil trägt kein "beta": true mehr → in JEDEM Kanal wählbar.
+  const stable = listManufacturerProfiles(ctx('stable')).find((o) => o.value === 'sungrow');
+  assert.ok(stable, 'stable: jetzt sichtbar (freigeschaltet)');
+  assert.equal(stable.beta, false);
   const dev = listManufacturerProfiles(ctx('dev')).find((o) => o.value === 'sungrow');
   assert.ok(dev, 'dev: sichtbar');
-  assert.equal(dev.beta, true);
-  assert.match(dev.label, /Beta/);
+  assert.equal(dev.beta, false);
   assert.ok(values(ctx('stable', 'sungrow')).includes('sungrow'), 'aktives Profil fällt nie aus der Liste');
 });
 
@@ -152,7 +155,7 @@ test('Erkennung: Typcode-Tabelle, Seriennummer, Nennleistungen', async () => {
   assert.deepEqual(
     { model: id.model, supported: id.supported, serial: id.serial, nominalW: id.nominalW, bdcRatedW: id.bdcRatedW, typeCodeHex: id.typeCodeHex },
     { model: 'SH10RT', supported: true, serial: 'A2231234567', nominalW: 10000, bdcRatedW: 10000, typeCodeHex: '0xE03' });
-  assert.deepEqual(t.reads.map((r) => [r.fc, r.address]), [[4, 4999], [4, 4989], [4, 5627]]);
+  assert.deepEqual(t.reads.map((r) => [r.fc, r.address]), [[4, 4999], [4, 4989], [4, 5627], [4, 5638]]);
   // String-WR (SG, Typcode nicht in der Hybrid-Tabelle) → erkannt, aber nicht unterstützt.
   const sg = mockSungrow(sungrowImage({ input: { [wire(5000)]: 0x0270 } }));
   const idSg = await identifySungrow((q) => sg.mbRequest(q));
@@ -192,8 +195,35 @@ test('Poller: SoC 0,1 %, Akku S32 LE mit Vorzeichenwechsel, PV U32 LE, Last, Zä
   assert.equal(state.victron.device.supported, true);
   assert.equal(state.victron.device.info.sohPct, 98.5);
   assert.ok(logs.some((l) => l.event === 'inverter_identified'));
-  // Nur Input-Register zyklisch gelesen — kein FC 3 (Holding) im Poll.
-  assert.deepEqual(t.reads.filter((r) => r.fc !== 4), []);
+  // Zyklische Messwerte nur über Input-Register (FC 4). Die einzigen Holding-Lesevorgänge (FC 3) im Poll sind die
+  // Master-Gerätegrenzen + Min-/Max-SoC — als BLÖCKE (N3, Feld 15.11.), nur im langsamen Info-Takt: 33047+3
+  // (Laden/Entladen/Kapazität) und 13057+4 (Max-SoC 13058, Min-SoC 13059). Im Abbild fehlt 13057–13060 → der WR
+  // wirft eine Modbus-Ausnahme → Rückfall auf Einzellesen 13058/13059 (Probe + per-Verbindung-Fallback).
+  assert.deepEqual(t.reads.filter((r) => r.fc !== 4), [
+    { fc: 3, address: wire(33047), quantity: 3 },
+    { fc: 3, address: wire(13057), quantity: 4 },
+    { fc: 3, address: wire(13058), quantity: 1 },
+    { fc: 3, address: wire(13059), quantity: 1 },
+  ]);
+  // Gelesene Master-Gerätegrenzen landen am device (×10): Laden 33047 = 10,6 kW, Entladen 33048 = 10,0 kW.
+  assert.equal(state.victron.device.maxChargeWDevice, 10600);
+  assert.equal(state.victron.device.maxDischargeWDevice, 10000);
+});
+
+test('Poller: Min/Max-SoC-Block (13057+4) lesbar → EIN FC-3-Block, kein Einzel-Rückfall (N3)', async () => {
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import' });
+  // Abbild mit belegten 13057–13060: Max-SoC 13058 = 95,0 %, Min-SoC 13059 = 10,0 %.
+  const image = sungrowImage({ holding: { [wire(13057)]: 0, [wire(13058)]: 950, [wire(13059)]: 100, [wire(13060)]: 0 } });
+  const t = mockSungrow(image);
+  const { state, poller } = pollerFor(cfg, t);
+  await poller.requestPoll();
+  assert.equal(state.victron.device.maxSocPctDevice, 95);
+  assert.equal(state.victron.device.minSocPctDevice, 10);
+  // Beide Grenzwert-Blöcke lesbar → nur zwei FC-3-Blöcke, KEIN Einzel-Rückfall auf 13058/13059.
+  assert.deepEqual(t.reads.filter((r) => r.fc !== 4), [
+    { fc: 3, address: wire(33047), quantity: 3 },
+    { fc: 3, address: wire(13057), quantity: 4 },
+  ]);
 });
 
 test('Poller: feed_in-Konvention (Standard) dreht den Zähler wie bei Victron', async () => {
@@ -293,9 +323,10 @@ test('Abregelung: sichert Quote/Wert/Schalter, schreibt 0 % · 0 W · an, liest 
     { fc: 6, address: wire(13087), value: 0xaa }
   ]);
   assert.deepEqual(state.ctrl._dvSeqSaved, { feedInLimitRatio: 700, feedInLimitW: 5000, feedInLimitEnable: 0xaa });
-  // Je Write ein FC-3-Rücklesen derselben Adresse (nach dem Sichern).
+  // Je Write ein FC-3-Rücklesen derselben Adresse (nach dem Sichern). Das Default-Abbild kennt 31222 nicht, der
+  // Sicherungs-Versuch liest es einmal (Exception 2 → optional übersprungen, kein Verify-Rücklesen).
   const fc3 = t.reads.filter((r) => r.fc === 3).map((r) => r.address);
-  assert.deepEqual(fc3, [wire(13088), wire(13074), wire(13087), wire(13088), wire(13074), wire(13087)]);
+  assert.deepEqual(fc3, [wire(13088), wire(13074), wire(31222), wire(13087), wire(13088), wire(13074), wire(13087)]);
 
   // Freigabe: genau die gesicherten Werte zurück.
   t.writes.length = 0;
@@ -308,19 +339,84 @@ test('Abregelung: sichert Quote/Wert/Schalter, schreibt 0 % · 0 W · an, liest 
   assert.deepEqual(state.ctrl._dvSeqSaved, {});
 });
 
-test('Abregelung: ohne Register 13088 (alte Firmware) wird nur der optionale Schritt übersprungen', async () => {
+test('M16 Abregelung: Wide-Range-Grenze 31222 wird mitgesichert und auf 0 mitgeschrieben, die Freigabe stellt sie zurück', async () => {
   const cfg = loadSungrowConfig();
-  for (const img of [sungrowImage({ dropHolding: [wire(13088)] }), sungrowImage({ holding: { [wire(13088)]: 0xffff } })]) {
-    const t = mockSungrow(img);
-    const { state, evaluator } = evaluatorFor(cfg, t);
-    await evaluator.applyDvVictronControl(false, { reason: 'dv_forced_off' });
-    assert.equal(state.ctrl._lastDvFeedIn, false);
-    assert.deepEqual(t.writes.map((w) => w.address), [wire(13074), wire(13087)]);
-    assert.equal(state.ctrl._dvSeqSaved.feedInLimitRatio, undefined);
-    t.writes.length = 0;
-    await evaluator.applyDvVictronControl(true);
-    assert.deepEqual(t.writes.map((w) => [w.address, w.value]), [[wire(13074), 5000], [wire(13087), 0xaa]]);
-  }
+  // Installateur-Zustand inkl. Wide-Range-Grenze 31222 (am Gerät: 2420 = 24,2 kW, Feld 16.11.).
+  const img = sungrowImage({ holding: { [wire(31222)]: 2420 } });
+  const t = mockSungrow(img);
+  const { state, evaluator } = evaluatorFor(cfg, t);
+  await evaluator.applyDvVictronControl(false, { reason: 'negative_price_protection' });
+  assert.equal(state.ctrl._lastDvFeedIn, false);
+  // Reihenfolge: Quote 13088, Watt 13074, Wide-Range 31222, Enable 13087 — alle Werte-Register auf 0.
+  assert.deepEqual(t.writes.map((w) => [w.address, w.value]), [
+    [wire(13088), 0], [wire(13074), 0], [wire(31222), 0], [wire(13087), 0xaa]
+  ]);
+  // 31222 ist mitgesichert (für die Freigabe), der alte Gerätewert bleibt erhalten.
+  assert.equal(state.ctrl._dvSeqSaved.feedInLimitWideRange, 2420);
+  // 31222 ist vorhanden → mit Rücklesen (verify): einmal Sichern + einmal nach dem Write.
+  assert.equal(t.reads.filter((r) => r.fc === 3 && r.address === wire(31222)).length, 2, '31222 gesichert und verifiziert');
+
+  // Freigabe: die gesicherte Wide-Range-Grenze wird mit zurückgestellt.
+  t.writes.length = 0;
+  await evaluator.applyDvVictronControl(true);
+  assert.deepEqual(t.writes.map((w) => [w.address, w.value]), [
+    [wire(13088), 700], [wire(13074), 5000], [wire(31222), 2420], [wire(13087), 0xaa]
+  ]);
+  assert.deepEqual(state.ctrl._dvSeqSaved, {});
+});
+
+test('M16 Abregelung: fehlt 31222 (alte Firmware, Modbus-Exception) → optionaler Schritt übersprungen, Sperre läuft durch', async () => {
+  const cfg = loadSungrowConfig();
+  // Default-Abbild kennt 31222 nicht (dropHolding nicht nötig) → Exception 2 beim Sichern/Schreiben.
+  const img = sungrowImage();
+  const t = mockSungrow(img);
+  const { state, evaluator } = evaluatorFor(cfg, t);
+  await evaluator.applyDvVictronControl(false, { reason: 'dv_forced_off' });
+  assert.equal(state.ctrl._lastDvFeedIn, false, 'Sperre trotzdem gesetzt');
+  // Kein Write auf 31222, die übrigen Register wie gehabt.
+  assert.deepEqual(t.writes.map((w) => w.address), [wire(13088), wire(13074), wire(13087)]);
+  assert.equal(state.ctrl._dvSeqSaved.feedInLimitWideRange, undefined, '31222 nicht gesichert');
+});
+
+test('Abregelung: fehlt Register 13088 WIRKLICH (alte Firmware, Modbus-Exception) → optionaler Schritt übersprungen', async () => {
+  const cfg = loadSungrowConfig();
+  // Nur der echt fehlende Fall (Register nicht vorhanden → Exception 2 bei Lesen/Schreiben).
+  const img = sungrowImage({ dropHolding: [wire(13088)] });
+  const t = mockSungrow(img);
+  const { state, evaluator } = evaluatorFor(cfg, t);
+  await evaluator.applyDvVictronControl(false, { reason: 'dv_forced_off' });
+  assert.equal(state.ctrl._lastDvFeedIn, false);
+  assert.deepEqual(t.writes.map((w) => w.address), [wire(13074), wire(13087)], 'nur Watt + Enable, kein 13088');
+  assert.equal(state.ctrl._dvSeqSaved.feedInLimitRatio, undefined);
+  t.writes.length = 0;
+  await evaluator.applyDvVictronControl(true);
+  assert.deepEqual(t.writes.map((w) => [w.address, w.value]), [[wire(13074), 5000], [wire(13087), 0xaa]]);
+});
+
+test('NEU1 Abregelung: Begrenzung war AUS (enable 0x55), Quote 13088 liest 0xFFFF → Quote wird zum Sperren VERPFLICHTEND auf 0 gezwungen (Vorrang vor 13074), Freigabe schaltet die Begrenzung wieder aus', async () => {
+  const cfg = loadSungrowConfig();
+  // Installateur hatte KEINE Einspeisebegrenzung: enable=0x55 (aus); ohne aktive
+  // Begrenzung liefert die Quote 13088 keinen gültigen Wert (0xFFFF).
+  const img = sungrowImage({ holding: { [wire(13087)]: 0x55, [wire(13088)]: 0xffff } });
+  const t = mockSungrow(img);
+  const { state, evaluator } = evaluatorFor(cfg, t);
+
+  await evaluator.applyDvVictronControl(false, { reason: 'dv_forced_off' });
+  assert.equal(state.ctrl._lastDvFeedIn, false);
+  // Die Vorrang-Quote 13088 MUSS trotz 0xFFFF-Lesung auf 0 — sonst gäbe 100 %
+  // die Einspeisung trotz Watt=0 frei (Note 2). Reihenfolge: Quote, Watt, Enable.
+  assert.deepEqual(t.writes.map((w) => [w.address, w.value]),
+    [[wire(13088), 0], [wire(13074), 0], [wire(13087), 0xaa]]);
+  assert.equal(state.ctrl._dvSeqSaved.feedInLimitRatio, undefined, '0xFFFF nicht als Ist-Wert gesichert');
+  assert.equal(state.ctrl._dvSeqSaved.feedInLimitEnable, 0x55, 'Kunden-Enable (aus) gesichert');
+
+  // Freigabe: Enable zurück auf 0x55 (aus) → Begrenzung abgeschaltet, Einspeisung
+  // frei; die ungespeicherte Quote wird NICHT angefasst (Prinzip: ohne Sicherung
+  // keine Grenze setzen) und ist bei abgeschalteter Begrenzung ohnehin wirkungslos.
+  t.writes.length = 0;
+  await evaluator.applyDvVictronControl(true);
+  assert.deepEqual(t.writes.map((w) => [w.address, w.value]), [[wire(13074), 5000], [wire(13087), 0x55]]);
+  assert.ok(!t.writes.some((w) => w.address === wire(13088)), 'ungespeicherte Quote bei Freigabe nicht geschrieben');
 });
 
 test('Abregelung: Rücklesen weicht ab → Sperre gilt als gescheitert, nächster Takt versucht erneut', async () => {

@@ -6,7 +6,9 @@ import { round2 } from './server-utils.js';
 import { resolutionFilterLimit } from './runtime-performance.js';
 import { expandHourlyPriceRows, hourlyPriceExpansionCteSql, PRICE_COVERAGE_PAD_MS, sampleEnergyBySlot, vrmNextSampleStartLookup } from './telemetry-runtime.js';
 // Historie: eigene Messwerte zuerst, VRM füllt auf (Christin 05.11.2026, „B“).
-import { chooseRawEntries, localCoverageCompleteSql, localSampleCreditSeconds, pickSlotSourceRow, PRIMARY_FLOW_SERIES, VRM_RAW_SCOPE } from './energy-source-rule.js';
+import { chooseRawEntries, localCoverageCompleteSql, localSampleCreditSeconds, pickSlotSourceRow, PRIMARY_FLOW_SERIES, BATTERY_FLOW_SERIES, VRM_RAW_SCOPE } from './energy-source-rule.js';
+// Datenstufen 1 min / 15 min für alle Reihen (Christin 23.11.2026, S3 a+c).
+import { markTierDirty, readTierFallback, tierRowValue, TIER_1M_TABLE, TIER_15M_TABLE } from './services/telemetry-tiers.js';
 
 // Plan 08-01 Task 3: resolve dvhub/db/migrations/ relative to this module file
 // so the runner works regardless of where node is invoked from (systemd CWD,
@@ -69,14 +71,14 @@ const secondBatteryKwhFields = (energyForSeries, dropLocal = false) => {
 const preferredSourceKindOf = (bySource, preferredSourceKinds) => (
   pickSlotSourceRow(bySource, preferredSourceKinds)?.source_kind ?? null
 );
-const slotFlowsFromVrm = (bucket, preferredSourceKinds) => PRIMARY_FLOW_SERIES
+const slotFlowsFromVrm = (bucket, preferredSourceKinds, series = PRIMARY_FLOW_SERIES) => series
   .some((seriesKey) => preferredSourceKindOf(bucket.get(seriesKey), preferredSourceKinds) === 'vrm_import');
 // Rohdaten-Ausweichpfad: VRM-Import landet mit scope 'history' in timeseries_samples.
 // Je Reihe gilt die gewaehlte Quelle (chooseRawEntries), nie ein Mittel aus beiden.
-const rawBucketHasVrmFlows = (bucket, bucketSeconds) => PRIMARY_FLOW_SERIES
+const rawBucketHasVrmFlows = (bucket, bucketSeconds, series = PRIMARY_FLOW_SERIES) => series
   .some((seriesKey) => chooseRawEntries(bucket.get(seriesKey), bucketSeconds).some((entry) => entry.scope === VRM_RAW_SCOPE));
 
-const MATERIALIZED_ENERGY_SERIES = new Set([
+export const MATERIALIZED_ENERGY_SERIES = new Set([
   'grid_import_w', 'grid_export_w', 'grid_total_w',
   'pv_total_w', 'pv_ac_w',
   'battery_power_w', 'battery_charge_w', 'battery_discharge_w',
@@ -93,6 +95,38 @@ const MATERIALIZED_ENERGY_SERIES = new Set([
   // Energie und bleibt draussen (wie battery_soc_pct).
   ...SECOND_BATTERY_SERIES
 ]);
+
+// T-MPPT-TELEMETRY: Per-MPPT/String-Leistungsreihen pv_mppt_<n>_w werden wie
+// pv_total_w zu 15-min-kWh-Slots verdichtet. <n> ist dynamisch (M160-N), daher
+// ein Praefix-Muster statt fester Set-Eintraege. NUR die _w-Leistungsreihe zaehlt
+// als Energie — die optionalen _v/_a/_wh-Reihen bleiben Rohdaten (keine Slots).
+const PV_MPPT_POWER_SERIES_RE = /^pv_mppt_[1-9]\d{0,2}_w$/;
+function isMaterializedEnergySeries(seriesKey) {
+  return MATERIALIZED_ENERGY_SERIES.has(seriesKey) || PV_MPPT_POWER_SERIES_RE.test(seriesKey);
+}
+
+// Je (Slot, Reihe) genau EINE Quelle wählen (Reihenfolge preferredSourceKinds),
+// nie zwei Quellen mitteln. Eingabe nach ts,series sortiert; Ausgabe behält die
+// Reihenfolge. Reine Funktion (readMaterializedSeries, pvnode-Export).
+function dedupeMaterializedSeries(rows, preferredSourceKinds = []) {
+  const rank = new Map((preferredSourceKinds || []).map((k, i) => [k, i]));
+  const rankOf = (kind) => (rank.has(kind) ? rank.get(kind) : Number.MAX_SAFE_INTEGER);
+  const best = new Map();
+  for (const row of rows) {
+    const key = `${row.ts}\u0000${row.seriesKey}`;
+    const cur = best.get(key);
+    if (!cur || rankOf(row.sourceKind) < rankOf(cur.sourceKind)) best.set(key, row);
+  }
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    const key = `${row.ts}\u0000${row.seriesKey}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(best.get(key));
+  }
+  return out;
+}
 
 // The 29 series that become value fields on a returned slot (23 + the 6
 // second-battery series). NOTE this is
@@ -148,6 +182,49 @@ export const GRID_IMPORT_PEAK_SQL = `
       SELECT slot_start_utc, value_num FROM per_slot
       ORDER BY value_num DESC, slot_start_utc ASC
       LIMIT 1
+    `;
+
+// Peak Shaving P4 (Christin 24.11.2026): Monatswerte für das Leistungsentgelt.
+// Je Viertelstunde zählt wie bei der Spitze die größere Quelle (eigener
+// Messwert oder VRM-Import). Je Monat (Ortszeit $3): Arbeit (kWh), Spitze
+// (kWh je Viertelstunde → × 4 000 = W) samt Zeitpunkt, Spitze OHNE Akku-Beitrag
+// (Bezug + Akku-Entladung derselben Viertelstunde) und wie viele
+// Viertelstunden Akku-Werte haben (0 = nicht ermittelbar).
+export const PEAK_BILLING_MONTHS_SQL = `
+      WITH g AS (
+        SELECT slot_start_utc, MAX(value_num) AS imp
+        FROM energy_slots_15m
+        WHERE series_key = 'grid_import_w'
+          AND source_kind IN ('local_live', 'vrm_import')
+          AND slot_start_utc >= $1 AND slot_start_utc < $2
+          AND value_num IS NOT NULL
+        GROUP BY slot_start_utc
+      ), b AS (
+        SELECT slot_start_utc, MAX(value_num) AS dis
+        FROM energy_slots_15m
+        WHERE series_key = 'battery_discharge_w'
+          AND source_kind IN ('local_live', 'vrm_import')
+          AND slot_start_utc >= $1 AND slot_start_utc < $2
+          AND value_num IS NOT NULL
+        GROUP BY slot_start_utc
+      ), j AS (
+        SELECT g.slot_start_utc, g.imp, b.dis,
+               to_char(g.slot_start_utc AT TIME ZONE $3, 'YYYY-MM') AS ym
+        FROM g LEFT JOIN b USING (slot_start_utc)
+      )
+      SELECT ym,
+             SUM(imp) AS energy_kwh,
+             MAX(imp) AS peak_kwh,
+             (ARRAY_AGG(slot_start_utc ORDER BY imp DESC, slot_start_utc ASC))[1] AS peak_slot,
+             -- Fehlender Akku-Wert zählt als 0 (Untergrenze): sonst läge die Spitze „ohne Akku“ unter der gemessenen,
+             -- wenn gerade die Spitzen-Viertelstunde keinen Akku-Wert hat (Codex Integration 24.11.). Ganz ohne
+             -- Akku-Werte bleibt sie unbekannt.
+             CASE WHEN COUNT(dis) > 0 THEN MAX(imp + COALESCE(dis, 0)) END AS uncapped_kwh,
+             COUNT(*) AS slots,
+             COUNT(dis) AS battery_slots
+      FROM j
+      GROUP BY ym
+      ORDER BY ym
     `;
 
 // Gemessener PV-Peak für die Under-Report-Erkennung (getRecentPvPeakW): je
@@ -254,7 +331,7 @@ export function buildMaterializedEnergySlotWrites(rows, isNewSample = () => true
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const seriesKey = String(row.seriesKey || '').trim();
-    if (!MATERIALIZED_ENERGY_SERIES.has(seriesKey)) continue;
+    if (!isMaterializedEnergySeries(seriesKey)) continue;
 
     let sourceKind = null;
     let writeMode = null;
@@ -598,7 +675,47 @@ function sampleKey(seriesKey, scope, source, quality, tsIso, resolutionSeconds) 
   return `${seriesKey}\u0000${scope}\u0000${source}\u0000${quality}\u0000${tsIso}\u0000${resolutionSeconds}`;
 }
 
+// Fehlt Migration 027 (Tabellen der Datenstufen), so lange nicht erneut fragen.
+const TIERS_MISSING_RETRY_MS = 10 * 60_000;
+
 export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
+  let tiersMissingUntil = 0;
+
+  /**
+   * Datenstufen als Rückfall (23.11.2026): In jedem Raster-Eimer der Antwort
+   * OHNE Rohzeile (Rohwerte gelöscht) die 1-min- bzw. 15-min-Werte. Eimer mit
+   * Rohzeile bekommen nichts dazu — Antworten mit Rohwerten bleiben
+   * unverändert. Fehler (Tabelle fehlt, Attrappe) lassen die Roh-Antwort stehen.
+   * @param {object} o
+   * @param {string[]} o.keys
+   * @param {Map<string, number[]>} o.rawTimesByKey  key → Zeitpunkte der Rohzeilen (ms)
+   * @returns {Promise<Array<{key, tsMs, row, resolution, tier}>>}
+   */
+  async function tierFallback({ keys, rawTimesByKey, startMs, endMs, bucketSec = null, resLimit }) {
+    if (Date.now() < tiersMissingUntil) return [];
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs - startMs < 60_000) return [];
+    try {
+      return await readTierFallback(pool, { keys, rawTimesByKey, startMs, endMs, bucketSec, resLimit });
+    } catch (e) {
+      if (e?.code === '42P01') tiersMissingUntil = Date.now() + TIERS_MISSING_RETRY_MS;
+      return [];
+    }
+  }
+  const tsMsOf = (v) => (v instanceof Date ? v.getTime() : Date.parse(v));
+  // Belegte Spannen der Rohzeilen: [Zeitpunkt, Zeitpunkt + Dauer) — eine
+  // Stunden-Zeile belegt die ganze Stunde (Codex d4f9ddc0).
+  const timesByKey = (rows, keyOf, tsOf, durSecOf) => {
+    const m = new Map();
+    for (const r of rows) {
+      const t = tsMsOf(tsOf(r));
+      if (!Number.isFinite(t)) continue;
+      const k = keyOf(r);
+      if (!m.has(k)) m.set(k, []);
+      const d = Number(durSecOf(r));
+      m.get(k).push([t, t + (Number.isFinite(d) && d > 0 ? d * 1000 : 1)]);
+    }
+    return m;
+  };
   // Reihen, deren series_metadata-Zeile sicher existiert (nach COMMIT gemerkt).
   // Spart den Upsert je Zeile: vorher 1 Abfrage pro Messwert, obwohl die Reihe
   // praktisch immer schon bekannt ist.
@@ -678,6 +795,11 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
           if (idx !== undefined) insertedFlags[idx] = true;
         }
       }
+
+      // Datenstufen: Feinwerte hinter dem Verdichter-Zeiger als Nachzügler
+      // markieren (nur bei alten Zeitstempeln, sonst keine Abfrage; eigener
+      // SAVEPOINT — fehlt die Tabelle, geht kein Messwert verloren).
+      await markTierDirty(client, unique);
 
       // Energie-Slots: je Modus eine Abfrage. buildMaterializedEnergySlotWrites
       // fasst bereits je (Slot, Reihe, Quelle) zusammen — kein Schluessel doppelt.
@@ -926,6 +1048,39 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     return (res.rows || []).map((r) => bucketIso(r.b, DEFAULT_PRICE_BUCKET_SECONDS));
   }
 
+  // T-MPPT-TELEMETRY: materialisierte 15-min-Slots einzelner Reihen (kWh), roh.
+  // Für den pvnode-Export je MPPT: liefert je (Slot, Reihe) genau EINE Quelle
+  // (Reihenfolge sourceKinds), nie ein Mittel aus mehreren. Langzeit-Tier
+  // (energy_slots_15m hält Jahre, der Rohdaten-Tier nur Wochen) — deshalb hier
+  // und nicht über querySeries.
+  async function readMaterializedSeries({ seriesKeys, start, end, sourceKinds = ['local_live', 'vrm_import'] }) {
+    const keys = (Array.isArray(seriesKeys) ? seriesKeys : [seriesKeys]).map((k) => String(k || '').trim()).filter(Boolean);
+    if (!keys.length) return [];
+    const kinds = (Array.isArray(sourceKinds) ? sourceKinds : [sourceKinds]).map((k) => String(k || '').trim()).filter(Boolean);
+    const params = [keys, isoTimestamp(start), isoTimestamp(end)];
+    let kindClause = '';
+    if (kinds.length) {
+      params.push(kinds);
+      kindClause = ` AND source_kind = ANY($${params.length}::text[])`;
+    }
+    const res = await pool.query(`
+      SELECT slot_start_utc, series_key, source_kind, value_num, unit
+      FROM energy_slots_15m
+      WHERE series_key = ANY($1::text[])
+        AND slot_start_utc >= $2 AND slot_start_utc < $3
+        AND value_num IS NOT NULL
+        ${kindClause}
+      ORDER BY slot_start_utc ASC, series_key ASC
+    `, params);
+    return dedupeMaterializedSeries(res.rows.map((r) => ({
+      seriesKey: r.series_key,
+      ts: r.slot_start_utc instanceof Date ? r.slot_start_utc.toISOString() : new Date(r.slot_start_utc).toISOString(),
+      sourceKind: r.source_kind,
+      kWh: Number(r.value_num),
+      unit: r.unit || 'kWh'
+    })), kinds);
+  }
+
   async function listAggregatedEnergySlots({ start, end, bucketSeconds = DEFAULT_PRICE_BUCKET_SECONDS, scopes = null }) {
     const scopeList = Array.isArray(scopes) ? scopes.map((s) => String(s || '').trim()).filter(Boolean) : [];
     const params = [isoTimestamp(start), isoTimestamp(end)];
@@ -1004,6 +1159,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
           gridToBatteryKwh: energyForSeries('grid_to_battery_w'), batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
           batteryToGridKwh: energyForSeries('battery_to_grid_w'),
           ...secondBatteryKwhFields(energyForSeries, rawBucketHasVrmFlows(bucket, bucketSeconds)),
+          batteryFlowsVrm: rawBucketHasVrmFlows(bucket, bucketSeconds, BATTERY_FLOW_SERIES),
           estimated: estimatedSeriesKeys.length > 0, incomplete: incompleteSeriesKeys.length > 0,
           estimatedSeriesCount: estimatedSeriesKeys.length, incompleteSeriesCount: incompleteSeriesKeys.length,
           estimatedSeriesKeys, incompleteSeriesKeys
@@ -1204,7 +1360,8 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       preferredSourceKinds,
       MATERIALIZED_SLOT_FIELDS.map(([, seriesKey]) => seriesKey),
       MATERIALIZED_TRACKED_SERIES,
-      PRIMARY_FLOW_SERIES
+      PRIMARY_FLOW_SERIES,
+      BATTERY_FLOW_SERIES
     ];
 
     const valueColumns = MATERIALIZED_SLOT_FIELDS
@@ -1242,6 +1399,8 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         -- Akku 2 (21.10.2026): kommt eine Hauptreihe ($7) aus dem VRM-Import,
         -- gelten die lokalen Akku-2-Reihen des Slots nicht (siehe PRIMARY_FLOW_SERIES).
         COALESCE(bool_or(rn = 1 AND source_kind = 'vrm_import' AND series_key = ANY($7::text[])), false) AS vrm_selected,
+        -- Akku-Flüsse ($8) aus dem VRM-Import: schon AC-normiert (T13, Codex 013298c7).
+        COALESCE(bool_or(rn = 1 AND source_kind = 'vrm_import' AND series_key = ANY($8::text[])), false) AS battery_vrm,
         array_agg(series_key) FILTER (
           WHERE rn = 1 AND (meta_json::jsonb ->> 'estimated') = 'true'
         ) AS estimated_keys,
@@ -1281,6 +1440,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       for (const [field, seriesKey] of MATERIALIZED_SLOT_FIELDS) {
         slot[field] = Number(row[seriesKey] || 0);
       }
+      slot.batteryFlowsVrm = row.battery_vrm === true;
       if (row.vrm_selected === true) {
         for (const [field] of SECOND_BATTERY_SLOT_FIELDS) slot[field] = 0;
         slot.vrmFlows = true;
@@ -1354,6 +1514,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
           gridToBatteryKwh: energyForSeries('grid_to_battery_w'), batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
           batteryToGridKwh: energyForSeries('battery_to_grid_w'),
           ...secondBatteryKwhFields(energyForSeries, slotFlowsFromVrm(bucket, preferredSourceKinds)),
+          batteryFlowsVrm: slotFlowsFromVrm(bucket, preferredSourceKinds, BATTERY_FLOW_SERIES),
           sourceKind: overallSourceKind, sourceKinds: [...availableSourceKinds].sort(),
           estimated: estimatedSeriesKeys.length > 0, incomplete: incompleteSeriesKeys.length > 0,
           estimatedSeriesCount: estimatedSeriesKeys.length, incompleteSeriesCount: incompleteSeriesKeys.length,
@@ -1460,10 +1621,11 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
   // is interpolated straight into the SQL string (time_bucket cannot take it as
   // a bind parameter alongside a timestamptz column in all PG versions), so it
   // MUST be an exact match against this allow-list — never user input.
-  const BUCKET_INTERVALS = new Set([
-    '5 minutes', '10 minutes', '15 minutes', '30 minutes',
-    '1 hour', '1 day',
-  ]);
+  const BUCKET_INTERVAL_SECONDS = {
+    '5 minutes': 300, '10 minutes': 600, '15 minutes': 900, '30 minutes': 1800,
+    '1 hour': 3600, '1 day': 86400,
+  };
+  const BUCKET_INTERVALS = new Set(Object.keys(BUCKET_INTERVAL_SECONDS));
 
   // queryBucketedSeries — SQL-side downsampled telemetry query.
   //
@@ -1504,13 +1666,30 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     // the rollup tier (>= 900s) per bucket separately, then FULL OUTER JOIN
     // and prefer raw — fall back to the rollup only where raw is absent
     // (e.g. data older than the retained raw window).
-    const result = await pool.query(`
+    //
+    // Datenstufen (23.11.2026): Fehlen die Rohwerte (gelöscht), kommen die
+    // eigenen Werte aus timeseries_samples_15m bzw. _1m (Eimer < 15 min) —
+    // vor dem VRM-Import, denn sie sind die verdichteten Rohwerte. Je Eimer
+    // gilt roh zuerst; nur wenn die Stufe MEHR Zeit abdeckt (Rohwerte des
+    // Eimers teilweise gelöscht, z. B. Tageseimer an der Löschgrenze), gilt
+    // die Stufe. Nur Stufen-Eimer ganz in [start, end) zählen (Codex
+    // e6fed14e: sonst Werte nach end); das Mittel ist wie roh ungewichtet
+    // (value_sum / n_num). Mit vollständigen Rohwerten ist die Abdeckung gleich → roh,
+    // die Antwort bleibt unverändert. Σ(value_avg·covered_s) = Σ(v·res), die
+    // Energie bleibt exakt.
+    // date_bin statt time_bucket: läuft auch ohne TimescaleDB; Ursprung
+    // 2000-01-03 = Standard von time_bucket → dieselben Eimer wie bisher.
+    const bucketExpr = (col) => `date_bin('${bucketInterval}'::interval, ${col}, TIMESTAMPTZ '2000-01-03 00:00:00+00')`;
+    const tierTable = BUCKET_INTERVAL_SECONDS[bucketInterval] < 900 ? TIER_1M_TABLE : TIER_15M_TABLE;
+    const withTier = Date.now() >= tiersMissingUntil;
+    const sql = (tier) => `
       WITH raw AS (
         SELECT series_key,
-               time_bucket('${bucketInterval}', ts_utc) AS bucket_ts,
+               ${bucketExpr('ts_utc')} AS bucket_ts,
                SUM(value_num * COALESCE(resolution_seconds, 0)) AS energy,
                AVG(value_num) AS mean_value,
-               MAX(unit) AS unit
+               MAX(unit) AS unit${tier ? `,
+               SUM(GREATEST(resolution_seconds, 1)) FILTER (WHERE value_num IS NOT NULL AND quality <> 'invalid') AS covered` : ''}
         FROM timeseries_samples
         WHERE series_key IN (${placeholders})
           AND ts_utc >= $${keys.length + 1} AND ts_utc < $${keys.length + 2}
@@ -1519,7 +1698,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       ),
       roll AS (
         SELECT series_key,
-               time_bucket('${bucketInterval}', ts_utc) AS bucket_ts,
+               ${bucketExpr('ts_utc')} AS bucket_ts,
                SUM(value_num * COALESCE(resolution_seconds, 0)) AS energy,
                AVG(value_num) AS mean_value,
                MAX(unit) AS unit
@@ -1528,20 +1707,52 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
           AND ts_utc >= $${keys.length + 1} AND ts_utc < $${keys.length + 2}
           AND COALESCE(resolution_seconds, 0) >= 900
         GROUP BY series_key, bucket_ts
-      )
+      )${tier ? `,
+      tier AS (
+        SELECT series_key,
+               ${bucketExpr('bucket_ts')} AS bucket_ts,
+               SUM(value_avg * covered_s) AS energy,
+               SUM(value_sum) / NULLIF(SUM(n_num), 0) AS mean_value,
+               MAX(unit) AS unit,
+               SUM(covered_s) AS covered
+        FROM ${tierTable}
+        WHERE series_key IN (${placeholders})
+          AND bucket_ts >= $${keys.length + 1} AND bucket_ts < $${keys.length + 2}
+          AND bucket_ts + interval '${tierTable === TIER_1M_TABLE ? 60 : 900} seconds' <= $${keys.length + 2}
+        GROUP BY 1, 2
+      ),
+      own AS (
+        SELECT COALESCE(raw.series_key, tier.series_key) AS series_key,
+               COALESCE(raw.bucket_ts, tier.bucket_ts) AS bucket_ts,
+               CASE WHEN tier.covered > COALESCE(raw.covered, 0) THEN tier.energy ELSE COALESCE(raw.energy, tier.energy) END AS energy,
+               CASE WHEN tier.covered > COALESCE(raw.covered, 0) THEN tier.mean_value ELSE COALESCE(raw.mean_value, tier.mean_value) END AS mean_value,
+               COALESCE(raw.unit, tier.unit) AS unit
+        FROM raw FULL OUTER JOIN tier
+          ON raw.series_key = tier.series_key AND raw.bucket_ts = tier.bucket_ts
+      )` : `,
+      own AS (SELECT series_key, bucket_ts, energy, mean_value, unit FROM raw)`}
       SELECT
-        COALESCE(raw.series_key, roll.series_key) AS series_key,
-        COALESCE(raw.bucket_ts, roll.bucket_ts) AS bucket_ts,
+        COALESCE(own.series_key, roll.series_key) AS series_key,
+        COALESCE(own.bucket_ts, roll.bucket_ts) AS bucket_ts,
         EXTRACT(EPOCH FROM '${bucketInterval}'::interval)::bigint AS bucket_seconds,
-        COALESCE(raw.energy, roll.energy)
+        COALESCE(own.energy, roll.energy)
           / NULLIF(EXTRACT(EPOCH FROM '${bucketInterval}'::interval), 0) AS energy_power_w,
-        COALESCE(raw.mean_value, roll.mean_value) AS mean_value,
-        COALESCE(raw.unit, roll.unit) AS unit
-      FROM raw
+        COALESCE(own.mean_value, roll.mean_value) AS mean_value,
+        COALESCE(own.unit, roll.unit) AS unit
+      FROM own
       FULL OUTER JOIN roll
-        ON raw.series_key = roll.series_key AND raw.bucket_ts = roll.bucket_ts
+        ON own.series_key = roll.series_key AND own.bucket_ts = roll.bucket_ts
       ORDER BY bucket_ts ASC, series_key ASC
-    `, [...keys, isoTimestamp(start), isoTimestamp(end)]);
+    `;
+    const params = [...keys, isoTimestamp(start), isoTimestamp(end)];
+    let result;
+    try {
+      result = await pool.query(sql(withTier), params);
+    } catch (e) {
+      if (!withTier || e?.code !== '42P01') throw e;
+      tiersMissingUntil = Date.now() + TIERS_MISSING_RETRY_MS;   // Migration 027 fehlt
+      result = await pool.query(sql(false), params);
+    }
     return result.rows.map((row) => ({
       key: row.series_key,
       ts: row.bucket_ts instanceof Date ? row.bucket_ts.toISOString() : row.bucket_ts,
@@ -1582,13 +1793,25 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         GROUP BY 1, 2
         ORDER BY 2, 1
       `, [keys, bucketSec, new Date(from).toISOString(), new Date(to).toISOString(), resolutionFilterLimit(bucketSec)]);
-      yield rows.map((row) => ({
+      const out = rows.map((row) => ({
         key: row.series_key,
         ts: row.bucket_ts instanceof Date ? row.bucket_ts.toISOString() : row.bucket_ts,
         value: Number(row.value),
         unit: row.unit,
         resolution: bucketSec,
       }));
+      // Datenstufen: Eimer des Fensters ohne Rohwert aus den 1-min-/15-min-Werten.
+      const fill = await tierFallback({
+        keys, rawTimesByKey: timesByKey(rows, (r) => r.series_key, (r) => r.bucket_ts, () => bucketSec),
+        startMs: from, endMs: to, bucketSec, resLimit: resolutionFilterLimit(bucketSec),
+      });
+      if (fill.length) {
+        for (const f of fill) {
+          out.push({ key: f.key, ts: new Date(f.tsMs).toISOString(), value: Number(tierRowValue(f.row, f.key)), unit: f.row.unit, resolution: f.resolution, tier: f.tier });
+        }
+        out.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts) || String(a.key).localeCompare(String(b.key)));
+      }
+      yield out;
       from = to;
     }
   }
@@ -1639,6 +1862,14 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       const out = result.rows.map((row) => ({
         key: row.series_key, ts: row.ts_utc, value: Number(row.value_num), unit: row.unit, resolution: row.resolution_seconds,
       }));
+      // Datenstufen: Eimer ohne Rohzeile (Rohwerte gelöscht).
+      const fill = await tierFallback({
+        keys, rawTimesByKey: timesByKey(result.rows, (r) => r.series_key, (r) => r.ts_utc, (r) => r.resolution_seconds),
+        startMs: tsMsOf(isoTimestamp(start)), endMs: tsMsOf(isoTimestamp(end)), bucketSec, resLimit: resolutionFilterLimit(maxResolution),
+      });
+      for (const f of fill) {
+        out.push({ key: f.key, ts: new Date(f.tsMs), value: Number(tierRowValue(f.row, f.key)), unit: f.row.unit, resolution: f.resolution, tier: f.tier });
+      }
       // Die Datenbank sortiert schon; für Attrappen/Altstände nachziehen.
       return out.sort((a, b) => Date.parse(isoTimestamp(a.ts)) - Date.parse(isoTimestamp(b.ts)) || String(a.key).localeCompare(String(b.key)));
     }
@@ -1670,7 +1901,18 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         });
       }
     }
-    return rows;
+    // Datenstufen: Minuten ohne Rohzeile (Rohwerte gelöscht). Belegt ist nur,
+    // was die Entdoppelung übrig lässt (Codex b1b1eb6e). Ohne Rückfall bleibt
+    // die Antwort Zeile für Zeile wie bisher.
+    const fill = await tierFallback({
+      keys, rawTimesByKey: timesByKey(rows, (r) => r.key, (r) => r.ts, (r) => r.resolution),
+      startMs: tsMsOf(isoTimestamp(start)), endMs: tsMsOf(isoTimestamp(end)), resLimit: resolutionFilterLimit(maxResolution),
+    });
+    if (!fill.length) return rows;
+    for (const f of fill) {
+      rows.push({ key: f.key, ts: new Date(f.tsMs), value: Number(tierRowValue(f.row, f.key)), unit: f.row.unit, resolution: f.resolution, tier: f.tier });
+    }
+    return rows.sort((a, b) => tsMsOf(a.ts) - tsMsOf(b.ts));
   }
 
   // Geschaetzte Zeilenzahl aus der Statistik statt COUNT(*). Hypertables
@@ -1713,21 +1955,62 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
   // the history battery-loss KPI to read the boundary SoC so the round-trip
   // loss/efficiency can be ΔSoC-corrected (charge carried across the window
   // boundary must not be mistaken for loss). Returns nulls if no samples exist.
+  // Datenstufen (23.11.2026): Liegt die erste Rohzeile mehr als eine Minute
+  // nach start (Rohwerte gelöscht) bzw. fehlt die letzte, kommen Start- und
+  // Endwert aus den 1-min-/15-min-Werten (erster bzw. letzter Wert des Eimers).
   async function getSeriesBoundaryValues({ seriesKey, start, end }) {
     const { rows } = await pool.query(`
-      SELECT
-        (SELECT value_num FROM timeseries_samples
+      SELECT s.value_num AS start_value, s.ts_utc AS start_ts, e.value_num AS end_value, e.ts_utc AS end_ts
+      FROM (SELECT 1) one
+      LEFT JOIN LATERAL (SELECT value_num, ts_utc FROM timeseries_samples
            WHERE series_key = $1 AND ts_utc >= $2 AND ts_utc < $3
-           ORDER BY ts_utc ASC LIMIT 1) AS start_value,
-        (SELECT value_num FROM timeseries_samples
+           ORDER BY ts_utc ASC LIMIT 1) s ON true
+      LEFT JOIN LATERAL (SELECT value_num, ts_utc FROM timeseries_samples
            WHERE series_key = $1 AND ts_utc >= $2 AND ts_utc < $3
-           ORDER BY ts_utc DESC LIMIT 1) AS end_value
+           ORDER BY ts_utc DESC LIMIT 1) e ON true
     `, [seriesKey, isoTimestamp(start), isoTimestamp(end)]);
     const r = rows[0] || {};
-    return {
+    const out = {
       startValue: r.start_value == null ? null : Number(r.start_value),
       endValue: r.end_value == null ? null : Number(r.end_value),
     };
+    const startMs = tsMsOf(isoTimestamp(start));
+    const endMs = tsMsOf(isoTimestamp(end));
+    const firstRaw = r.start_ts == null ? null : tsMsOf(r.start_ts);
+    const lastRaw = r.end_ts == null ? null : tsMsOf(r.end_ts);
+    const needStart = firstRaw == null || firstRaw - startMs >= 60_000;
+    // Endwert: auch mit Rohwert nachsehen, ob die Stufen SPÄTERE Werte haben
+    // (verdichtet + gelöscht, dann ein spät nachgeschriebener Rohwert mittendrin,
+    // Codex 2fe0149f) — sonst wäre der Endwert der des Nachzüglers.
+    const needEnd = lastRaw == null || endMs - lastRaw >= 60_000;
+    if ((!needStart && !needEnd) || Date.now() < tiersMissingUntil) return out;
+    const tierEdge = (dir, untilIso) => `
+      SELECT v, b FROM (
+        (SELECT ${dir === 'ASC' ? 'value_first' : 'value_last'} AS v, bucket_ts AS b FROM ${TIER_1M_TABLE}
+          WHERE series_key = $1 AND bucket_ts >= $2 AND bucket_ts + interval '60 seconds' <= ${untilIso}
+            AND ${dir === 'ASC' ? 'value_first' : 'value_last'} IS NOT NULL
+          ORDER BY bucket_ts ${dir} LIMIT 1)
+        UNION ALL
+        (SELECT ${dir === 'ASC' ? 'value_first' : 'value_last'}, bucket_ts FROM ${TIER_15M_TABLE}
+          WHERE series_key = $1 AND bucket_ts >= $2 AND bucket_ts + interval '900 seconds' <= ${untilIso}
+            AND ${dir === 'ASC' ? 'value_first' : 'value_last'} IS NOT NULL
+          ORDER BY bucket_ts ${dir} LIMIT 1)
+      ) x ORDER BY b ${dir} LIMIT 1`;
+    try {
+      if (needStart) {
+        const until = firstRaw == null ? endMs : firstRaw;
+        const t = (await pool.query(tierEdge('ASC', '$3'), [seriesKey, isoTimestamp(start), new Date(until).toISOString()])).rows?.[0];
+        if (t && t.v != null) out.startValue = Number(t.v);
+      }
+      if (needEnd) {
+        const from = lastRaw == null ? isoTimestamp(start) : new Date(lastRaw + 1).toISOString();
+        const t = (await pool.query(tierEdge('DESC', '$3'), [seriesKey, from, isoTimestamp(end)])).rows?.[0];
+        if (t && t.v != null) out.endValue = Number(t.v);
+      }
+    } catch (e) {
+      if (e?.code === '42P01') tiersMissingUntil = Date.now() + TIERS_MISSING_RETRY_MS;
+    }
+    return out;
   }
 
   /**
@@ -1810,7 +2093,11 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     listMissingPriceBuckets,
     listAggregatedEnergySlots,
     listMaterializedEnergySlots,
+    readMaterializedSeries,
     historySectionFingerprints,
+    // Nachträgliche Änderung an gespeicherten Viertelstunden ab `ts` (T14-Rückfüllung):
+    // den Prüfwert-Speicher verwerfen wie nach writeSamples.
+    noteHistoryRangeChanged(ts) { noteHistoryWrite([{ ts }]); },
     getHistoryCacheEntries,
     putHistoryCacheEntry,
     // Pre-pivot reference implementation, kept only so the SQL pivot can be
@@ -1972,6 +2259,22 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
      * Peak Shaving: höchste Viertelstunden-Bezugsleistung in [start, end).
      * @returns {Promise<{slotStart: string, powerW: number, energyKwh: number}|null>}
      */
+    /**
+     * Peak Shaving P4: Monatswerte (Arbeit, Spitze, Spitze ohne Akku) in [start, end), Monate in Ortszeit.
+     * @returns {Promise<Array<{ym:string, energyKwh:number, peakW:number, peakSlot:string|null, uncappedPeakW:number|null, slots:number, batterySlots:number}>>}
+     */
+    async getPeakBillingMonths({ start, end, timeZone = 'Europe/Berlin' } = {}) {
+      const result = await pool.query(PEAK_BILLING_MONTHS_SQL, [isoTimestamp(start), isoTimestamp(end), String(timeZone || 'Europe/Berlin')]);
+      return (result.rows || []).map((r) => ({
+        ym: String(r.ym),
+        energyKwh: Number(r.energy_kwh) || 0,
+        peakW: Math.round(Number(r.peak_kwh) * 4000),
+        peakSlot: r.peak_slot ? new Date(r.peak_slot).toISOString() : null,
+        uncappedPeakW: r.uncapped_kwh == null ? null : Math.round(Number(r.uncapped_kwh) * 4000),
+        slots: Number(r.slots) || 0,
+        batterySlots: Number(r.battery_slots) || 0
+      }));
+    },
     async getGridImportPeak({ start, end } = {}) {
       const result = await pool.query(GRID_IMPORT_PEAK_SQL, [isoTimestamp(start), isoTimestamp(end)]);
       const row = result.rows?.[0];

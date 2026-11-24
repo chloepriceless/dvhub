@@ -1,0 +1,123 @@
+{
+  "label": "LG ESS Home 8/10 — nur Anzeige",
+  "beta": true,
+  "readOnly": true,
+  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz (LG-Zähler am Netzanschluss), PV (DC gesamt), Akku-Leistung und Ladestand über die SunSpec-Modbus-Schnittstelle (Modbus TCP, Port 6502, Unit-ID 255) und rechnet die Hauslast aus der Energiebilanz. DVhub schreibt nichts an das Gerät und nutzt die HTTPS-Schnittstelle nicht. Adressen, Skalen sowie die Vorzeichen von Netz und Akku stammen aus einer Referenzimplementierung und sind am Gerät noch nicht bestätigt. Anleitung: docs/hersteller/lg-ess-home.md.",
+  "_doc": [
+    "LG ESS Home 8 / Home 10 (Komplettgerät „enblock“: LG-Hybrid-WR + RESU-Hochvoltakku, LG-Zähler am Netzanschluss).",
+    "Home 15 und Home 4/6 vermutlich gleich, ungeprüft. NICHT für einen RESU-Akku an einem fremden Wechselrichter",
+    "(dort gilt das Profil des Wechselrichters).",
+    "NUR LESEN: readOnly erzwingt leere Schreibziele und schaltet die DV-Abregelung ab, auch mit dvControl.enabled in der",
+    "config.json. Beta: erscheint nur im Bleeding-Edge-Kanal, weil es an keinem Gerät getestet ist. Gesteuert wird LG",
+    "ohnehin nur über die lokale HTTPS-API (SoC-Ziel); DVhub nutzt sie nicht.",
+    "",
+    "Quellen (abgerufen 18./19.11.2026): LG veröffentlicht keine Modbus-Registerdoku. [SUNSPEC] SunSpec-Modelle 103",
+    "(Feldlage W/DCW) und 802 (W und A nur „to/from the battery bank“, ohne Vorzeichen) · [DECOMP] Plexlog-Treiber",
+    "LgEssHome8And10ReflectionDriver samt SunSpec-Bibliothek (nur gelesen, kein Code übernommen): Port 6502, Unit 255,",
+    "feste Modellbasen (Common 2, Modell 103 ab 70, Modell 802 ab 238, LG-Zähler ab 302) und feste Skalenfaktoren statt",
+    "der Geräte-SF · [COMM] evcc sunspec-battery-control.yaml (Akku 802:W unverändert bei evcc-Konvention + = Entladen).",
+    "Zusammenfassung: .planning/docs/research/2026-11-15-lgess-modbus-control-spec.md §2 und",
+    "2026-11-18-hersteller-lesend-luecken.md §3.14.",
+    "",
+    "Akku und SoC (Modell 802) — Christins Entscheidung 19.11.2026: aufnehmen, obwohl sie nur aus der Referenz stammen,",
+    "und offen als ungeprüft kennzeichnen. Lage: 802 ab 238 in der SunSpec-Standardlage, SoC Kopf+11 = 249 (U16),",
+    "W Kopf+47 = 285 (I16) [DECOMP]. Stütze: die Basen der Referenz sind genau die aufaddierten Standardlängen",
+    "(Common 2+68 → 103 ab 70, +52 → 111 ab 122, +62 → 120 ab 184, +28 → 123 ab 212, +26 → 802 ab 238, +64 → Zähler ab",
+    "302, der hier schon gelesen wird). Fehlt am Gerät eines dieser Modelle, verschiebt sich alles ab dort.",
+    "Skala fest wie in der Referenz: SoC_SF −1 (0,1 %), W_SF 0 (1 W). Vorzeichen: die Referenz gibt 802 W unverändert",
+    "als Entladeleistung aus (Plexlog-Feld „bat“ = BatteryTotalDischargingPower, + = Entladen, mit demselben Abschlag",
+    "× 0,95 nur auf positive Werte wie dort; Huawei/Sigenergy mit nativem + = Laden dreht Plexlog ausdrücklich um, LG",
+    "nicht), evcc ebenso. Daher Rohwert + = Entladen → sign −1.",
+    "Keine Quelle hat das an einem LG gemessen.",
+    "",
+    "Transport: Modbus TCP Port 6502 (nicht 502), Unit-ID 255, FC 03, High-Wort zuerst [DECOMP]. Modbus muss im",
+    "Installateur-Menü [PCS] freigeschaltet sein [COMM].",
+    "",
+    "Adressen fest statt SunSpec-Scan: (1) der Netzzähler ist kein SunSpec-Standardzähler (20x), sondern ein LG-eigenes",
+    "Modell („Sharing Power Meter Infos“, Länge 20) ohne bekannte Modell-ID — der Scan könnte ihn nicht finden;",
+    "(2) die Referenz liest nur bis Register 323, ob die Kette dort mit 0xFFFF endet, ist unbelegt — ein Scan ohne",
+    "Endzeichen schlüge ganz fehl. Die Adressen folgen der Modellkette der Referenz (SunS ab 0).",
+    "",
+    "Skalenfaktoren: laut Referenz sind die Geräte-SF unzuverlässig; sie werden durch feste Werte ersetzt",
+    "(Modell 103 W_SF/DCW_SF 0, Modell 802 SoC_SF −1/W_SF 0, Zähler ActPower_SF −2). Darum hier feste scale, kein",
+    "sfAddress.",
+    "",
+    "Hauslast: kein Lastregister → Energiebilanz (E6), PV + Bezug − Einspeisung − Akku (+ = Laden). PV und Akku sind",
+    "DC-Werte, das Netz AC: die Wandlerverluste (wenige Prozent der Umsatzleistung) landen in der Hauslast. Ohne",
+    "gültigen Akkuwert bleibt die Hauslast leer (nie mit Akku = 0 W gerechnet).",
+    "",
+    "Bewusst NICHT gelesen bzw. nicht abbildbar:",
+    "- Kopf von 802 (238/239 = 802/62): DVhub prüft die Modellkette nicht (E10); fürs Lesen nur Feldtest-Schritt.",
+    "- Akku-Grenzen (802 WChaRteMax/WDisChaRteMax) und Ladestatus ChaSt: nicht nötig für die Anzeige.",
+    "- „WR-AC + Netz“ (pv_plus_grid) als Hauslast: nimmt die PV-Summe statt der WR-AC-Leistung, passt hier nicht.",
+    "- PV je String: nur DC gesamt bekannt (kein Modell 160 in der Referenz).",
+    "- Gerätekennung „LG ELECTRONICS.“ im Common-Modell: DVhub prüft sie nicht (E10)."
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 6502,
+    "unitId": 255,
+    "timeoutMs": 2000
+  },
+
+  "meter": {
+    "_comment": "Netz am Netzanschluss, LG-Zählermodell ab 302: ActPower (I32) an Register 304–305 [DECOMP]. Skala fest 0,01 W (Referenz ersetzt den Geräte-SF durch −2) [DECOMP]. UNSICHER (am Gerät prüfen): Vorzeichen — keine Quelle nennt es. Annahme Rohwert + = Bezug (SunSpec-Zählerkonvention, wie Fronius), daher kein sign. Zeigt DVhub bei Netzbezug Einspeisung, gehört \"sign\": -1 dazu. 0x80000000 = SunSpec „nicht implementiert“ → kein Wert.",
+    "layout": "point",
+    "fc": 3,
+    "address": 304,
+    "quantity": 2,
+    "readType": "int32",
+    "scale": 0.01,
+    "notAvailableRaw": [2147483648]
+  },
+
+  "points": {
+    "pvPowerW": {
+      "_comment": "PV gesamt (DC), SunSpec-Modell 103 DCW (Kopf+31) an Register 101, Modellbasis 70 [DECOMP], Feldlage [SUNSPEC]; die Referenz liest PV genau hier. I16, 1 W (DCW_SF fest 0) [DECOMP]. Die Referenz gibt DCW als PV-Erzeugung aus, behandelt es also als reine PV [DECOMP]; ob 103 DCW den Akku-Zweig am DC-Bus mitzählt, ist trotzdem unbelegt (am Gerät prüfen: nachts beim Entladen muss PV 0 W zeigen). 0x8000 = SunSpec „nicht implementiert“ → kein Wert.",
+      "enabled": true,
+      "fc": 3,
+      "address": 101,
+      "quantity": 1,
+      "signed": true,
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [32768]
+    },
+    "soc": {
+      "_comment": "Ladestand, SunSpec-Modell 802 SoC (Kopf+11, U16, % von WHRtg) an Register 249, Modellbasis 238 [DECOMP], Feldlage [SUNSPEC]. Skala fest 0,1 % (Referenz ersetzt den Geräte-SF durch −1) [DECOMP]. UNSICHER (am Gerät prüfen): Adresse und Skala nur aus der Referenz, an keinem LG gemessen. Ist der Wert 10-fach zu klein (z. B. 6,5 statt 65 %), liefert das Gerät ganze Prozent: scale 1 statt 0.1. Springt er sinnlos oder steht fest, liegt 802 nicht an 238 (Register 238 muss 802 enthalten). 0xFFFF = SunSpec „nicht implementiert“ → kein Wert.",
+      "enabled": true,
+      "fc": 3,
+      "address": 249,
+      "quantity": 1,
+      "signed": false,
+      "scale": 0.1,
+      "offset": 0,
+      "notAvailableRaw": [65535]
+    },
+    "batteryPowerW": {
+      "_comment": "Akku-Leistung, SunSpec-Modell 802 W (Kopf+47, I16, DC) an Register 285, Modellbasis 238 [DECOMP], Feldlage [SUNSPEC]. Skala fest 1 W (Referenz ersetzt den Geräte-SF durch 0) [DECOMP]. UNSICHER (am Gerät prüfen): Vorzeichen — SunSpec nennt keins. Annahme Rohwert + = Entladen: die Referenz gibt 802 W unverändert als Entladeleistung aus (Huawei/Sigenergy mit + = Laden dreht sie dort um, LG nicht) [DECOMP], evcc liest 802:W unverändert bei evcc-Konvention + = Entladen [COMM]. DVhub erwartet + = Laden, daher sign −1. Zeigt DVhub beim Laden (LG-App: Akku lädt) einen negativen Wert, gehört sign weg. Adresse und Skala ebenfalls nur aus der Referenz. 0x8000 = SunSpec „nicht implementiert“ → kein Wert.",
+      "enabled": true,
+      "fc": 3,
+      "address": 285,
+      "quantity": 1,
+      "signed": true,
+      "sign": -1,
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [32768]
+    },
+    "selfConsumptionW": {
+      "_comment": "Kein Lastregister. Hauslast = PV + Bezug − Einspeisung − Akku (+ = Laden), jeden Takt neu (E6). PV und Akku sind DC-Werte: die Wandlerverluste zählen als Last. Zählt DCW (Register 101) den Akku-Zweig mit, wäre der Akku doppelt abgezogen — siehe Feldtest.",
+      "enabled": false,
+      "derive": "energy_balance"
+    }
+  },
+
+  "controlWrite": {},
+
+  "dvControl": {
+    "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
+    "enabled": false
+  }
+}

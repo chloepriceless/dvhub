@@ -680,6 +680,27 @@
     }
   }
 
+  // Preisprognose dvhub.online (1.0.11) in einem kurzen Wert für Karte/Drawer.
+  function priceOutlookLabel(po) {
+    if (!po) return '—';
+    var dm = function (iso) {
+      var d = iso ? new Date(iso) : null;
+      return d && !isNaN(d.getTime()) ? d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+    };
+    if (po.status === 'live') return 'aktuell · Stand ' + dm(po.issuedAt);
+    if (po.status === 'cached') return 'gespeichert · Stand ' + dm(po.issuedAt);
+    if (po.status === 'unavailable') return 'nicht verfügbar seit ' + dm(po.unavailableSince);
+    if (po.status === 'off') {
+      if (po.reason === 'zone') return 'nur für DE-LU';
+      // Eigener Schalter (1.0.11): bei „Öffentlich“ ab Werk aus, aber einschaltbar.
+      if (po.reason === 'source_public') return 'aus (Preisquelle Öffentlich) — einschaltbar: Einstellungen → EPEX → Preisprognose';
+      if (po.reason === 'switched_off') return 'ausgeschaltet — Einstellungen → EPEX → Preisprognose';
+      return 'aus';
+    }
+    return '—';
+  }
+  if (typeof window !== 'undefined') window.DVhubPriceOutlookLabel = priceOutlookLabel;
+
   function statusLabel(status, data) {
     // A 'warn' caused by an error WAVE (statusReason='errors') maps to 'stale'
     // for the colour bucket, but "Veraltet" is wrong when the feed is still
@@ -769,7 +790,9 @@
           { label: 'Optimizer', value: fmtBool(data.enabled, 'Aktiv', 'Aus') },
           { label: 'Quelle', value: data.primarySource === 'eos' ? 'EOS' : (data.primarySource === 'best' ? 'Best' : 'Intern') },
           { label: 'Steuerung', value: data.active ? 'EOS führt' : 'nicht führend' },
-          { label: 'Proxy', value: data.url ? String(data.url).replace(/^https?:\/\//, '') : '—' }
+          // 1.0.11: Preisprognose für den EOS-Schwanz statt der Proxy-Adresse
+          // (die steht im Drawer).
+          { label: 'Preisprognose', value: priceOutlookLabel(data.priceOutlook) }
         ];
       case 'luox':
         return [
@@ -3954,7 +3977,11 @@
       var out = d.out || {};
       var ctl = out.control || {};
       var cs = document.getElementById('df-control-source');
-      if (cs) cs.textContent = ctl.source ? '(Quelle: ' + ctl.source + (ctl.rule ? ', Regel ' + ctl.rule : '') + (ctl.paused ? ', Not-Halt aktiv' : '') + ')' : '';
+      // R-T3: bei geschlossenem Tor geht „keine Vorgabe“ hinaus — mit Grund.
+      var suspendedText = { not_halt: 'Not-Halt', read_only: 'Lese-Modus', config_unsafe: 'Konfiguration ungültig' };
+      var suspended = !ctl.suspended ? '' : (ctl.suspended === 'not_halt' && ctl.paused ? ' — keine Vorgabe nach außen'
+        : ', keine Vorgabe nach außen: ' + (suspendedText[ctl.suspended] || ctl.suspended));
+      if (cs) cs.textContent = ctl.source ? '(Quelle: ' + ctl.source + (ctl.rule ? ', Regel ' + ctl.rule : '') + (ctl.paused ? ', Not-Halt aktiv' : '') + suspended + ')' : '';
       var tout = document.getElementById('df-out');
       if (tout) {
         var crow = (ctl.rows || []).map(function (r) {
@@ -3962,8 +3989,11 @@
             '</td><td class="num">' + dfSince(r.at) + '</td></tr>';
         });
         var dv = out.dvSignal || {};
+        // Not-Halt/Lese-Modus: das DV-Signal geht nicht hinaus (Christin 19.11.2026) — mit Grund statt „erlaubt“.
+        var dvText = dv.suspended ? 'nicht weitergereicht: ' + (suspendedText[dv.suspended] || dv.suspended)
+          : (dv.forcedOff ? 'Abregelung aktiv' : 'Einspeisung erlaubt');
         crow.push('<tr><td>Direktvermarkter-Signal</td><td class="num">' + (dv.value === null || dv.value === undefined ? '—' : esc(String(dv.value))) +
-          '</td><td>' + (dv.forcedOff ? 'Abregelung aktiv' : 'Einspeisung erlaubt') + '</td><td class="num">—</td></tr>');
+          '</td><td>' + esc(dvText) + '</td><td class="num">—</td></tr>');
         tout.innerHTML = crow.join('');
       }
       var ch = document.getElementById('df-channels');

@@ -1,6 +1,5 @@
 {
-  "label": "Universal (MQTT-Bridge) — Beta",
-  "beta": true,
+  "label": "Universal (MQTT-Bridge)",
   "victron": {
     "transport": "mqtt",
     "mqtt": {

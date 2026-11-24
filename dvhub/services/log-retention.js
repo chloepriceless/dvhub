@@ -43,15 +43,21 @@ export const PORTAL_ERROR_BUCKET_DAYS = 7;
 const TIME_BUDGET_MS = 5 * 60_000;
 
 // Fehler → nach 60 Tagen Episoden.
+// [MQTT]-Meldungen (services/mqtt/index.js logEvent) nur ab Warnung: „[MQTT] Connected to …“ ist Stufe info und
+// lief sonst als Fehler ins Installateurs-Portal (Portal 19.11.).
 export const AUDIT_ERROR_SQL = `(
-  event_type LIKE '%\\_error' OR event_type LIKE '%\\_failed' OR event_type LIKE '[MQTT]%'
+  event_type LIKE '%\\_error' OR event_type LIKE '%\\_failed'
+  OR (event_type LIKE '[MQTT]%' AND severity IN ('warn', 'error', 'critical'))
 )`;
-// Rauschen ohne Fehler → nach 60 Tagen nur noch Tageszähler.
+// Rauschen ohne Fehler → nach 60 Tagen nur noch Tageszähler. Dazu Info-[MQTT]-Meldungen („Connected to …“), seit
+// sie nicht mehr als Fehler zählen (Codex 0752f9c0) — sonst blieben sie ohne Aufbewahrungsregel roh liegen.
+// Kein SQL-Kommentar im Text: die Bausteine werden in andere Abfragen eingesetzt.
 export const AUDIT_NOISE_SQL = `(
   (event_type IN ('control_write', 'control_keepalive', 'control_discharge_floor',
                   'eos_forecast_bridge', 'eos_config_sync', 'eos_new_plan_detected',
                   'eos_grid_hold', 'optimizer_run')
-   OR event_type LIKE '%\\_ok')
+   OR event_type LIKE '%\\_ok'
+   OR event_type LIKE '[MQTT]%')
   AND NOT ${AUDIT_ERROR_SQL}
 )`;
 export const ERROR_EPISODE_GAP = '15 minutes';
@@ -200,8 +206,9 @@ function cutoffs(nowMs, detailDays, aggregateDays) {
  * @param {() => (number|null)} [deps.getErrorAckId]  höchste audit_log.id, die das
  *   Installateur-Portal quittiert hat (null = kein Portal / nichts quittiert)
  */
-export function createLogRetention({ getDb, getCfg, pushLog, getErrorAckId = () => null, now = () => Date.now() } = {}) {
+export function createLogRetention({ getDb, getCfg, pushLog, getErrorAckId = () => null, now = () => Date.now(), getStorageLevel = () => null } = {}) {
   let running = false;
+  let fullSuspended = false;
   const log = (e, d) => { try { pushLog?.(e, d); } catch { /* egal */ } };
 
   async function runOnce() {
@@ -210,8 +217,15 @@ export function createLogRetention({ getDb, getCfg, pushLog, getErrorAckId = () 
     if (!db || typeof db.query !== 'function') return { skipped: 'no database' };
     const cfg = getCfg?.() || {};
     const r = cfg.telemetry?.logRetention || {};
-    // Unsere eigenen Geräte: alles behalten (Einstellungen → Datenbank).
-    if (r.mode === 'full') return { skipped: 'full' };
+    // Unsere eigenen Geräte: alles behalten (Einstellungen → Datenbank). Speicher-
+    // Konzept S5 c (23.11.2026): bei „wenig“/„kritisch“ ruht „Vollständig“ und es
+    // gilt Standard, bis wieder genug Platz ist — die Einstellung bleibt stehen.
+    if (r.mode === 'full') {
+      const lvl = getStorageLevel?.();
+      if (lvl !== 'wenig' && lvl !== 'kritisch') { fullSuspended = false; return { skipped: 'full' }; }
+      if (!fullSuspended) log('log_retention_full_suspended', { storageLevel: lvl });
+      fullSuspended = true;
+    }
     const detailDays = Number(r.detailDays) > 0 ? Number(r.detailDays) : LOG_DETAIL_DAYS;
     const errorDetailDays = Math.max(detailDays, Number(r.errorDetailDays) > 0 ? Number(r.errorDetailDays) : LOG_ERROR_DETAIL_DAYS);
     const aggregateDays = Math.max(detailDays, Number(r.aggregateDays) > 0 ? Number(r.aggregateDays) : LOG_AGGREGATE_DAYS);

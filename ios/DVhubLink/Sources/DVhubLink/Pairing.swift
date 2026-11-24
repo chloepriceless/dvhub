@@ -82,9 +82,15 @@ public struct LinkCredentials: Codable, Equatable, Identifiable {
 }
 
 public struct LinkRoute: Equatable, Sendable {
-    public enum Kind: String, Sendable { case lan, relay }
+    /// `demo`: die eingebaute Beispielanlage — kein Netz, kein Relay (Demo/DemoConnection.swift).
+    public enum Kind: String, Sendable { case lan, relay, demo }
     public let url: URL
     public let kind: Kind
+
+    public init(url: URL, kind: Kind) {
+        self.url = url
+        self.kind = kind
+    }
 }
 
 /// Koppeln: verbindet sich mit dem QR-Geheimnis, wartet auf die Freigabe in

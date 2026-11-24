@@ -5,7 +5,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { performance } from 'node:perf_hooks';
 import { createMqttTransport } from '../transport-mqtt.js';
+
+// A26: die Zwischenspeicher messen Frische monoton — „Zeit vergeht“ heißt hier: Wanduhr UND Laufzeit-Uhr laufen mit.
+const realDateNow = Date.now;
+const realPerfNow = performance.now;
+function setClock(wallMs) {
+  const offset = wallMs - realDateNow();
+  Date.now = () => wallMs;
+  performance.now = () => realPerfNow.call(performance) + offset;
+}
+function restoreClock() { Date.now = realDateNow; performance.now = realPerfNow; }
 
 const msg = (t, topic, value) => t._onMessage(topic, Buffer.from(JSON.stringify({ value })), { retain: false });
 
@@ -34,10 +45,10 @@ test('Venus: veraltete Spannungen (staleMaxAgeMs) → null', () => {
   const realNow = Date.now;
   try {
     msg(t, 'N/p1/grid/40/Ac/L1/Voltage', 238);
-    Date.now = () => realNow() + 5000;
+    setClock(realNow() + 5000);
     assert.equal(t.readGridVoltage(), null);
   } finally {
-    Date.now = realNow;
+    restoreClock();
   }
 });
 
@@ -115,18 +126,18 @@ test('Venus: L1 abgelaufen, L2/L3 senden null → nicht invalidated (null = vera
   const realNow = Date.now;
   try {
     const t0 = realNow();
-    Date.now = () => t0;
+    setClock(t0);
     msg(t, 'N/p1/grid/31/Ac/L1/Voltage', 231);
-    Date.now = () => t0 + 60_000;
+    setClock(t0 + 60_000);
     msg(t, 'N/p1/grid/31/Ac/L2/Voltage', null);
     msg(t, 'N/p1/grid/31/Ac/L3/Voltage', null);
-    Date.now = () => t0 + 91_000;
+    setClock(t0 + 91_000);
     assert.equal(t.readGridVoltage(), null, 'L1 nur abgelaufen, nicht ungültig gemeldet');
     // Meldet danach auch L1 null, hat keine Phase mehr einen Zahlenwert → ungültig.
     msg(t, 'N/p1/grid/31/Ac/L1/Voltage', null);
     assert.equal(t.readGridVoltage().invalidated, true);
   } finally {
-    Date.now = realNow;
+    restoreClock();
   }
 });
 
@@ -155,17 +166,17 @@ test('Venus: Ungültig-Meldung einer Phase zählt auch, wenn die übrigen nur ab
   const realNow = Date.now;
   try {
     const t0 = realNow();
-    Date.now = () => t0;
+    setClock(t0);
     msg(t, 'N/p1/grid/40/Ac/L1/Voltage', 231);
     msg(t, 'N/p1/grid/40/Ac/L3/Voltage', 232);
-    Date.now = () => t0 + 89_000;
+    setClock(t0 + 89_000);
     msg(t, 'N/p1/grid/40/Ac/L2/Voltage', 233);
-    Date.now = () => t0 + 91_000;
+    setClock(t0 + 91_000);
     msg(t, 'N/p1/grid/40/Ac/L2/Voltage', null);
     const g = t.readGridVoltage();
     assert.ok(g, 'nicht einfach null (sonst bleibt der alte Stand)');
     assert.equal(g.invalidated, true);
   } finally {
-    Date.now = realNow;
+    restoreClock();
   }
 });

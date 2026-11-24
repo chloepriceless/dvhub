@@ -32,6 +32,8 @@
 // Factory: createTeslamateSubscriber(hub, ctx) -> { start, close, getState, lastUpdateAt }
 // DI context: { getCfg, pushLog, db, telemetryStore }
 
+import { monoNow, stampMono } from '../mono-clock.js';
+
 // ── Topic-to-field mapping (15 TeslaMate topics from RESEARCH.md) ───
 
 const TOPIC_MAP = {
@@ -200,6 +202,9 @@ export function createTeslamateSubscriber(hub, ctx) {
   // that produced the current value (NOT the time we learned about it -- see seed).
   /** @type {Record<string, Date|null>} */
   const fieldUpdatedAt = Object.create(null);
+  // A26: monotone Empfangszeit je Feld (nur live empfangene, nie aus der Datenbank geseedete) — getFieldUpdatedAt()
+  // heftet sie dem Stempel unsichtbar an, damit die Frische-Prüfung (managed-load) einen Uhrsprung übersteht.
+  const fieldMono = Object.create(null);
 
   // ── Historisation ──
 
@@ -318,6 +323,7 @@ export function createTeslamateSubscriber(hub, ctx) {
           // last published 22 h ago, the restored value has to stay 22 h old so
           // the freshness gate rejects it instead of subtracting phantom load.
           fieldUpdatedAt[cacheKey] = ts;
+          delete fieldMono[cacheKey]; // Zeitpunkt aus einem früheren Prozess: nur Wanduhr
           if (!newestTs || ts > newestTs) newestTs = ts;
         }
       }
@@ -351,7 +357,8 @@ export function createTeslamateSubscriber(hub, ctx) {
     if (!topic.startsWith(prefix)) return;
 
     const field = topic.slice(prefix.length);
-    const mapping = TOPIC_MAP[field];
+    // Nur eigene Schlüssel (A8): …/constructor, …/toString, …/__proto__ träfen sonst den Prototyp (TypeError bei parse).
+    const mapping = Object.hasOwn(TOPIC_MAP, field) ? TOPIC_MAP[field] : null;
     if (!mapping) return; // Unknown topic -- ignore
 
     const raw = payloadBuffer.toString().trim();
@@ -364,6 +371,7 @@ export function createTeslamateSubscriber(hub, ctx) {
       cache[mapping.key] = parsed;
       lastUpdateAt = new Date();
       fieldUpdatedAt[mapping.key] = lastUpdateAt;
+      fieldMono[mapping.key] = monoNow();
       historiseField(mapping.key, parsed);
       return;
     }
@@ -373,6 +381,7 @@ export function createTeslamateSubscriber(hub, ctx) {
     cache[mapping.key] = parsed;
     lastUpdateAt = new Date();
     fieldUpdatedAt[mapping.key] = lastUpdateAt;
+    fieldMono[mapping.key] = monoNow();
     historiseField(mapping.key, parsed);
   }
 
@@ -471,7 +480,9 @@ export function createTeslamateSubscriber(hub, ctx) {
    * that as "not fresh", never as "fresh by default".
    */
   function getFieldUpdatedAt() {
-    return Object.freeze({ ...fieldUpdatedAt });
+    const out = { ...fieldUpdatedAt };
+    for (const k of Object.keys(out)) if (fieldMono[k] != null) stampMono(out, k, { at: fieldMono[k] });
+    return Object.freeze(out);
   }
 
   // Phase 21 (2026-05-23): expose the effective subscription topic so the

@@ -5,6 +5,9 @@ import { configChangeNeedsEosReplan } from '../routes-api.js';
 test('Einstellungen, die den EOS-Plan betreffen, lösen einen Sofort-Lauf aus', () => {
   assert.equal(configChangeNeedsEosReplan(['optimizer.batteryCapacityWh']), true);
   assert.equal(configChangeNeedsEosReplan(['userEnergyPricing.fixedGrossImportCtKwh']), true);
+  // Preisprognose an/aus (1.0.11): Schwanz und Wertgrundlage des E-Autos ändern sich.
+  assert.equal(configChangeNeedsEosReplan(['epex.priceOutlook']), true);
+  assert.equal(configChangeNeedsEosReplan(['epex.timezone']), false);
   assert.equal(configChangeNeedsEosReplan(['optimizer.allowGridCharge']), true);
   assert.equal(configChangeNeedsEosReplan(['wallbox.type']), true);
   assert.equal(configChangeNeedsEosReplan(['optimizer.evTargetValue']), true);

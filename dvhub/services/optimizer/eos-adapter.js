@@ -12,6 +12,7 @@ import { planControlFor, PLAN_MATCH_SLACK_MS, EOS_RUN_TIMEOUT_MS } from './eos-r
 import { createHash } from 'node:crypto';
 import { zoneOffsetMs } from '../../tz-fast.js';
 import { peakShavingThresholdW, detectPlanCapabilities } from './eos-capabilities.js';
+import { deriveTerminalValue } from './terminal-value.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const EOS_DEFAULT_CONFIDENCE = 0.7;
@@ -42,11 +43,14 @@ export function resolveEosProxy(cfg = {}) {
   const p = cfg?.optimizer?.eosProxy || {};
   const timeoutMs = Number(p.timeoutMs);
   const localUrl = p.url || 'http://127.0.0.1:8503';
-  // Fernbetrieb (eos-remote.js) seit 1.0.10 abgeschaltet: immer das EOS unter
-  // optimizer.eosProxy.url, auch wenn eine alte Config noch 'remote' trägt
-  // (config-model.js migriert sie beim Laden). Bis 1.0.9 zeigte 'remote' hier
-  // auf die lokale Fassade (setEosRemoteFacadeUrl, ruht).
-  const mode = 'local';
+  // Betriebsart: 'local' (Python-EOS + Rust-Wheel, Standard) oder 'local-native'
+  // (reiner Rust-Dienst dvhub-optimize, 1.0.11, PLAN rust-1.1 §6.2 E2). Beide
+  // reden dieselbe EOS-HTTP-Schnittstelle unter optimizer.eosProxy.url; der
+  // Betrieb hier (Adapter, Monitor, Run-Trigger, Restarter) ist identisch —
+  // 'local-native' wählt nur, welchen Dienst die Box provisioniert.
+  // Fernbetrieb ('remote') ist seit 1.0.10 weg (config-model.js migriert ihn
+  // beim Laden zu 'local'); ein unbekannter Wert fällt sicher auf 'local'.
+  const mode = p.mode === 'local-native' ? 'local-native' : 'local';
   return {
     enabled: p.enabled === true,
     mode,
@@ -262,8 +266,26 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
           let chunks = '';
           res.on('data', chunk => chunks += chunk);
           res.on('end', () => {
-            if (res.statusCode < 200 || res.statusCode >= 300) {
-              resolve({ ok: false, error: `EOS returned HTTP ${res.statusCode}` });
+            const status = res.statusCode;
+            if (status < 200 || status >= 300) {
+              // Non-2xx: der native EOS-serve liefert bei Datenmangel 503 MIT
+              // JSON-Body {"detail":"no_solution: Missing or invalid PV within
+              // the control horizon…"}. Genau dieser Text ist das Signal für die
+              // Selbstheilung (isRecoverableDataGap, eos-run-trigger.js) — ohne
+              // ihn springt sie nie an. Deshalb den Body an den Fehler hängen
+              // (Format wie eos-forecast-bridge.js / eos-config-sync.js:
+              // `EOS HTTP <status>: <body>`), detail bevorzugt, sonst roher Body,
+              // auf 300 Zeichen gekürzt. status/detail zusätzlich strukturiert.
+              let detail = null;
+              try {
+                const parsed = JSON.parse(chunks);
+                if (typeof parsed?.detail === 'string') detail = parsed.detail;
+              } catch { /* kein JSON — roher Body als Rückfall */ }
+              const body = (detail ?? chunks).slice(0, 300);
+              const error = body
+                ? `EOS returned HTTP ${status}: ${body}`
+                : `EOS returned HTTP ${status}`;
+              resolve({ ok: false, error, status, detail });
               return;
             }
             // Phase 21 hotfix (2026-05-23): EOS' import endpoints reply
@@ -705,6 +727,12 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
         totalRevenuesAmt: numOrNull(sol.total_revenues_amt),
         totalLossesWh: numOrNull(sol.total_losses_energy_wh),
       },
+      // M17: Wert, mit dem EOS die am Planende noch gespeicherte Akku-Energie
+      // bewertet (ct/kWh) — aus EOS' eigenem terminal_value (Terminal-Wert-Kurve
+      // bzw. Gutschrift), nicht aus einer DVhub-Preisannahme. Beantwortet „warum
+      // hält EOS den Akku?". null/available:false, wenn EOS keinen Terminalwert
+      // liefert (z. B. Lösung ohne Akku).
+      terminalValue: deriveTerminalValue(sol.terminal_value),
       rows: allRows.slice(0, previewLimit),
       truncated: allRows.length > previewLimit,
       totalCount: allRows.length,

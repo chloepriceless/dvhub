@@ -16,6 +16,8 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { computeWeights, mergeForecasts, resampleTo15min } from './ensemble.js';
+import { effectivePvKwp } from './effective-pv.js';
+import { planPvProviders } from './pv-provider-setup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PV_FORECAST_SCRIPT = path.join(__dirname, '..', 'python-bridge', 'scripts', 'pv_forecast.py');
@@ -44,7 +46,7 @@ const PVNODE_REFRESH_TICK_MS = 15 * 60 * 1000;
  */
 export function buildPvlibInput(cfg) {
   const fc = cfg.forecast;
-  const pv = fc.pv;
+  const pv = fc.pv || {};
   const loc = fc.location;
 
   // Review 2026-06-10 (P2-2): setHours(0,0,0,0) + toISOString().replace('Z','')
@@ -77,11 +79,13 @@ export function buildPvlibInput(cfg) {
     };
   }
 
+  // Punkt 5: PV am zweiten Sungrow-WR zur Gesamtgröße dazuzählen (simple/standard nutzen totalKwp).
+  const effKwp = effectivePvKwp(cfg, pv.totalKwp) ?? pv.totalKwp;
   if (level === 'standard') {
     // Standard mode: use configured tilt and azimuth
     return {
       ...base,
-      kwp: pv.totalKwp,
+      kwp: effKwp,
       tilt: pv.tiltDeg ?? 35,
       azimuth: pv.azimuthDeg ?? 180,
       strings: []
@@ -91,7 +95,7 @@ export function buildPvlibInput(cfg) {
   // Simple mode (default): use defaults
   return {
     ...base,
-    kwp: pv.totalKwp,
+    kwp: effKwp,
     tilt: 35,
     azimuth: 180,
     strings: []
@@ -293,6 +297,35 @@ export function createPvForecast(ctx, { store, pythonBridge, solcastClient, fore
   // Shared guard: the 6 h full cycle and the 15-min pvnode refresh must never write
   // state.forecast.pv / insert combined rows concurrently (last-writer-wins race).
   let forecastRunning = false;
+  // Christin 19.11.2026: nur eingerichtete Dienste kommen ins Ensemble (pv-provider-setup.js).
+  // lastPlanKey = die Dienste, die der letzte volle Lauf abrufen durfte. Ändert sich die
+  // Einrichtung (Dienst ein-/ausgetragen, Modus gewechselt), rechnet der 15-min-Takt einmal
+  // voll neu — sonst bliebe ein ausgetragener Dienst bis zum nächsten 6-h-Lauf im Ensemble.
+  let lastPlanKey = null;
+  // Protokoll nur bei Änderung der Einrichtung, nicht jeden Lauf (vorher je Lauf und Dienst
+  // ein forecast_solar_skip / open_meteo_solar_skip / pvnode_skip).
+  let lastPlanLogKey = null;
+
+  function currentPlan(cfg) {
+    return planPvProviders(cfg, { pvlibAvailable: Boolean(pythonBridge) });
+  }
+
+  function notePlan(plan) {
+    const key = plan.requestedModel + '|' + plan.fetch.join(',') + '|'
+      + (plan.fallback ? plan.fallback.model + ':' + plan.fallback.reason : '');
+    if (key === lastPlanLogKey) return;
+    lastPlanLogKey = key;
+    const excluded = {};
+    for (const [k, p] of Object.entries(plan.providers)) if (!p.willFetch) excluded[k] = p.reason;
+    pushLog('pv_forecast_providers', { model: plan.requestedModel, active: plan.fetch, excluded });
+    if (plan.fallback) {
+      // „Nur X“ gewählt, X aber nicht eingerichtet: X wird nicht abgerufen; damit die Anlage nicht
+      // ohne PV-Prognose bleibt, rechnet der Lauf wie „Automatisch“ mit den eingerichteten Diensten.
+      pushLog('pv_forecast_model_fallback', {
+        model: plan.fallback.model, reason: plan.fallback.reason, hint: plan.fallback.hint, using: plan.model,
+      }, 'warn');
+    }
+  }
 
   /**
    * Cheap change-signature of a pvnode slot array: length + window start + the
@@ -324,22 +357,38 @@ export function createPvForecast(ctx, { store, pythonBridge, solcastClient, fore
 
   /**
    * Run a PV forecast cycle.
-   * model='solcast': Solcast only.
-   * model='pvlib' / 'both': pvlib as well, when the Python bridge exists.
+   * Which providers are fetched is decided ONLY by planPvProviders (pv-provider-setup.js):
+   * model 'both' = every set-up provider, 'auto' = every set-up provider except pvlib,
+   * 'Nur X' = exactly X (falls back to 'auto' when X is not set up). A provider that is
+   * not set up is never fetched, never weighted and never merged.
    */
   async function runForecast() {
     const cfg = getCfg();
-    const pvCfg = cfg.forecast?.pv;
-    const model = pvCfg?.model || 'auto';
-    const pvlibAvailable = Boolean(pythonBridge);
+    const plan = currentPlan(cfg);
+    notePlan(plan);
+    lastPlanKey = plan.fetch.join(',');
+    const want = new Set(plan.fetch);
+    const model = plan.requestedModel;
 
     let solcastResult = [];
     let pvlibResult = [];
     let forecastSolarResult = [];
     let vrmResult = [];
 
-    // --- VRM Forecast (always try if available — free, already fetched by epex-fetch) ---
-    if (vrmForecast?.isAvailable()) {
+    // Kein Dienst eingerichtet (Codex 78f50e77): die letzte Prognose stammt dann nur noch von
+    // Diensten, die es so nicht mehr gibt — sie darf nicht weiter an EOS gehen. Zurück auf den
+    // Stand einer Anlage ohne PV-Prognosedienst (wie beim Start, index.js) und den Optimierer
+    // einmal benachrichtigen; danach bleibt es still, bis wieder ein Dienst eingerichtet ist.
+    if (want.size === 0) {
+      const pvState = state.forecast?.pv;
+      if (pvState && (pvState.data != null || pvState.model != null || pvState.ensembleWeights != null)) {
+        state.forecast.pv = { lastFetchAt: null, model: null, data: null, confidence: 0.3, ensembleWeights: null };
+        ctx.bumpForecastVersion?.();
+      }
+    }
+
+    // --- VRM Forecast (free, already fetched by epex-fetch — needs the VRM connection set up) ---
+    if (want.has('vrm') && vrmForecast) {
       try {
         vrmResult = await vrmForecast.readPvForecast() || [];
       } catch (err) {
@@ -347,8 +396,8 @@ export function createPvForecast(ctx, { store, pythonBridge, solcastClient, fore
       }
     }
 
-    // --- Forecast.Solar (free, no API key) ---
-    if (model === 'auto' || model === 'forecast_solar' || model === 'both') {
+    // --- Forecast.Solar (free, no API key; needs location + kWp) ---
+    if (want.has('forecast_solar') && forecastSolar) {
       try {
         forecastSolarResult = await forecastSolar.fetchForecast() || [];
       } catch (err) {
@@ -358,7 +407,7 @@ export function createPvForecast(ctx, { store, pythonBridge, solcastClient, fore
 
     // --- Open-Meteo Solar (free, uses existing weather data, no extra API call) ---
     let openMeteoResult = [];
-    if (model === 'auto' || model === 'open_meteo' || model === 'both') {
+    if (want.has('open_meteo') && openMeteoSolar) {
       try {
         openMeteoResult = await openMeteoSolar.generateForecast() || [];
       } catch (err) {
@@ -368,7 +417,7 @@ export function createPvForecast(ctx, { store, pythonBridge, solcastClient, fore
 
     // --- pvnode (needs API key, 15-min resolution) ---
     let pvnodeResult = [];
-    if (model === 'pvnode' || model === 'both' || (model === 'auto' && pvnodeClient?.isConfigured)) {
+    if (want.has('pvnode') && pvnodeClient) {
       try {
         pvnodeResult = await pvnodeClient.fetchForecast() || [];
       } catch (err) {
@@ -376,8 +425,8 @@ export function createPvForecast(ctx, { store, pythonBridge, solcastClient, fore
       }
     }
 
-    // --- Solcast (needs API key) ---
-    if (model === 'solcast' || model === 'both' || (model === 'auto' && cfg.forecast?.solcast?.apiKey)) {
+    // --- Solcast (needs API key + site ID, not switched off) ---
+    if (want.has('solcast') && solcastClient) {
       try {
         solcastResult = await solcastClient.fetchPvForecast() || [];
       } catch (err) {
@@ -386,7 +435,7 @@ export function createPvForecast(ctx, { store, pythonBridge, solcastClient, fore
     }
 
     // --- pvlib (needs the Python bridge) ---
-    if (pvlibAvailable && (model === 'pvlib' || model === 'both')) {
+    if (want.has('pvlib') && pythonBridge) {
       try {
         const input = buildPvlibInput(cfg);
 
@@ -508,11 +557,14 @@ export function createPvForecast(ctx, { store, pythonBridge, solcastClient, fore
     } else if (!stateUpdated && solcastResult.length > 0) {
       // Solcast-only results
       // Plan 09-08 Task 2: single batched INSERT replaces per-slot await loop.
+      // Codex 78f50e77: der echte Client liefert { ts, powerW } (solcast-client.js
+      // parseSolcastResponse) — row.power_w allein war undefined, die NaN-Sperre im Store
+      // machte daraus 0 und überschrieb die richtig gespeicherten Solcast-Werte.
       await store.insertPvForecastBatch(
         solcastResult.map((row) => ({
           model: 'solcast',
-          ts_utc: row.ts,
-          power_w: row.power_w,
+          ts_utc: row.ts ?? row.ts_utc,
+          power_w: row.power_w ?? row.powerW,
           confidence: 0.6
         }))
       );
@@ -591,6 +643,7 @@ export function createPvForecast(ctx, { store, pythonBridge, solcastClient, fore
 
     pushLog('pv_forecast_complete', {
       model,
+      providers: plan.fetch,
       solcastCount: solcastResult.length,
       pvlibCount: pvlibResult.length,
       forecastSolarCount: forecastSolarResult.length,
@@ -639,9 +692,27 @@ export function createPvForecast(ctx, { store, pythonBridge, solcastClient, fore
     if (forecastRunning) return;       // never race the full cycle (or itself)
     if (!lastProviderSlots) return;    // no baseline yet — wait for the first full run
     const cfg = getCfg();
-    const model = cfg.forecast?.pv?.model || 'auto';
-    const pvnodeActive = model === 'pvnode' || model === 'both'
-      || (model === 'auto' && pvnodeClient?.isConfigured);
+    const plan = currentPlan(cfg);
+
+    // Christin 19.11.2026: Einrichtung seit dem letzten vollen Lauf geändert (Dienst ein- oder
+    // ausgetragen, Modus gewechselt) → einmal voll neu rechnen. Ein ausgetragener Dienst steckt
+    // sonst bis zum nächsten 6-h-Lauf in lastProviderSlots und mischt hier weiter mit.
+    if (plan.fetch.join(',') !== lastPlanKey) {
+      forecastRunning = true; // synchronously with the check — no await in between
+      try {
+        pushLog('pv_forecast_setup_changed', {
+          before: lastPlanKey ? lastPlanKey.split(',') : [], after: plan.fetch,
+        });
+        await runForecast();
+      } catch (err) {
+        pushLog('pv_forecast_interval_error', { error: err?.message ?? String(err) });
+      } finally {
+        forecastRunning = false;
+      }
+      return;
+    }
+
+    const pvnodeActive = plan.fetch.includes('pvnode') && !!pvnodeClient;
     if (!pvnodeActive) return;
 
     forecastRunning = true; // set synchronously with the check above — no await between → no race
@@ -658,9 +729,30 @@ export function createPvForecast(ctx, { store, pythonBridge, solcastClient, fore
       const sig = pvnodeSigOf(pvnodeSlots);
       if (sig === lastPvnodeSig) return; // client returned cached/unchanged data → nothing to re-merge
 
-      const providersBySlot = { ...lastProviderSlots, pvnode: pvnodeSlots };
+      // Baseline nur aus Diensten, die jetzt abgerufen werden dürfen (Schutz gegen eine
+      // Einrichtungs-Änderung zwischen Plan-Vergleich und Merge).
+      const allowed = new Set(plan.fetch);
+      const baseline = Object.fromEntries(Object.entries(lastProviderSlots).filter(([k]) => allowed.has(k)));
+      const providersBySlot = { ...baseline, pvnode: pvnodeSlots };
       const present = Object.values(providersBySlot).filter(s => Array.isArray(s) && s.length > 0).length;
-      if (present < 2) { lastPvnodeSig = sig; return; }
+      if (present < 2) {
+        // pvnode allein (z. B. „Nur pvnode“ — dort mischt VRM nicht mehr mit): frische Werte
+        // trotzdem übernehmen, wie der pvnode-only-Zweig in runForecast.
+        await store.insertPvForecastBatch(pvnodeSlots
+          .map((r) => ({ model: 'pvnode', ts_utc: r.ts_utc ?? r.ts ?? null, power_w: r.power_w, confidence: 0.5 }))
+          .filter((r) => r.ts_utc != null));
+        state.forecast.pv = {
+          lastFetchAt: new Date().toISOString(),
+          model: 'pvnode',
+          data: pvnodeResult,
+          confidence: 0.5
+        };
+        lastProviderSlots = providersBySlot;
+        lastPvnodeSig = sig;
+        ctx.bumpForecastVersion?.();
+        pushLog('pvnode_refresh_single', { slots: pvnodeSlots.length });
+        return;
+      }
 
       const { merged, weights } = await mergePvForecastsWeighted({ providersBySlot, store, pushLog });
       if (Array.isArray(merged) && merged.length > 0) {

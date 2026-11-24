@@ -21,6 +21,71 @@
 // damit die Einstellungen zeigen, WAS aktiv ist (price-aware, Marge, Puffer,
 // Wasserfall). Statischer Import ok — reines fs-Lesen, keine DI nötig.
 import { readEosReserveStatus } from '../optimizer/eos-reserve-status.js';
+import { PV_PROVIDERS, PV_PROVIDER_LABELS, planPvProviders } from './pv-provider-setup.js';
+
+/**
+ * Christin 19.11.2026: Stand je PV-Prognosedienst für die Anzeige. Ensemble-Mitglied ist nur, wer im
+ * aktuellen Lauf ein Gewicht hat (ensembleWeights) — nicht jedes Modell mit Zeilen im Fenster (alte
+ * Zeilen früherer Einrichtungen, 'combined').
+ *
+ * status:
+ *   member           im Ensemble (weight = Anteil)
+ *   leaving          noch im Ensemble des letzten Laufs, aber nicht mehr eingerichtet → fällt beim
+ *                    nächsten Lauf heraus (spätestens nach 15 min, pv-forecast.js refreshPvnodeOnly)
+ *   single           einzige Quelle, kein Ensemble (z. B. „Nur Solcast“ oder nur ein Dienst liefert)
+ *   not_configured   eigene Einstellungen fehlen (hint sagt welche)
+ *   not_applicable   eingerichtet, für diese Anlage nicht verwendbar (Forecast.Solar bei Mehrflächen)
+ *   excluded_by_mode eingerichtet, aber die gewählte PV-Prognose-Quelle nimmt ihn nicht
+ *   no_data          eingerichtet und abgerufen, liefert gerade keine Daten
+ *   waiting          eingerichtet, hat Daten, war im letzten Lauf aber nicht dabei
+ */
+export function pvProviderStatus({ plan, ensembleWeights, providers, activeModel }) {
+  const weights = ensembleWeights && typeof ensembleWeights === 'object' ? ensembleWeights : null;
+  const members = weights
+    ? Object.keys(weights).filter((k) => k !== 'combined' && Number.isFinite(Number(weights[k])) && Number(weights[k]) > 0)
+    : [];
+  const out = {};
+  for (const k of PV_PROVIDERS) {
+    const p = plan?.providers?.[k] || null;
+    const inEnsemble = members.includes(k);
+    const hasRows = Array.isArray(providers?.[k]) && providers[k].length > 0;
+    const eligible = p ? p.eligible === true : null;
+    let status;
+    let reason = p ? p.reason : null;
+    let hint = p ? p.hint : null;
+    if (inEnsemble && eligible !== false) {
+      status = 'member'; reason = null; hint = null;
+    } else if (inEnsemble) {
+      status = 'leaving';
+      hint = 'noch im Ensemble des letzten Laufs, fällt beim nächsten Lauf heraus' + (hint ? ' — ' + hint : '');
+    } else if (p && !p.configured) {
+      status = 'not_configured';
+    } else if (p && !p.eligible) {
+      status = 'not_applicable';
+    } else if (p && !p.selected) {
+      status = 'excluded_by_mode';
+    } else if (!weights && activeModel === k && hasRows) {
+      status = 'single'; reason = null; hint = 'einzige Quelle — kein Ensemble';
+    } else if (!hasRows) {
+      status = 'no_data'; reason = 'no_data'; hint = 'liefert gerade keine Daten';
+    } else {
+      status = 'waiting'; reason = 'not_in_last_run'; hint = 'war im letzten Prognose-Lauf nicht dabei';
+    }
+    out[k] = {
+      label: PV_PROVIDER_LABELS[k] || k,
+      status,
+      inEnsemble,
+      weight: inEnsemble ? Number(weights[k]) : null,
+      configured: p ? p.configured : null,
+      eligible,
+      selected: p ? p.selected : null,
+      hasRows,
+      reason,
+      hint,
+    };
+  }
+  return { members, status: out };
+}
 
 export function createInspector(ctx, deps = {}) {
   const pushLog = ctx && typeof ctx.pushLog === 'function' ? ctx.pushLog : () => {};
@@ -108,25 +173,52 @@ export function createInspector(ctx, deps = {}) {
     // means the AVERAGE power across that whole hour. Now every hour's value
     // is copied to its 4 child 15-min slots so the UI shows a flat run of
     // identical values per hour — matches the data's actual semantics.
-    // Per-provider, detect the resolution (gap between first two slots) and
-    // skip forward-fill for providers already at 15-min granularity (solcast
-    // 30-min stays as-is because forward-filling only by 2x sub-slots is fine).
+    //
+    // M13b (Feld 16.11.): the native resolution MUST come from the typical
+    // (MEDIAN) gap, not the gap between the first two slots. forecast_solar's
+    // stored rows are daylight-only, so the first gap can be a huge night span
+    // (e.g. a leading 00:00 zero-slot → sunrise ≈ 7 h). The old code then derived
+    // subSlots = round(7h/15min) = 28 and replicated EVERY daytime hour 28× →
+    // the per-provider energy sum the Leitstand integrates (power_w × Δt) blew up
+    // to ~7–18× reality (227,8 kWh at a correct 2,6 kW peak). Median gap is robust
+    // against those leading/trailing outliers, and the subSlots cap (≤ 4 = 1 h)
+    // plus the per-slot bound (never fill past the real next slot) keep a daytime
+    // value from ever smearing across a gap. Skip fill for ≤15-min providers.
     const QUARTER_MS = 15 * 60 * 1000;
     const resolutionByProvider = {};
     for (const m of Object.keys(providers)) {
       const slots = providers[m];
       if (slots.length < 2) continue;
-      const t0 = Date.parse(slots[0].ts_utc);
-      const t1 = Date.parse(slots[1].ts_utc);
-      if (!Number.isFinite(t0) || !Number.isFinite(t1)) continue;
-      const gap = t1 - t0;
-      resolutionByProvider[m] = gap;
-      if (gap <= QUARTER_MS) continue; // already 15-min, no fill needed
+      // Consecutive gaps → median as the native resolution (outlier-robust).
+      const gaps = [];
+      for (let i = 1; i < slots.length; i++) {
+        const a = Date.parse(slots[i - 1].ts_utc);
+        const b = Date.parse(slots[i].ts_utc);
+        if (Number.isFinite(a) && Number.isFinite(b) && b > a) gaps.push(b - a);
+      }
+      if (gaps.length === 0) continue;
+      gaps.sort((x, y) => x - y);
+      const medianGap = gaps[Math.floor(gaps.length / 2)];
+      resolutionByProvider[m] = medianGap;
+      if (medianGap <= QUARTER_MS) continue; // already ≤15-min, no fill needed
+      // 2 for 30-min, 4 for 1h; capped at 4 so a coarse/outlier gap can never
+      // explode the fill (the root of the M13b over-count).
+      const subSlots = Math.min(4, Math.max(1, Math.round(medianGap / QUARTER_MS)));
       const filled = [];
-      const subSlots = Math.round(gap / QUARTER_MS); // 2 for 30-min, 4 for 1h
-      for (const s of slots) {
+      for (let i = 0; i < slots.length; i++) {
+        const s = slots[i];
         const baseTs = Date.parse(s.ts_utc);
-        for (let q = 0; q < subSlots; q++) {
+        if (!Number.isFinite(baseTs)) { filled.push(s); continue; }
+        // Never fill past the real next slot: bound the per-slot sub-slot count
+        // by the actual gap so a value is never smeared across a large (night) gap.
+        let thisSub = subSlots;
+        if (i < slots.length - 1) {
+          const nextTs = Date.parse(slots[i + 1].ts_utc);
+          if (Number.isFinite(nextTs) && nextTs > baseTs) {
+            thisSub = Math.min(subSlots, Math.max(1, Math.round((nextTs - baseTs) / QUARTER_MS)));
+          }
+        }
+        for (let q = 0; q < thisSub; q++) {
           filled.push({
             ts_utc: new Date(baseTs + q * QUARTER_MS).toISOString(),
             power_w: s.power_w,
@@ -159,14 +251,35 @@ export function createInspector(ctx, deps = {}) {
       }
     }
 
+    // Christin 19.11.2026: Einrichtung + Ensemble-Mitgliedschaft je Dienst. Dieselbe Regel wie der
+    // Prognose-Lauf (forecastService.pvProviderPlan); ohne Forecast-Dienst (Tests) aus der Config.
+    let plan = null;
+    try {
+      plan = (forecastService && typeof forecastService.pvProviderPlan === 'function')
+        ? forecastService.pvProviderPlan()
+        : planPvProviders(getCfg() || {}, { pvlibAvailable: !!(state && state.forecast && state.forecast.pythonAvailable) });
+    } catch (e) {
+      pushLog('inspector_pv_provider_plan_error', { error: e && e.message ? e.message : String(e) });
+    }
+    const activeModel = state && state.forecast && state.forecast.pv ? (state.forecast.pv.model || null) : null;
+    const { members, status: providerStatus } = pvProviderStatus({ plan, ensembleWeights, providers, activeModel });
+
     return {
       window: { from, to },
       providers,
       ensembleWeights,
       ensembleActive: !!ensembleWeights,
+      // Neu (19.11.2026), nur ergänzt: wer im aktuellen Ensemble ist, Stand je Dienst, gewählter Modus.
+      ensembleMembers: members,
+      providerStatus,
+      activeModel,
+      pvModel: plan ? plan.requestedModel : null,
+      modelFallback: plan ? plan.fallback : null,
       oldestFetchedAt,
       resolutionMinByProvider,
-      meta: { rowCount: rows.length, modelCount: Object.keys(providers).length },
+      // modelCount zählt weiter alle Modelle mit Zeilen (auch 'combined', alte Zeilen) — für die
+      // Anzeige „N Modelle“ gilt ensembleMemberCount.
+      meta: { rowCount: rows.length, modelCount: Object.keys(providers).length, ensembleMemberCount: members.length },
     };
   }
 
@@ -469,10 +582,16 @@ export function createInspector(ctx, deps = {}) {
     // fail with HTTP 404 right after isAvailable returned true, surface this
     // as the more actionable reason 'eos_not_configured' so the UI can render
     // a helpful banner instead of a raw HTTP code.
+    // Seit der Adapter den Antwort-Body an den Fehler hängt (`EOS returned
+    // HTTP <status>: <body>`), darf hier nicht mehr auf ein nacktes '404' im
+    // String geprüft werden: ein fremder Body mit „404" (z. B. 503 + Text)
+    // würde sonst fälschlich als „nicht konfiguriert" gewertet. Nur der echte
+    // HTTP-404-Statuscode zählt.
+    const HTTP_404 = /HTTP 404\b/;
     const looksNotConfigured =
       !pushOk && !pullOk &&
-      typeof pushError === 'string' && pushError.includes('404') &&
-      (pullError === null || (typeof pullError === 'string' && pullError.includes('404')));
+      typeof pushError === 'string' && HTTP_404.test(pushError) &&
+      (pullError === null || (typeof pullError === 'string' && HTTP_404.test(pullError)));
 
     // Phase 21 (2026-05-24): expose the operator-side grid-charge consent so
     // the inspector UI can gate "EOS empfiehlt Netzbezug" recommendations.

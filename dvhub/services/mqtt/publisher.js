@@ -8,7 +8,7 @@
 //
 // DI: hub (MQTT Hub from index.js), ctx (full DI context with state, getCfg, pushLog)
 
-import { buildControlSnapshot, CONTROL_KEYS, CONTROL_TOPIC_SUFFIX, buildGridLimitSnapshot, GRID_LIMIT_TOPIC } from '../control-snapshot.js';
+import { createPickupSink } from '../gate/pickup.js';
 import { buildOptimizerPlan } from '../optimizer-plan.js';
 
 /**
@@ -18,6 +18,9 @@ import { buildOptimizerPlan } from '../optimizer-plan.js';
  */
 export function createMqttPublisher(hub, ctx) {
   const { state, getCfg, pushLog } = ctx;
+  // Steuer-Topics control/* und control/grid_limit/* gehen über die Abholsenke hinter dem Schreibtor (R-T3,
+  // services/gate/pickup.js): das Tor des Prozesses (ctx.gate) entscheidet bei jeder Runde, ob eine Vorgabe hinausgeht.
+  const pickup = createPickupSink({ state, getCfg, getGate: () => ctx.gate });
 
   let timer = null;
   let lastTopicCount = 0;
@@ -150,24 +153,13 @@ export function createMqttPublisher(hub, ctx) {
     // Control (2026-09-14): die aktiven Sollwerte transparent spiegeln, damit
     // ein HA-Akku / Loxone daran hängen kann. null = unbekannt (nie 0
     // erfinden). Schema: docs/MQTT-SCHEMA.md. Victron-spezifische Register
-    // (feedExcessDcPv) bewusst nicht dabei.
-    const control = buildControlSnapshot(state);
-    for (const key of CONTROL_KEYS) pub(CONTROL_TOPIC_SUFFIX[key], control.values[key].value);
-    pub('control/source', control.source);
-    pub('control/rule', control.rule);
-    pub('control/updated_at', control.updatedAt);
-    pub('control/paused', control.paused);
-    pub('control/state', control.values);
-
-    // Netzbetreiber-Grenzen (§14a / EEBUS-Steuerbox), damit auch Geräte ohne
-    // EEBUS ihnen folgen können. null = keine Grenze.
-    const gridLimit = buildGridLimitSnapshot(state);
-    pub(GRID_LIMIT_TOPIC.active, gridLimit.active);
-    pub(GRID_LIMIT_TOPIC.source, gridLimit.source);
-    pub(GRID_LIMIT_TOPIC.consumptionW, gridLimit.consumptionW);
-    pub(GRID_LIMIT_TOPIC.productionW, gridLimit.productionW);
-    pub(GRID_LIMIT_TOPIC.productionBlocked, gridLimit.productionBlocked);
-    pub(GRID_LIMIT_TOPIC.state, gridLimit);
+    // (feedExcessDcPv) bewusst nicht dabei. Dazu die Netzbetreiber-Grenzen
+    // (§14a / EEBUS-Steuerbox), damit auch Geräte ohne EEBUS ihnen folgen
+    // können (null = keine Grenze). Beides publiziert die Abholsenke hinter dem
+    // Tor (R-T3): im Not-Halt und im Lese-Modus steht dort „keine Vorgabe“, bei
+    // ungültiger Konfiguration nur für die Sollwerte — Topics, Reihenfolge und
+    // Kodierung wie bisher.
+    pickup.publishMirror(hub, prefix, topics);
 
     // E-Auto (2026-09-26): Rücklesung der steuerbaren EV-Felder, damit die
     // bidirektionalen HA-Entitäten (ev/*) ihren echten Zustand zeigen. Quelle:

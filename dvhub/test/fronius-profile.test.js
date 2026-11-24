@@ -327,7 +327,7 @@ test('Vinzent82-Anti-Regression: Abregelung fährt den Akku (Force-Charge), NIE 
 // Vorzeichen wie Victron: positiv = Laden. DCW_SF kommt zur Laufzeit aus dem
 // Block-Read. Freshness-Stempel Pflicht (T-0075-Floor keyt auf batteryPowerW).
 
-function buildGen24ImageWithM160({ chargeDcw = 0, dischargeDcw = 0, sf = 0, n = 4 } = {}) {
+function buildGen24ImageWithM160({ chargeDcw = 0, dischargeDcw = 0, sf = 0, n = 4, pv1Dcw = 0, pv2Dcw = 0 } = {}) {
   const image = new Map();
   const put = (addr, words) => words.forEach((w, i) => image.set(addr + i, w & 0xffff));
   put(40000, [0x5375, 0x6e53]);
@@ -339,8 +339,13 @@ function buildGen24ImageWithM160({ chargeDcw = 0, dischargeDcw = 0, sf = 0, n = 
       const d = cursor + 2; // Datenbereich
       put(d + 2, [sf & 0xffff]);            // DCW_SF
       put(d + 6, [n]);                      // Anzahl Module
-      put(d + 8 + 2 * 20 + 3, [chargeDcw & 0xffff]);    // Modul 3 DCW (Laden)
-      put(d + 8 + 3 * 20 + 3, [dischargeDcw & 0xffff]); // Modul 4 DCW (Entladen)
+      // DCW liegt spec-konform am Modul-Relativ-Offset +11 (nicht +3 — das war
+      // der alte Offset-Bug, der mitten im IDStr las). Modul 1/2 = PV-Strings,
+      // 3 = Laden, 4 = Entladen.
+      put(d + 8 + 0 * 20 + 11, [pv1Dcw & 0xffff]);       // Modul 1 DCW (PV-String)
+      put(d + 8 + 1 * 20 + 11, [pv2Dcw & 0xffff]);       // Modul 2 DCW (PV-String)
+      put(d + 8 + 2 * 20 + 11, [chargeDcw & 0xffff]);    // Modul 3 DCW (Laden)
+      put(d + 8 + 3 * 20 + 11, [dischargeDcw & 0xffff]); // Modul 4 DCW (Entladen)
     }
     cursor += 2 + len;
   }
@@ -398,6 +403,46 @@ test('M160-Derive: zu wenige Module (n=2) → Wert bleibt unangetastet', async (
   assert.equal(state.victron.fieldUpdatedAt.batteryPowerW, undefined, 'keine Frische ohne Wert');
 });
 
+// T-MPPT-TELEMETRY: Per-MPPT-Logging aus demselben M160-Block. Module 1/2 = PV-
+// Strings, 3/4 = Akku (excludeModules) → nur die PV-Strings landen in victron.mppt.
+test('M160-MPPT: PV-Strings 1/2 werden als victron.mppt gelesen, Akku-Module 3/4 ausgenommen', async () => {
+  const state = await pollWithM160({ pv1Dcw: 3000, pv2Dcw: 1500, chargeDcw: 2200, dischargeDcw: 0 });
+  assert.ok(Array.isArray(state.victron.mppt), 'mppt-Array gesetzt');
+  assert.deepEqual(state.victron.mppt.map((m) => m.n), [1, 2]);
+  assert.equal(state.victron.mppt[0].w, 3000);
+  assert.equal(state.victron.mppt[1].w, 1500);
+  // logExtras aus (Profil-Default) → keine V/A/Wh-Zusatzreihen.
+  assert.equal(state.victron.mppt[0].v, null);
+  assert.equal(state.victron.mppt[0].a, null);
+  // Akku-Derive unberuehrt daneben: Modul 3 − 4 = 2200 (positiv = Laden).
+  assert.equal(state.victron.batteryPowerW, 2200);
+});
+
+test('M160-MPPT: logExtras=true liefert DCV/DCA zusaetzlich', async () => {
+  const loaded = loadFroniusEffectiveConfig();
+  const cfg = loaded.effectiveConfig;
+  cfg.pollMs = 500;
+  cfg.epex = { timezone: 'UTC' };
+  cfg.userEnergyPricing = {};
+  cfg.points.mppt.logExtras = true;
+  const state = {
+    meter: { ok: false, updatedAt: 0, raw: [], grid_l1_w: 0, grid_l2_w: 0, grid_l3_w: 0, grid_total_w: 0, error: null },
+    victron: { errors: {}, updatedAt: 0, fieldUpdatedAt: {} },
+    ctrl: {}, dvRegs: new Array(8).fill(0),
+    energy: { day: '2026-07-19', importWh: 0, exportWh: 0, costEur: 0, revenueEur: 0, lastTs: 0 }
+  };
+  const transport = makeMockTransport(buildGen24ImageWithM160({ pv1Dcw: 3000 }));
+  const poller = createPoller({
+    state, getCfg: () => cfg, transport, pushLog: () => {},
+    energyPath: path.join(os.tmpdir(), `fronius-mppt-extras-${Math.random().toString(36).slice(2)}.json`),
+    onPollComplete: () => {}, epexNowNext: () => ({ current: { ct_kwh: 0 } })
+  });
+  await poller.requestPoll();
+  const m1 = state.victron.mppt.find((m) => m.n === 1);
+  assert.equal(m1.w, 3000);
+  assert.equal(m1.v, 0); // DCV-Register im Fixture 0, aber NICHT null → Zusatzreihe aktiv
+});
+
 // Gegenprüfung 4cf16a5a (P3): Fällt die M160-Ableitung nach einem gültigen Wert
 // aus, steht ein Lesefehler — sonst liefe der alte Wert bis zur Frische-Frist weiter.
 test('M160-Derive: Ausfall nach gültigem Wert setzt errors.batteryPowerW, Erfolg löscht ihn', async () => {
@@ -422,7 +467,8 @@ test('M160-Derive: Ausfall nach gültigem Wert setzt errors.batteryPowerW, Erfol
   await poller.requestPoll();
   assert.equal(state.victron.batteryPowerW, -500);
   assert.equal(state.victron.errors.batteryPowerW, undefined);
-  for (const [k, v] of buildGen24ImageWithM160({ chargeDcw: 0x8000, dischargeDcw: 500 })) image.set(k, v);
+  // „nicht implementiert“: DCW ist uint16 → 0xFFFF (Codex Integration 24.11.).
+  for (const [k, v] of buildGen24ImageWithM160({ chargeDcw: 0xffff, dischargeDcw: 500 })) image.set(k, v);
   await poller.requestPoll();
   assert.ok(state.victron.errors.batteryPowerW, 'Ausfall der Ableitung ist ein Lesefehler');
   for (const [k, v] of buildGen24ImageWithM160({ chargeDcw: 0, dischargeDcw: 400 })) image.set(k, v);

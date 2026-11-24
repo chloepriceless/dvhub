@@ -100,6 +100,41 @@ Betreiber die Frist, gilt für die Erkennung eines Hängers die im Gerät zuletz
 das merkt sich DVhub in `sungrow_ems_state.json` im Datenordner (übersteht Neustarts). Fremdes Modus 3/4 wird nie
 überschrieben, auch nicht im Not-Halt.
 
+**Gefundener Modus 2 (H-9, Christin 17./20.11.2026):** Modus 2 ist nie fremd. Findet DVhub bei Forced-Steuerung einen
+Modus 2, den es nicht besitzt (anderes System, verlorener Merker), übernimmt es ihn und fährt ihn als eigenen weiter.
+Der Besitz entsteht durch DVhubs ersten Write: der eigene Befehl (13051), bei Laden/Entladen auch die Leistung
+(13052), auch wenn das Gerät schon dasselbe zeigt. Ein unbekannter Gerätewert läuft so nie unter DVhubs Besitz
+weiter. 13050 bleibt 2; 13058/13059 und 33047/33048 schreibt DVhub nie. Am Slave gilt dasselbe (ein Write mit DVhubs
+Befehl, bevor DVhub ihn als eigenen führt). Führt DVhub den Slave gerade nicht (Strategie „nur Master“, Slave-Fehler,
+Slave-Werte fehlen), setzt es einen Slave mit fremdem Befehl vor der Übernahme des Masters auf Stopp; ohne Bestätigung
+übernimmt es den Master in diesem Takt nicht (nächster Takt versucht es neu). Ein Slave in Notladung (Betriebszustand
+am Slave gelesen) wird nie kommandiert; führt DVhub ihn danach nicht wieder („nur Master“, keine Slave-Werte), wartet
+die Übernahme bis nach der Notladung. Protokoll:
+`sungrow_ems_forced_adopted`. Im Not-Halt wird nichts
+übernommen; ein übernommener Modus 2 wird beim Not-Halt wie jeder eigene einmal zurückgenommen. Ist der Modus 2
+ungewollt, hilft „Sungrow freigeben“ (auch im Not-Halt). Bei External-Steuerung verlässt DVhub einen gefundenen
+Modus 2 wie bisher mit bekannten Writes (Rückgabe in Modus 0 bzw. Eintritt in Modus 3).
+
+**Knopf „Sungrow freigeben“** (WR-Kachel, `POST /api/sungrow/release`, auch im Not-Halt): Stopp (0xCC) erst an den
+Slave, dann an den Master, danach Master in Modus 0, zurücklesen. Die Steuerung gibt DVhub erst ab, wenn es Stopp und
+Modus 0 zurückliest. Scheitert das (Zeitüberschreitung, nur halb angekommen), bleibt die Freigabe als Auftrag stehen:
+der Betrieb bleibt DVhubs (Merker, Not-Halt, Beenden, Stopp-Skript und Box-Watchdog greifen weiter), DVhub regelt bis
+zur Bestätigung nicht und wiederholt dieselbe Abfolge im Regeltakt — nach drei Fehlschlägen in Folge alle 5 Minuten,
+wie die Freigabe nach einer Abregelung; ein erneuter Knopfdruck versucht es sofort. Antwortet der Wechselrichter mit
+einer Modbus-Ausnahme, steht der Wert aber, zählt der Schritt als erledigt. Kachel und Protokoll
+(`sungrow_ems_manual_release`, `sungrow_ems_release_retry`, `sungrow_ems_release_done`) zeigen „Freigabe gescheitert,
+wird wiederholt“ bzw. „Freigabe erledigt“. Einen Modus, den nicht DVhub gesetzt hat, gibt der Knopf einmal frei,
+wiederholt wird dann nicht.
+
+Vor jeder automatischen Wiederholung liest DVhub den Wechselrichter neu. Hat inzwischen ein anderes System übernommen
+(VPP, fremdes EMS; für den Slave zählt auch der Master, dem er folgt) oder hat der Not-Halt einen fremden Modus erkannt,
+wird die Freigabe verworfen („Freigabe verworfen“, `sungrow_ems_release_abandoned`) und nichts geschrieben, auch im
+Not-Halt nicht. Nicht lesbar → kein Write, zählt als Fehlschlag. Steht der Wechselrichter schon in Modus 0 mit Stopp,
+ist die Freigabe ohne Write erledigt. Der Hinweis in der Kachel gehört zur letzten Anfrage (`requestedAt` in Status und
+API-Antwort). Ohne Schreibweg (Herstellerprofil ungültig, keine Sungrow-Steuerung) antwortet die API mit HTTP 409,
+`ok: false`, `sent: false` und dem Grund — die Kachel zeigt „Nicht gesendet“. Eine ausstehende Freigabe bleibt dabei
+stehen; solange der Schreibweg fehlt, meldet der Status sie mit `sent: false` und Grund statt „wird wiederholt“.
+
 ## Eigenverbrauch und Regelgüte
 
 Im External EMS regelt der Wechselrichter den Eigenverbrauch nicht mehr selbst, und eine Netz-Zielleistung, die er
@@ -162,6 +197,104 @@ SoC-Boden); erst dieser Wert geht an den Sungrow-Aktuator, der daraus Akku-Leist
 | SoC-Boden | Entladung → 0 W → Self-consumption | vor jedem Write | exakt |
 | Not-Halt | einmal Stopp + Modus 0, dann nichts (auch kein Herzschlag) | eigener Betrieb nur; fremdes EMS nie | exakt |
 | E-Auto / Geräte | eigene Stellglieder, Sungrow nicht berührt | ihre Last zieht der Regler im nächsten Takt mit | näherungsweise |
+
+## Protokoll: Modbus-Fehler
+
+Jeder Modbus-Fehler wird eine Zeile `sungrow_modbus_error` mit `wr` (master/slave), `source` (poll/ems, beim Master
+beides gemeinsam), `kind` (exception, refused, timeout, reset, unreachable, other), `code` (z. B. 4 oder
+ECONNREFUSED), `fc`, `address` (Draht), `register` (Doku = Draht + 1), Menge/Wert und Meldung — ohne LAN-Adresse.
+Im 60-s-Fenster steht nur der erste Fehler einzeln da, der Rest als `sungrow_modbus_error_summary` („12 Fehler in
+60 s, Master, ECONNREFUSED“). Hält die Störung an, verdoppelt sich das Fenster bis 15 min. Die Kachel zeigt nur
+Zähler und letzten Fehler. `sungrow_ems_split_aborted` und `sungrow_ems_split_slave_fallback` nennen `register`
+(Doku), `wireAddress` und `value` des abgelehnten Writes.
+
+## Zwei Wechselrichter (Master/Slave)
+
+Im Forced mode mit zwei Wechselrichtern teilt DVhub jede Vorgabe auf beide auf (Standard `soc-balance`: beim
+Entladen bekommt der Akku mit dem höheren Ladestand mehr, beim Laden der mit dem niedrigeren). Lade-/Entladebefehle
+gehen an beide (13051/13052), der Modus 13050 nur an den Master.
+
+- **Eintritt des Masters (Christin 21.11.2026):** Der Slave folgt dem Modus des Masters. In Modus 0 ruht sein Befehl
+  (13051/13052); mit dem Eintritt des Masters in Modus 2 bzw. 3 wirkt er wieder. Führt DVhub den Slave im
+  Eintrittstakt nicht selbst (Strategie „nur Master“, Slave-Fehler, keine Slave-Werte), setzt es ihn vorher auf Stopp
+  (nur 13051 = 0xCC, zurückgelesen; steht er schon auf Stopp, kein Write). Nicht bestätigt → kein Eintritt in diesem
+  Takt, der Master bleibt in Modus 0, der nächste Takt versucht es wieder. Ein Slave in Notladung bekommt keinen
+  Write; führt DVhub ihn danach nicht wieder, wartet der Eintritt bis nach der Notladung. Gilt auch für den
+  Wiedereintritt nach einem geräteeigenen Rückfall und für External EMS. Steht der Master bei External-Steuerung schon
+  in einem gefundenen Modus 2, verlässt DVhub ihn vor dem Warten mit bekannten Writes (Befehl Stopp, Modus 0), damit
+  kein unbekannter Befehl ohne Rückfall weiterläuft (Codex-Review 21.11.2026). Sieht DVhub den Slave unter einem
+  fremden EMS, gilt ein früher bestätigter Stopp nicht mehr. Ein nicht erreichbarer zweiter
+  Wechselrichter hält den Eintritt höchstens bis zur Frist an (siehe „Master allein nach Frist“). Im laufenden Betrieb
+  gilt dasselbe, sobald DVhub den Slave nicht mehr führt (Werte weg, Richtung mit „nur Master“, Strategie umgestellt)
+  und sein Stopp nicht bestätigt ist: Stopp setzen, sonst tritt der Master in Modus 0 zurück, bis er bestätigt ist (in
+  Notladung kein Write und kein Rücktritt). Ein bestätigter Stopp gilt, bis DVhub dem Slave wieder einen Befehl gibt;
+  ein nicht geführter Slave wird im Lesetakt des Masters (60 s) nachgelesen (13000 + 13050–13052), ein dort gefundener
+  Befehl (z. B. aus der App) gestoppt. Nicht lesbar → der Master steuert weiter. Nach einem Neustart gilt der Slave als
+  unbekannt (der Merker liegt bewusst nur im Speicher).
+  Fehlen die Slave-Werte, nimmt DVhub einen eigenen Slave-Befehl in beiden Steuerarten zurück. Ein Slave unter fremdem
+  EMS (VPP) bleibt unberührt, der Master steuert allein (`sungrow_ems_slave_foreign`).
+  Beim Warten liest DVhub nur im gewöhnlichen Takt. Protokoll: `sungrow_ems_entry_slave_stopped`,
+  `sungrow_ems_running_slave_stopped` (im Betrieb gefunden und gestoppt), `sungrow_ems_entry_deferred`,
+  `sungrow_ems_slave_unconfirmed_stepback` (alle 15 min wiederholt, solange es wartet);
+  Status `sungrowEms.decision.reason = entry_slave_unconfirmed` mit `since` und `masterAloneAt`.
+
+- **Master allein nach Frist (Christin 21.11.2026)** (`sungrow.secondInverter.slaveUnconfirmedMasterAloneAfterMin`,
+  Standard 30 min, 0 = sofort, höchstens 1440): Bleibt der nicht geführte Slave unbestätigt (nicht erreichbar,
+  Rücklesung scheitert), tritt der Master nach der Frist trotzdem ein bzw. bleibt eingetreten und regelt allein. Ein
+  alter Befehl am Slave kann dann mitlaufen. Die Frist läuft ab dem ersten Warten mit diesem Grund (Eintritt
+  zurückgestellt oder Rücktritt), gemessen mit einer monotonen Uhr, ebenso Nachprüfung und Wiederholtakt am Slave (ein
+  Sprung der Systemzeit verkürzt oder verlängert sie nicht und setzt die Prüfung nicht aus). In der Wartephase beginnt sie neu nach mehr als 5 min ohne Prüfung, nach einer Notladung oder einem
+  fremden EMS am Slave. In Notladung des Slave wartet der Eintritt weiter und schreibt nichts; die Notladung zählt nicht
+  zur Frist. Bei fremdem EMS am Slave gilt ohnehin „Master allein“. Regelt der Master einmal allein, bleibt er es,
+  solange der Slave unbestätigt ist, auch nach einer Notladung, einem fremden EMS und Prüfpausen (Master-Lesefehler,
+  ausstehende Freigabe, Modus 0 ohne Sollwert) — ohne Rücktritt und ohne neue Wartezeit. „Allein“ endet, wenn der Stopp
+  bestätigt ist, DVhub den Slave wieder führt oder er DVhubs eigenen Befehl hält, im Not-Halt und beim Wechsel der
+  Master- oder Slave-Verbindung; danach beginnt die Frist neu. Im Not-Halt gibt es keinen Eintritt. Im Alleinbetrieb
+  versucht DVhub den Slave im Lesetakt des Masters (60 s) erneut, damit ein hängender Slave den Regeltakt nicht
+  bremst. Antwortet er, gelten die Stopp-Regeln wie oben. Die Frist lebt nur im Speicher (nach einem Neustart beginnt
+  sie neu). **Auch für die H-9-Übernahme (Christin 21.11.2026, A12):** Steht der Master in einem gefundenen Modus 2 ohne
+  DVhub-Besitz und ist der Slave unbestätigt, wartet die Übernahme höchstens bis zur Frist; danach übernimmt DVhub den
+  Master mit eigenem Befehl und regelt allein (Notladung: wartet weiter, Not-Halt: nichts). Steht der Slave unter einem
+  fremden EMS (VPP), übernimmt DVhub den Master sofort und regelt allein, wie beim Eintritt; der Slave wird nicht
+  geschrieben (Christin 23.11.2026, A16). Während sie wartet: `sungrowEms.decision.mode = adopt_wait`, Grund
+  `adopt_slave_unconfirmed`, mit `since` und `masterAloneAt`; Warnung `sungrow_ems_adopt_deferred` beim ersten Mal und
+  alle 15 min. Protokoll
+  `sungrow_ems_master_alone_slave_unconfirmed` (warn) beim Wechsel und alle 15 min; Status
+  `sungrowEms.decision.masterAlone` (`reason: slave_unconfirmed`, `since`, `slaveUnconfirmedSince`, `afterMin`,
+  `error`).
+
+- **Abregelung (Negativpreis, Direktvermarkter, Test-Knopf):** Beide Wechselrichter laden und entladen weiter nach
+  ihrem Anteil. DVhub regelt die Summe auf den Sollwert, bei Negativpreis auf −40 W. Entladen wird dabei höchstens die
+  Hauslast (Last − PV), auch wenn eine Vorgabe einspeisen möchte: unter der Einspeisegrenze lehnt der Master größere
+  Entladebefehle mit Modbus-Ausnahme 4 ab, und der Slave soll nicht an der Grenze vorbei einspeisen. Die Einspeisegrenze
+  (13074/13087/13088/31222) steht nur am Master. Kurze Netzspitzen bei Lastsprüngen sind möglich. Bekannte Lücke:
+  Die PV des Slave folgt der Master-Grenze nicht (eine Drosselung über 13090 ist nicht gebaut).
+- **Ladestand je Wechselrichter:** Beide werden aus demselben Register gelesen: Doku 13023 „Battery level“, U16,
+  0,1 %, FC 4 (auf dem Draht 13022). Der Master im Poll-Takt als Einzelregister, der Slave alle 5 s im Zustandsblock
+  13000–13045 (Stelle 23). Skalierung (÷ 10) und Umrechnung auf den echten SoC (Fenster 13059…13058 je Wechselrichter)
+  sind gleich. Kommt der Slave nur in ganzen Prozentschritten (im Fenster 10–100 % sind das 0,9 % echt), liegt das am
+  Gerät, nicht an DVhub. Ein feineres SoC-Register ist im Profil und in der hier genutzten Protokoll-Doku nicht
+  bekannt (am Gerät ungeprüft). Durch die 5-s-Abfrage kann der Slave-Wert bis zu 5 s älter sein als der des Masters.
+- **Puffer über der Geräte-Untergrenze** (`sungrow.socFloorBufferPct`, Standard 0): DVhub entlädt nicht tiefer als
+  Geräte-Untergrenze (13059) + Puffer. Der Puffer hält nur beim Entladen; im Stillstand sinkt der Ladestand durch den
+  Eigenverbrauch des Wechselrichters trotzdem bis zur Geräte-Untergrenze, dort lädt der Wechselrichter selbst nach.
+  Eine Erhaltungsladung baut DVhub nicht.
+- **Test-Knopf „Akku nicht laden“:** sperrt nur das Laden. Entladen für das Haus bleibt erlaubt (höchstens die
+  Hauslast, auf beide Wechselrichter verteilt); wäre Laden nötig, steht der Befehl auf Stopp (0xCC), Modus 2 bleibt.
+- **Grundsatz: gerechnet wird mit dem, was geliefert wird.** DVhub vergleicht je Wechselrichter den Befehl mit der
+  gemessenen Akku-Leistung (Master im Poll-Takt, Slave alle 5 s). Liefert einer bestätigt weniger (mehr als 100 W bzw.
+  10 % daneben, 2 s lang, gemessen frühestens 1,5 s nach einer Befehlserhöhung), gilt die Messung als seine
+  Lieferfähigkeit. Das Fehlende bekommt der andere dazu, bis zu seiner Leistungs- und SoC-Grenze. Ist der andere selbst
+  begrenzt, bekommt er höchstens seine gemessene Lieferfähigkeit plus eine kleine Probe (110 W, knapp über der
+  Schreibschwelle von 100 W, damit sie wirklich ans Gerät geht). Es wird je Takt nur in eine Richtung
+  verschoben, und nur, wenn der Empfänger selbst nichts schuldig bleibt — so schaukelt sich nichts auf. Wer teilweise
+  liefert, behält seinen Befehl und trägt, was er schafft. Netzbezug bleibt erst, wenn beide nicht mehr können.
+- **Ein Wechselrichter an der Grenze:** Steht ein Akku weniger als 1 Prozentpunkt (echter SoC) über seiner
+  Entladegrenze, bekommt er keinen Entlade-Anteil; Laden bleibt erlaubt. Liefert ein Wechselrichter etwa 10 s lang
+  weniger als die Hälfte seines Anteils (bei Anteil über 200 W), bekommt der andere den Anteil — außer der andere ist
+  selbst begrenzt und der erste liefert noch spürbar (ab 100 W); dann trägt er weiter seinen Ist-Anteil. Etwa alle 60 s
+  bekommt er ihn probeweise zurück. Die Kachel zeigt „Master an der Grenze, Slave übernimmt“ (bzw. umgekehrt), das Protokoll
+  `sungrow_ems_share_stalled` beim Erkennen und `sungrow_ems_share_recovered`, wenn er wieder liefert.
 
 ## Quellen
 

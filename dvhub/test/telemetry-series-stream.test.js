@@ -8,6 +8,9 @@ function fakePool() {
   return {
     calls,
     async query(sql, params) {
+      // Nur die Roh-Abfrage zählt; der Rückfall auf die Datenstufen (Lücken der
+      // Attrappe: eine Zeile je Fenster) fragt timeseries_samples_1m/_15m.
+      if (/timeseries_samples_(1m|15m)/.test(sql)) return { rows: [] };
       calls.push(params);
       const [keys, bucketSec, from] = params;
       return { rows: keys.map((k) => ({ series_key: k, bucket_ts: new Date(from), value: '1.5', unit: 'W' })), bucketSec };

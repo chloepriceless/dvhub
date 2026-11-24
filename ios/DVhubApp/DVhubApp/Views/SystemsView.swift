@@ -1,4 +1,5 @@
-// SystemsView.swift — gekoppelte Anlagen verwalten.
+// SystemsView.swift — gekoppelte Anlagen verwalten; dazu die Demo als eigener,
+// gekennzeichneter Eintrag (starten, wählen, beenden).
 
 import SwiftUI
 import DVhubLink
@@ -7,6 +8,7 @@ struct SystemsView: View {
     @Environment(AppModel.self) private var model
     @Binding var showPairing: Bool
     @State private var removeId: String?
+    @State private var endingDemo = false
 
     var body: some View {
         List {
@@ -22,8 +24,8 @@ struct SystemsView: View {
                                 Spacer()
                                 if sys.id == model.selectedId { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
                             }
-                            Text(sys.canControl ? "Anzeigen und steuern" : "Nur anzeigen").font(.footnote).foregroundStyle(.secondary)
-                            Text(routeText(sys) + " · Kennung " + String(sys.boxId.prefix(6))).font(.caption).foregroundStyle(.secondary)
+                            Text(sys.canControl ? String(localized: "Anzeigen und steuern") : String(localized: "Nur anzeigen")).font(.footnote).foregroundStyle(.secondary)
+                            Text("\(routeText(sys)) · Kennung \(String(sys.boxId.prefix(6)))").font(.caption).foregroundStyle(.secondary)
                             if let c = model.controllers[sys.id], sys.id == model.selectedId { ConnectionBadge(controller: c) }
                         }
                     }
@@ -32,14 +34,46 @@ struct SystemsView: View {
                         Button("Entfernen", role: .destructive) { removeId = sys.id }
                     }
                 }
+                if model.systems.isEmpty {
+                    Text("Noch keine Anlage gekoppelt.").font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            if model.demoActive {
+                SwiftUI.Section {
+                    Button { model.select(DemoPlant.boxId) } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                Text(DemoStore.name).font(.headline)
+                                DemoTag()
+                                Spacer()
+                                if model.selectedIsDemo { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
+                            }
+                            Text("Beispielanlage mit Beispielwerten").font(.footnote).foregroundStyle(.secondary)
+                            Text("Kein Weg nach außen · nichts wird geschaltet").font(.caption).foregroundStyle(.secondary)
+                            if let c = model.controllers[DemoPlant.boxId], model.selectedIsDemo { ConnectionBadge(controller: c) }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .swipeActions {
+                        Button("Demo beenden", role: .destructive) { endingDemo = true }
+                    }
+                    .accessibilityIdentifier("systems.demo")
+                    Button(role: .destructive) { endingDemo = true } label: { Label("Demo beenden", systemImage: "xmark.circle.fill") }
+                        .accessibilityIdentifier("demoEnd")
+                        .demoEndDialog($endingDemo)
+                } header: {
+                    Text("Demo")
+                }
             }
             SwiftUI.Section {
                 Button { showPairing = true } label: { Label("Anlage koppeln", systemImage: "qrcode.viewfinder") }
+                if !model.demoActive { DemoStartButton(compact: true) }
             } footer: {
                 Text("Entfernen löscht die Zugangsdaten nur auf diesem Gerät. In DVhub unter Einstellungen → „Handy-App“ die Kopplung ebenfalls entfernen.")
             }
         }
         .navigationTitle("Anlagen")
+        .auroraList()
         .confirmationDialog("Anlage von diesem Gerät entfernen?", isPresented: Binding(get: { removeId != nil }, set: { if !$0 { removeId = nil } }), titleVisibility: .visible) {
             Button("Entfernen", role: .destructive) { if let id = removeId { model.remove(id) }; removeId = nil }
         }
@@ -47,8 +81,8 @@ struct SystemsView: View {
 
     private func routeText(_ s: LinkCredentials) -> String {
         var parts: [String] = []
-        if !s.lan.isEmpty { parts.append("Heimnetz") }
-        if s.relay != nil { parts.append("Relay") }
-        return "Wege: " + (parts.isEmpty ? "keine" : parts.joined(separator: ", "))
+        if !s.lan.isEmpty { parts.append(String(localized: "Heimnetz")) }
+        if s.relay != nil { parts.append(String(localized: "Relay")) }
+        return parts.isEmpty ? String(localized: "Wege: keine") : String(localized: "Wege: \(parts.formatted(.list(type: .and, width: .narrow).locale(Format.locale)))")
     }
 }

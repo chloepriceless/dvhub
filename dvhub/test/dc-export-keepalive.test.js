@@ -15,6 +15,7 @@ import { loadConfigFile } from '../config-model.js';
 import { createScheduleEvaluator } from '../schedule-eval.js';
 import { activeWindow } from './helpers/active-window.js';
 import { setEmergencyStop } from '../services/control-commands.js';
+import { monoFollowsDate } from './helpers/mono-follows-date.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -59,6 +60,7 @@ async function run(cfg, { pvSeries = null, evals = 15, beforeEval = null } = {})
   const t0 = realNow();
   let fake = t0;
   Date.now = () => fake;
+  const restoreMono = monoFollowsDate(); // A26: Keepalive-Abstand monoton — Laufzeit-Uhr mit der gestellten Uhr
   try {
     for (let i = 0; i < evals; i += 1) {
       fake = t0 + i * 5000;
@@ -67,7 +69,7 @@ async function run(cfg, { pvSeries = null, evals = 15, beforeEval = null } = {})
       if (beforeEval) await beforeEval(i, state);
       await ev.evaluateSchedule();
     }
-  } finally { Date.now = realNow; }
+  } finally { restoreMono(); Date.now = realNow; }
   const sp = writes.filter((w) => w.address === cfg.controlWrite.gridSetpointW.address);
   return { sp: sp.map((w) => ({ s: (w.t - t0) / 1000, v: (w.values[0] << 16) | w.values[1] })), state };
 }

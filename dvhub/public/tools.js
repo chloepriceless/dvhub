@@ -309,9 +309,18 @@ async function loadSchedule() {
   setText('scheduleMeta', `geladen: ${fmtTs(Date.now())}`);
 }
 
+// M20 (Feld 19.11.2026): der JSON-Editor zeigt ALLE Regeln (loadSchedule) — die
+// Liste ist vollständig, auch für DC-Einspeise-Regeln (feedExcessDcPv). Ohne
+// das Kennzeichen behielt der Server die letzte DC-Regel, wenn man sie hier
+// löschte. Ein ausdrücklicher Eintrag im JSON gewinnt.
+function buildScheduleJsonSavePayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  return { replaceDcFeedRules: true, ...payload };
+}
+
 async function saveSchedule() {
   try {
-    const payload = JSON.parse(document.getElementById('scheduleJson').value || '{}');
+    const payload = buildScheduleJsonSavePayload(JSON.parse(document.getElementById('scheduleJson').value || '{}'));
     const res = await apiFetch('/api/schedule/rules', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -494,7 +503,7 @@ async function triggerHistoryBackfill(mode = 'gap') {
 const DV_SIGNAL_TYPES = new Set([
   'ctrl_off', 'ctrl_on', 'ctrl_lease_expired',
   'dv_victron_write', 'dv_victron_write_error',
-  'modbus_fc6', 'modbus_fc16',
+  'modbus_fc6', 'modbus_fc16', 'modbus_write_rejected_nothalt',
   'negative_price_protection_on', 'negative_price_protection_off',
   'control_write', 'sma_plan_applied',
   'schedule_auto_disabled', 'schedule_stop_soc_reached'
@@ -508,6 +517,7 @@ const DV_SIGNAL_LABELS = {
   dv_victron_write_error: 'Victron Write Fehler',
   modbus_fc6: 'Modbus FC6 Write',
   modbus_fc16: 'Modbus FC16 Write',
+  modbus_write_rejected_nothalt: 'Modbus Write abgelehnt (Not-Halt)',
   negative_price_protection_on: 'Negativpreis-Schutz AN',
   negative_price_protection_off: 'Negativpreis-Schutz AUS',
   control_write: 'Setpoint Write',
@@ -519,7 +529,7 @@ const DV_SIGNAL_LABELS = {
 const DV_SIGNAL_FILTER_MAP = {
   all: null,
   ctrl: ['ctrl_off', 'ctrl_on', 'ctrl_lease_expired', 'negative_price_protection_on', 'negative_price_protection_off'],
-  modbus: ['modbus_fc6', 'modbus_fc16', 'control_write'],
+  modbus: ['modbus_fc6', 'modbus_fc16', 'modbus_write_rejected_nothalt', 'control_write'],
   victron: ['dv_victron_write', 'dv_victron_write_error'],
   sma: ['sma_plan_applied', 'schedule_auto_disabled', 'schedule_stop_soc_reached']
 };
@@ -943,6 +953,13 @@ async function applyUpdate() {
         return;
       }
     }
+    if (data.ok && data.noop) {
+      // Schon aktuell: kein Job gestartet — klare Rückmeldung statt scheinbar
+      // totem Button (Tester-Fund 1.0.10).
+      setBanner('updateBanner', data.message || 'DVhub ist bereits auf der neuesten Version.', 'success');
+      if (btn) { btn.disabled = false; btn.textContent = 'Update installieren & neu starten'; }
+      return;
+    }
     if (data.ok && data.mode === 'package') {
       document.getElementById('updateActions').style.display = 'none';
       const st = await trackReleaseJob('Update', baseline);
@@ -1181,9 +1198,11 @@ function fmtTunnelState(st) {
   if (!st) return '—';
   if (st.open) {
     const mins = st.ttlRemainingSec != null ? Math.max(0, Math.round(st.ttlRemainingSec / 60)) : null;
-    return mins != null
-      ? `🟢 OFFEN — schließt in ~${mins} min automatisch`
-      : '🟢 OFFEN';
+    if (mins == null) return '🟢 OFFEN';
+    // Aufgabe 10: vor Ablauf warnen (≤ 5 min Restzeit).
+    return st.expiringSoon === true
+      ? `⏳ OFFEN — schließt bald automatisch (~${mins} min)`
+      : `🟢 OFFEN — schließt in ~${mins} min automatisch`;
   }
   if (!st.provisioned) return '⚪ Nicht freigeschaltet (Support muss die Box erst registrieren)';
   return '🔒 Geschlossen (Support hat keinen Zugang)';
@@ -2144,7 +2163,8 @@ if (typeof globalThis !== 'undefined') {
     buildHistoryImportActionState,
     buildHistoryBackfillActionState,
     buildHistoryFullBackfillActionState,
-    formatHistoryImportResult
+    formatHistoryImportResult,
+    buildScheduleJsonSavePayload
   };
   globalThis.DVhubToolsUpdate = { channelRejectNotice };
 }

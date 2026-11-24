@@ -115,7 +115,8 @@
         "tags": ["Historie"],
         "parameters": [
           { "name": "view", "in": "query", "required": true, "schema": { "type": "string", "enum": ["day", "week", "month", "year"] } },
-          { "name": "date", "in": "query", "required": true, "schema": { "type": "string", "format": "date" }, "example": "2026-03-18" }
+          { "name": "date", "in": "query", "required": true, "schema": { "type": "string", "format": "date" }, "example": "2026-03-18" },
+          { "name": "lean", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Schlanke Antwort (Handy-App): ohne slots/series, in der Tagesansicht auch ohne rows. Kennzahlen und charts bleiben." }
         ],
         "responses": { "200": { "description": "Summary mit Bezug, Einspeisung, Kosten, Erlöse" } }
       }
@@ -163,10 +164,10 @@
     "/api/schedule/rules": {
       "post": {
         "summary": "Schedule-Regeln setzen",
-        "description": "Aktualisiert die manuellen Zeitplan-Regeln.",
+        "description": "Ersetzt die manuellen Zeitplan-Regeln. Automatische Regeln (Optimizer, Kleine Börsenautomatik) bleiben serverseitig. DC-Einspeise-Regeln (target feedExcessDcPv) bleiben stehen, wenn keine mitkommt — außer mit replaceDcFeedRules: true, dann ist rules auch für sie die vollständige Liste (leer = alle löschen).",
         "tags": ["Schedule / Steuerung"],
-        "requestBody": { "content": { "application/json": { "schema": { "type": "object" } } } },
-        "responses": { "200": { "description": "Aktualisierte Regeln" } }
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["rules"], "properties": { "rules": { "type": "array", "items": { "type": "object" } }, "replaceDcFeedRules": { "type": "boolean", "description": "true: feedExcessDcPv-Regeln genau wie gesendet übernehmen (auch keine). Fehlt es, bleiben vorhandene DC-Regeln, wenn keine mitkommt." } } } } } },
+        "responses": { "200": { "description": "Aktualisierte Regeln" }, "400": { "description": "rules fehlt, ungültige Regel oder replaceDcFeedRules kein Wahrheitswert" } }
       }
     },
     "/api/schedule/config": {

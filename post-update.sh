@@ -555,7 +555,7 @@ dvhub_root_own_install_dir "$INSTALL_DIR" "$OWN_LIMIT" || echo "  WARN: Rechte f
 # → libstrongswan-standard-plugins = Crypto-Plugins). NIE pauschal
 # --no-install-recommends auf die ganze Liste!
 NEEDED_PKGS=""
-for pkg in openvpn strongswan autossh openssh-client libjemalloc2; do
+for pkg in openvpn strongswan autossh openssh-client openssh-server libjemalloc2; do
   if ! dpkg -s "$pkg" >/dev/null 2>&1; then
     NEEDED_PKGS="$NEEDED_PKGS $pkg"
   fi
@@ -992,6 +992,30 @@ if [[ -f "$INSTALL_DIR/support-provision.sh" ]]; then
   fi
 fi
 
+# Box-Uhr: NTP (systemd-timesyncd) aktivieren/prüfen — DVhub hängt an der Uhr (EOS-Slots,
+# Zeitpläne). Geteilt mit install.sh. NON-FATAL, überspringt Container von selbst.
+if [[ -f "$INSTALL_DIR/clock-provision.sh" ]]; then
+  echo "  Box-Uhr (NTP)..."
+  if pu_bounded 20 env DATA_DIR="$DATA_DIR" bash "$INSTALL_DIR/clock-provision.sh"; then
+    echo "  Box-Uhr: OK"
+  else
+    echo "  WARN: NTP-Provisioning fehlgeschlagen (non-fatal). Zeitabgleich am Betriebssystem prüfen." >&2
+  fi
+fi
+
+# Sungrow-Absicherung C2/C4 (M3, Feld 16.11.): ExecStopPost-Rückgabe + Watchdog-Timer als Drop-in/Unit einhängen —
+# auf der Paket-Box fehlten sie nach dem Update. Nur für Sungrow-Anlagen; sonst wird ein früheres Drop-in entfernt.
+# Geteilt mit install.sh. NON-FATAL, überspringt Container von selbst.
+if [[ -f "$INSTALL_DIR/sungrow-provision.sh" ]]; then
+  echo "  Sungrow-Absicherung (ExecStopPost + Watchdog)..."
+  if pu_bounded 20 env INSTALL_DIR="$INSTALL_DIR" APP_DIR="$APP_DIR" SERVICE_NAME="$SERVICE_NAME" \
+       DATA_DIR="$DATA_DIR" DV_APP_CONFIG="$CONFIG_PATH" bash "$INSTALL_DIR/sungrow-provision.sh"; then
+    echo "  Sungrow-Absicherung: OK"
+  else
+    echo "  WARN: Sungrow-Absicherung fehlgeschlagen (non-fatal)." >&2
+  fi
+fi
+
 # ── 9b. EEBUS (dvhub-eebus) bauen/aktualisieren (entkoppelt, idempotent) ──
 # Nur wenn EEBUS aktiviert ist oder dvhub-eebus schon installiert war: dann
 # baut eebus-provision.sh den Hilfsprozess im Hintergrund (Go-Fassung: Go von
@@ -1054,17 +1078,82 @@ if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
   case "$EOS_NATIVE_HAVE" in
     "$EOS_WANT ok "*|"$EOS_WANT unsupported "*|"$EOS_WANT none "*) EOS_NATIVE_DONE=1 ;;
   esac
+  # local-native (1.0.11): läuft dvhub-optimize als EOS-Dienst statt Python-EOS?
+  # GEWÜNSCHT nur bei DREIERLEI — Config mode=local-native, Opt-in-Freigabe UND ein
+  # Binär-Pin für die Arch dieser Box (ohne Pin gar nicht erst versuchen → kein
+  # Churn auf z. B. armv6l/riscv64; gepinnt sind x86_64, aarch64, armv7l). Der
+  # Steuer-Marker .eos-native-engine (eos-provision.sh)
+  # sagt, was läuft: "native <want> <binsig>" oder "fallback <want> <binsig>"
+  # (nativ gewünscht, hier nicht möglich → Python; als erledigt vermerkt, damit kein
+  # teurer Neuversuch je Start). Stimmt Motor+Binär mit dem Soll, bleibt alles; sonst
+  # Neu-Provisionierung (EOS_CURRENT=0). .eos-native-engine ist NICHT .eos-provisioned
+  # (Python-Stand) — der Rückweg erkennt so den Versionswechsel korrekt.
+  EOS_PROXY_MODE="$(node -e 'try{const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(String(c?.optimizer?.eosProxy?.mode||""))}catch{}' "${CONFIG_PATH:-}" 2>/dev/null || true)"
+  EOS_NATIVE_OPTIN=0; [[ -e "${EOS_NATIVE_OPTIN_MARKER:-/etc/dvhub-release/eos-native-optin}" ]] && EOS_NATIVE_OPTIN=1
+  case "$(uname -m 2>/dev/null)" in
+    x86_64|amd64) EOS_BIN_ARCH=X86_64 ;; aarch64|arm64) EOS_BIN_ARCH=AARCH64 ;;
+    armv7l|armv7|armhf) EOS_BIN_ARCH=ARMV7L ;; *) EOS_BIN_ARCH="" ;;
+  esac
+  EOS_BIN_SIG=""
+  if [[ -n "$EOS_BIN_ARCH" && -f "$INSTALL_DIR/eos-version.env" ]]; then
+    _bf="$({ grep -E "^EOS_NATIVE_BIN_${EOS_BIN_ARCH}=" "$INSTALL_DIR/eos-version.env" || true; } | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
+    _bs="$({ grep -E "^EOS_NATIVE_BIN_${EOS_BIN_ARCH}_SHA256=" "$INSTALL_DIR/eos-version.env" || true; } | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
+    [[ -n "$_bf" && -n "$_bs" ]] && EOS_BIN_SIG="${_bf}:${_bs:0:12}"
+  fi
+  EOS_DESIRED_NATIVE=0; [[ "$EOS_PROXY_MODE" == "local-native" && "$EOS_NATIVE_OPTIN" -eq 1 && -n "$EOS_BIN_SIG" ]] && EOS_DESIRED_NATIVE=1
+  EOS_ENGINE_HAVE="$(cat "$DATA_DIR/.eos-native-engine" 2>/dev/null || true)"
+  EOS_CURRENT_NATIVE=0; [[ "$EOS_ENGINE_HAVE" == "native $EOS_WANT $EOS_BIN_SIG" ]] && EOS_CURRENT_NATIVE=1
+  EOS_ENGINE_SETTLED=0
+  if [[ "$EOS_DESIRED_NATIVE" -eq 1 ]]; then
+    case "$EOS_ENGINE_HAVE" in "native $EOS_WANT $EOS_BIN_SIG"|"fallback $EOS_WANT $EOS_BIN_SIG") EOS_ENGINE_SETTLED=1 ;; esac
+  elif [[ -z "$EOS_ENGINE_HAVE" ]]; then
+    EOS_ENGINE_SETTLED=1
+  fi
+  if [[ "$EOS_ENGINE_SETTLED" -eq 0 ]]; then EOS_CURRENT=0; fi
   EOS_NATIVE_ONLY=0
   # Ausfuehrbares venv gehoert dazu (Review 25.10.2026): ein Update, das
   # eos-venv/ weggeraeumt hatte, meldete sonst "EOS: OK" mit totem Dienst.
   if [[ -d "$EOS_DIR/.git" && -f "$EOS_UNIT_PATH" && -x "$EOS_VENV/bin/python" && "$EOS_CURRENT" -eq 1 && "$EOS_NATIVE_DONE" -eq 0 ]]; then
     EOS_NATIVE_ONLY=1
   fi
-  if [[ -d "$EOS_DIR/.git" && -f "$EOS_UNIT_PATH" && -x "$EOS_VENV/bin/python" && "$EOS_CURRENT" -eq 1 && "$EOS_NATIVE_DONE" -eq 1 ]]; then
-    # Aktuell — nur sicherstellen, dass der Dienst läuft (schnell).
+  if [[ "$EOS_CURRENT_NATIVE" -eq 1 && "$EOS_DESIRED_NATIVE" -eq 1 && -x "$INSTALL_DIR/bin/dvhub-optimize" && -f "$EOS_UNIT_PATH" ]] \
+     && grep -q 'dvhub-optimize serve' "$EOS_UNIT_PATH" 2>/dev/null; then
+    # Nativer Optimierer aktuell (Motor-Marker, Binär + Unit stimmen) — nur laufen lassen.
     systemctl enable eos.service >/dev/null 2>&1 || true
     systemctl is-active --quiet eos.service || systemctl start eos.service >/dev/null 2>&1 || true
-    echo "  EOS: OK (aktuell: ${EOS_HAVE})"
+    echo "  EOS: OK (nativer Optimierer aktuell: ${EOS_HAVE})"
+  elif [[ -d "$EOS_DIR/.git" && -f "$EOS_UNIT_PATH" && -x "$EOS_VENV/bin/python" && "$EOS_CURRENT" -eq 1 && "$EOS_NATIVE_DONE" -eq 1 ]] \
+       && ! grep -q 'dvhub-optimize serve' "$EOS_UNIT_PATH" 2>/dev/null; then
+    # Aktuell (Python-EOS + Rust-Wheel) — nur sicherstellen, dass der Dienst läuft
+    # (schnell). Eine native Unit zählt hier NIE als „Python aktuell" (Codex-P2):
+    # sonst bliebe nach einem abgebrochenen Rückweg der native Dienst unter „OK".
+    if ! grep -q '^Environment=EOS_CONFIG_DIR=' "$EOS_UNIT_PATH" 2>/dev/null; then
+      # A1 (1.0.11): Bestandsbox mit gesundem EOS (Pin unverändert, Rust-Kern ok),
+      # aber die Unit stammt noch von VOR dem EOS_CONFIG_DIR-Fix (1.0.10-Falle:
+      # PermissionError jede Minute). Der Schnellweg rief eos-provision.sh bisher
+      # NIE auf, die Falle lief weiter. Jetzt leichtgewichtig nachziehen:
+      # EOS_CONFIG_FIX_ONLY=1 schreibt NUR Konfig-Ordner, Alt-Konfig-Migration und
+      # Unit (mit EOS_CONFIG_DIR) — KEIN git/clone/pip/Wheel/Rauchtest. Entkoppelt
+      # wie jede Provisionierung (systemd-run), damit der Boot nie blockiert wird.
+      echo "  EOS: aktuell, aber Unit ohne EOS_CONFIG_DIR (1.0.10-Falle) — ziehe Konfig-Fix entkoppelt nach (ohne git/pip)..."
+      if command -v systemd-run >/dev/null 2>&1; then
+        systemd-run --collect --quiet --unit "dvhub-eos-provision" \
+          --description "DVhub EOS config-dir retrofit" \
+          --setenv=SERVICE_USER="$SERVICE_USER" \
+          --setenv=INSTALL_DIR="$INSTALL_DIR" \
+          --setenv=DATA_DIR="$DATA_DIR" \
+          --setenv=EOS_CONFIG_FIX_ONLY=1 \
+          bash "$INSTALL_DIR/eos-provision.sh" 2>/dev/null \
+          || echo "  WARN: EOS-Konfig-Fix konnte nicht gestartet werden (non-fatal)." >&2
+      else
+        SERVICE_USER="$SERVICE_USER" INSTALL_DIR="$INSTALL_DIR" DATA_DIR="$DATA_DIR" EOS_CONFIG_FIX_ONLY=1 \
+          setsid bash "$INSTALL_DIR/eos-provision.sh" </dev/null >>"$DATA_DIR/eos-provision.log" 2>&1 &
+      fi
+    else
+      systemctl enable eos.service >/dev/null 2>&1 || true
+      systemctl is-active --quiet eos.service || systemctl start eos.service >/dev/null 2>&1 || true
+      echo "  EOS: OK (aktuell: ${EOS_HAVE})"
+    fi
   elif systemctl is-active --quiet dvhub-eos-provision.service 2>/dev/null; then
     echo "  EOS: Hintergrund-Provisionierung läuft bereits"
   else
@@ -1086,10 +1175,11 @@ if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
         --setenv=INSTALL_DIR="$INSTALL_DIR" \
         --setenv=DATA_DIR="$DATA_DIR" \
         --setenv=EOS_NATIVE_ONLY="$EOS_NATIVE_ONLY" \
+        --setenv=EOS_PROXY_MODE="$EOS_PROXY_MODE" \
         bash "$INSTALL_DIR/eos-provision.sh" 2>/dev/null \
         || echo "  WARN: EOS-Hintergrund-Provisionierung konnte nicht gestartet werden (non-fatal)." >&2
     else
-      SERVICE_USER="$SERVICE_USER" INSTALL_DIR="$INSTALL_DIR" DATA_DIR="$DATA_DIR" EOS_NATIVE_ONLY="$EOS_NATIVE_ONLY" \
+      SERVICE_USER="$SERVICE_USER" INSTALL_DIR="$INSTALL_DIR" DATA_DIR="$DATA_DIR" EOS_NATIVE_ONLY="$EOS_NATIVE_ONLY" EOS_PROXY_MODE="$EOS_PROXY_MODE" \
         setsid bash "$INSTALL_DIR/eos-provision.sh" </dev/null >>"$DATA_DIR/eos-provision.log" 2>&1 &
     fi
   fi
@@ -1148,7 +1238,11 @@ fi
 # hochzieht (ALTER EXTENSION UPDATE). NON-FATAL durchgängig.
 # PostgreSQL schreibarm (2026-10-01, SD-Karte): idempotent, nur Reload.
 if [[ -f "$INSTALL_DIR/pg-write-tuning.sh" ]] && command -v psql >/dev/null 2>&1; then
-  pu_bounded 30 bash "$INSTALL_DIR/pg-write-tuning.sh" || true
+  DATA_DIR="$DATA_DIR" pu_bounded 30 bash "$INSTALL_DIR/pg-write-tuning.sh" || true
+fi
+# journald nach Speicherprofil begrenzen (S8 a: nur klein/winzig), idempotent.
+if [[ -f "$INSTALL_DIR/storage-limits.sh" ]]; then
+  DATA_DIR="$DATA_DIR" pu_bounded 15 bash "$INSTALL_DIR/storage-limits.sh" || true
 fi
 if [[ -f "$INSTALL_DIR/timescale-provision.sh" ]] && command -v psql >/dev/null 2>&1; then
   TS_ACTIVE=0

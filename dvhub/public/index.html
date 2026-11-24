@@ -13,10 +13,10 @@
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
   <link rel="stylesheet" href="/dvhub-powerflow.css?v=20260708-daylight">
-  <link rel="stylesheet" href="/index.css?v=20261105-release110">
-  <link rel="stylesheet" href="/ev-tile.css?v=20261111-abfahrtstag3">
-  <link rel="stylesheet" href="/ev-once.css?v=20261111-abfahrtstag3">
-  <link rel="stylesheet" href="/ev-weekly-editor.css?v=20261111-abfahrtstag3">
+  <link rel="stylesheet" href="/index.css?v=20261119-pv-ensemble">
+  <link rel="stylesheet" href="/ev-tile.css?v=20261119-m19-badge">
+  <link rel="stylesheet" href="/ev-once.css?v=20261119-m19-badge">
+  <link rel="stylesheet" href="/ev-weekly-editor.css?v=20261119-m19-badge">
   <script src="/theme.js"></script>
   <script src="/leit-view.js?v=20261009"></script>
 </head>
@@ -93,18 +93,27 @@
 
       <div class="card rail-card" data-accent="bat">
         <div class="rail-card-head">
-          <span class="ttl"><span class="dot dot-bat"></span>Batterie &middot; Victron</span>
+          <span class="ttl"><span class="dot dot-bat"></span>Batterie &middot; <span id="batSourceName">Victron</span></span>
           <span class="chip info sm" id="batModeChip" hidden><span class="dot"></span><span id="batMode">&mdash;</span></span>
         </div>
+        <!-- Kann-3 (Feld 16.11.): bei zwei Sungrow-WR steht der Kopf einzeilig „Batterie · Sungrow", die Rollen als Untertitel darunter. -->
+        <div class="rail-card-sub" id="batSourceSub" hidden>Master + Slave</div>
         <div class="rail-big card-value value-bat" id="soc">&mdash;</div>
+        <!-- M9: bei Sungrow steht groß der ECHTE System-SoC, klein daneben der gemeldete (fensterrelative) Wert. -->
+        <div class="soc-reported" id="socReported" hidden></div>
         <div class="battery-vis"><i class="progress-fill-init" id="socBar"></i></div>
         <div class="battery-vis-labels">
           <span>0%</span>
           <span id="socMid">SOC &mdash;</span>
           <span>100%</span>
         </div>
+        <!-- M9: Marken der echten Skala (Sungrow): Geräte-Untergrenze + DVhub-Boden. Nur bei Sungrow sichtbar. -->
+        <div class="soc-marks" id="sungrowSocMarks" hidden></div>
         <div class="rail-row"><span class="l">Akku-Leistung</span><strong class="v" id="batP">&mdash;</strong></div>
-        <div class="rail-row" id="gridShareRow" hidden title="Virtueller Zähler: so viel Netzstrom steckt durch Netzladen im Akku. Entladen senkt ihn anteilig (Anteil × Entladung). Solange er über der Schwelle liegt, gibt der Akku nichts ins Netz ab — kein Netzstrom mit Marktprämie. PV-Einspeisung bleibt."><span class="l">davon Netzstrom</span><strong class="v" id="gridShare">&mdash;</strong></div>
+        <!-- M9: je Akku (Master/Slave) echter SoC · nutzbar über der Grenze · Leistung mit Richtung · Anteil. -->
+        <div class="rail-row sungrow-bat-wr" id="sungrowBatMasterRow" hidden><span class="l">Master</span><strong class="v" id="sungrowBatMaster">&mdash;</strong></div>
+        <div class="rail-row sungrow-bat-wr" id="sungrowBatSlaveRow" hidden><span class="l">Slave</span><strong class="v" id="sungrowBatSlave">&mdash;</strong></div>
+        <div class="rail-row" id="gridShareRow" hidden title="Virtueller Zähler: so viel Netzstrom steckt durch Netzladen im Akku. Entladen ins Haus senkt ihn 1:1 (Netzstrom zuerst ins Haus), Einspeisung aus dem Akku nimmt zuerst den PV-Anteil. Solange er über der Schwelle liegt, gibt der Akku nichts ins Netz ab — kein Netzstrom mit Marktprämie. PV-Einspeisung bleibt."><span class="l">davon Netzstrom</span><strong class="v" id="gridShare">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv"><span class="l">Grid Setpoint</span><strong class="v" id="gridSetpoint">&mdash;</strong></div>
         <div class="rail-row rail-row-action" id="minSocRow" role="button" tabindex="0" aria-expanded="false" aria-controls="minSocEditor" data-leit="adv">
           <span class="l">Minimum-SOC <small class="rail-row-hint">Anpassen</small></span>
@@ -159,6 +168,8 @@
         <div class="rail-row" data-leit="adv" title="Netz-Sollwert, den DVhub der zweiten GX schreibt (wirkt auf ihren AC-IN, Register 2716)."><span class="l">Sollwert AC-IN</span><strong class="v" id="secondGxSetpoint">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv"><span class="l">Minimum-SOC</span><strong class="v" id="secondGxMinSoc">&mdash;</strong></div>
       </div>
+      <!-- Zwei Sungrow-WR im Master/Slave-Parallelbetrieb (T-0422, sungrow-inverter-view.js).
+           Nur sichtbar, wenn ein zweiter WR konfiguriert ist. -->
       <!-- Netzanschluss: Bezugsgrenze des Hausanschlusses (services/grid-connection,
            grid-connection-view.js). Nur sichtbar, wenn eine Grenze eingetragen ist. -->
       <div class="card rail-card" data-accent="ctrl" id="gridConnectionCard" hidden>
@@ -186,7 +197,16 @@
         <div class="rail-row"><span class="l">Grenze</span><strong class="v" id="peakShavingLimit">&mdash;</strong></div>
         <div class="rail-row" title="Höchster Viertelstunden-Mittelwert des Netzbezugs im laufenden Monat, aus DVhubs Messwerten. Maßgeblich für die Abrechnung ist der Zähler des Netzbetreibers."><span class="l">Spitze Monat (15 min)</span><strong class="v" id="peakShavingMonth">&mdash;</strong></div>
         <div class="rail-row" title="Höchster Viertelstunden-Mittelwert des Netzbezugs im laufenden Kalenderjahr — danach richtet sich der Leistungspreis (RLM)."><span class="l">Spitze Jahr (15 min)</span><strong class="v" id="peakShavingYear">&mdash;</strong></div>
+        <div class="rail-row" id="peakShavingBudgetRow" hidden title="Abrechnung nach 15-min-Mittelwert: bezogene Energie in dieser Viertelstunde gegen das Budget (Grenze × 15 min). DVhub greift erst ein, wenn die Hochrechnung das Budget reißen würde. Kann der Akku nicht sicher liefern, gilt der Deckel auf den Augenblickswert."><span class="l">Viertelstunde</span><strong class="v" id="peakShavingBudget">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv"><span class="l">Eingriff</span><strong class="v" id="peakShavingDetail">&mdash;</strong></div>
+        <div id="peakShavingBilling" hidden>
+          <div class="rail-row" title="Leistungspreis × höchste Viertelstunden-Spitze (Jahresleistungspreis) bzw. × Monatsspitze (Monatsleistungspreis), netto, aus den eingetragenen Preisen."><span class="l">Leistungsentgelt</span><strong class="v" id="peakShavingCharge">&mdash;</strong></div>
+          <div class="rail-row" data-leit="adv" title="Benutzungsdauer = Jahresarbeit ÷ Jahresspitze. Ab 2.500 h gilt die Stufe mit hohem Leistungs- und niedrigem Arbeitspreis. Im laufenden Jahr aufs ganze Jahr hochgerechnet."><span class="l">Benutzungsdauer</span><strong class="v" id="peakShavingUsage">&mdash;</strong></div>
+          <div class="rail-row" data-leit="adv" title="Arbeitspreis + Leistungspreis ÷ Benutzungsdauer (netto)."><span class="l">Netzentgelt effektiv</span><strong class="v" id="peakShavingEffective">&mdash;</strong></div>
+          <div class="rail-row" title="Gegenüber der Spitze ohne Akku-Beitrag (je Viertelstunde Bezug + Akku-Entladung) bei gleicher Arbeit — eine Obergrenze: entladen hätte der Akku auch ohne Peak Shaving."><span class="l">Vermieden</span><strong class="v" id="peakShavingAvoided">&mdash;</strong></div>
+          <p class="card-sub" id="peakShavingBillingNote"></p>
+        </div>
+        <p class="card-sub" id="peakShavingAdapt" hidden></p>
       </div>
       <div class="card rail-card" data-accent="dv" data-leit="adv">
         <div class="rail-card-head">
@@ -319,6 +339,22 @@
           <button id="manualMaxDischargeBtn" class="btn primary sm" type="button">Senden</button>
         </div>
 
+        <!-- M14b Feldtest: Abregelung kontrolliert testen. Laeuft ueber den echten
+             Ernstfallpfad (Negativpreis bzw. Direktvermarkter) mit selbst-ablaufendem
+             Lease (X min) — endet garantiert von selbst. 1-s-Protokoll aus dem Regeltakt. -->
+        <p class="card-title ctrl-section-head" data-leit="adv">Abregelung testen (Feldtest)</p>
+        <div class="ctrl-row" data-leit="adv" title="Dauer des Tests in Minuten. Der Test endet garantiert nach dieser Zeit von selbst (selbst-ablaufendes Lease), auch ohne weitere Aktion.">
+          <label class="ctrl-label">Dauer (min)<input id="curtailTestMinutes" class="input mono" type="number" min="1" max="60" step="1" value="5"></label>
+          <label class="ctrl-label" title="Die Akkus beider Wechselrichter laden nicht, damit der PV-Ueberschuss sichtbar abgeregelt wird. Entladen fuer das Haus bleibt erlaubt, die Hauslast kommt weiter aus dem Akku."><input id="curtailTestBlockCharge" type="checkbox"> Akku nicht laden</label>
+        </div>
+        <div class="ctrl-row" data-leit="adv">
+          <button id="curtailTestNegBtn" class="btn primary sm" type="button" title="Negativpreis-Abregelung (&sect;51) ueber den echten Pfad testen: Sollwert-Puffer + Einspeise-Sperre, wie bei echt negativem Preis.">Negativpreis testen</button>
+          <button id="curtailTestDvBtn" class="btn primary sm" type="button" title="Direktvermarkter-Abregelung ueber den echten Pfad testen: forcedOff (DV-Signal), Einspeisung gesperrt.">Direktvermarkter testen</button>
+          <button id="curtailTestStopBtn" class="btn sm" type="button" hidden title="Test sofort beenden (sonst laeuft das Lease nach der eingestellten Zeit von selbst ab).">Test stoppen</button>
+        </div>
+        <div class="meta" id="curtailTestStatus" data-leit="adv" hidden>&mdash;</div>
+        <div class="meta mono" id="curtailTestProtocol" data-leit="adv" hidden></div>
+
         <p class="card-title ctrl-section-head" data-leit="adv">Standards</p>
         <div class="ctrl-defaults" data-leit="adv">
           <label class="ctrl-label">Grid (W)<input id="defaultGridSetpointInput" class="input mono" type="number" value="-40"></label>
@@ -333,6 +369,60 @@
     <!-- EPEX Day-Ahead chart: unter linker Spalte + Energiefluss, die rechte
          Spalte laeuft daneben weiter (Christin 2026-09-23 — sonst zog die hohe
          rechte Spalte den Energiefluss in die Laenge). -->
+    <!-- Wechselrichter-Kachel (zwei Sungrow-WR): volle Reihe UNTER dem Energiefluss, Master | Slave | Summe
+         nebeneinander (M5, Feld 16.11.). Ohne zweiten WR bleibt sie versteckt (die Reihe kollabiert). -->
+    <div class="card rail-card leit-wr" data-accent="bat" id="sungrowWrCard" data-screen-label="Inverters (two)" hidden>
+      <!-- M5b: Kopf einzeilig — Titel · Modus · Freigeben-Knopf; Summe einzeilig darunter. -->
+      <div class="rail-card-head">
+        <span class="ttl"><span class="dot dot-bat"></span>Wechselrichter &middot; Sungrow</span>
+        <span class="wr-head-mode" id="sungrowWrMode" title="Aktiver EMS-Modus: Eigenverbrauch (0), Forced-Split (2) oder External EMS (3).">&mdash;</span>
+        <span class="wr-head-spacer"></span>
+        <!-- M2: manuelle Freigabe (Modus 0, beide 0xCC) — der Weg ohne Shell, falls der Master in DVhubs Forced mode hängt. -->
+        <button type="button" class="btn sm" id="sungrowWrReleaseBtn" title="Nimmt den Forced/External-EMS-Betrieb am Master zurück: Modus 0 (Eigenverbrauch), beide Wechselrichter auf Stopp (0xCC). Nutze dies, wenn der Wechselrichter fest in einem Lade-/Entladebefehl steht.">Sungrow freigeben</button>
+        <span class="v" id="sungrowWrReleaseStatus"></span>
+      </div>
+      <div class="wr-sum" id="sungrowWrSum" title="Systemsumme beider WR (SoC = echter System-SoC).">&mdash;</div>
+      <div class="wr-cols">
+        <!-- Master -->
+        <div class="wr-col">
+          <div class="rail-row wr-role"><span class="l" id="sungrowWrMasterRole">Master</span></div>
+          <div class="wr-badges" id="sungrowWrMasterBadges" hidden></div>
+          <div class="wr-grid wr-grid-3" title="Master: SoC (gemeldet · real) · Akku (Richtung) · PV.">
+            <div class="wr-cell"><span class="cap">SoC</span><strong class="v" id="sungrowWrMasterSoc">&mdash;</strong></div>
+            <div class="wr-cell"><span class="cap">Akku</span><strong class="v" id="sungrowWrMasterAkku">&mdash;</strong></div>
+            <div class="wr-cell"><span class="cap">PV</span><strong class="v" id="sungrowWrMasterPv">&mdash;</strong></div>
+          </div>
+          <div class="wr-line"><span class="wr-l">Befehl</span><strong class="wr-v" id="sungrowWrMasterCmd">&mdash;</strong></div>
+          <div class="wr-line" id="sungrowWrMasterCountdownRow" hidden title="Herzschlag-Countdown — nur im External EMS (Modus 3)."><span class="wr-l">Countdown</span><strong class="wr-v" id="sungrowWrMasterCountdown">&mdash;</strong></div>
+          <div class="wr-line" title="Wirksame Grenzen = min(Gerät 33047/33048, BDC) je Richtung + SoC-Spanne der Anlage."><span class="wr-l">Grenzen</span><strong class="wr-v" id="sungrowWrMasterLimit">&mdash;</strong></div>
+          <div class="wr-line" title="Modbus-Gesundheit des Master-Pfads: wirksamer Takt · Antwortzeit · Anfragen/s · Modbus-Fehler 24 h · letzter Fehler."><span class="wr-l">Modbus</span><strong class="wr-v" id="sungrowWrMasterHealth">&mdash;</strong></div>
+          <div class="rail-row" data-leit="adv"><span class="l" id="sungrowWrMasterMeta">&mdash;</span></div>
+          <div class="rail-row" data-leit="adv" title="EMS-Entscheidung, Besitz und Herzschlag des Masters."><span class="l">EMS</span><strong class="v" id="sungrowWrMasterEms">&mdash;</strong></div>
+          <div class="rail-row" data-leit="adv" title="Aufteilung Master/Slave (Strategie) und Regelzyklus."><span class="l">Aufteilung/Takt</span><strong class="v" id="sungrowWrMasterSplit">&mdash;</strong></div>
+          <div class="rail-row" data-leit="adv" title="Tages-Schreibzähler je Register (13050 Modus mit Budget, 13051 Befehl, 13052 Leistung, 13080 Herzschlag)."><span class="l">Writes Master</span><strong class="v" id="sungrowWrMasterWrites">&mdash;</strong></div>
+        </div>
+        <!-- Slave -->
+        <div class="wr-col">
+          <div class="rail-row wr-role"><span class="l" id="sungrowWrSlaveRole">Slave</span></div>
+          <div class="wr-badges" id="sungrowWrSlaveBadges" hidden></div>
+          <div class="wr-status" id="sungrowWrSlaveStatus" hidden>&mdash;</div>
+          <div id="sungrowWrSlaveGrid">
+            <div class="wr-grid wr-grid-3" title="Slave: SoC (gemeldet · real) · Akku (Richtung) · PV.">
+              <div class="wr-cell"><span class="cap">SoC</span><strong class="v" id="sungrowWrSlaveSoc">&mdash;</strong></div>
+              <div class="wr-cell"><span class="cap">Akku</span><strong class="v" id="sungrowWrSlaveAkku">&mdash;</strong></div>
+              <div class="wr-cell"><span class="cap">PV</span><strong class="v" id="sungrowWrSlavePv">&mdash;</strong></div>
+            </div>
+            <div class="wr-line"><span class="wr-l">Befehl</span><strong class="wr-v" id="sungrowWrSlaveCmd">&mdash;</strong></div>
+            <div class="wr-line" id="sungrowWrSlaveCountdownRow" hidden><span class="wr-l">Countdown</span><strong class="wr-v" id="sungrowWrSlaveCountdown">&mdash;</strong></div>
+            <div class="wr-line"><span class="wr-l">Grenzen</span><strong class="wr-v" id="sungrowWrSlaveLimit">&mdash;</strong></div>
+            <div class="wr-line" title="Modbus-Gesundheit des Slave-Lesepfads: Anfragen/s · Antwortzeit · Modbus-Fehler 24 h · letzter Fehler. Der Lesetakt steht in der Zeile Slave-EMS."><span class="wr-l">Modbus</span><strong class="wr-v" id="sungrowWrSlaveHealth">&mdash;</strong></div>
+          </div>
+          <div class="rail-row" data-leit="adv" title="Slave-Entscheidung und Besitz. Takt: Regelzyklus = Takt des Masters (der Slave wird in jeder Master-Runde mitgeführt), Lesetakt = wie oft seine Messwerte (SoC, Akku, PV) gelesen werden."><span class="l">Slave-EMS/BDC</span><strong class="v" id="sungrowWrSlaveEms">&mdash;</strong></div>
+          <div class="rail-row" data-leit="adv"><span class="l">Writes Slave</span><strong class="v" id="sungrowWrSlaveWrites">&mdash;</strong></div>
+        </div>
+      </div>
+    </div>
+
     <section class="section-block leit-epex" data-screen-label="EPEX Day-Ahead">
       <div class="card chart-card">
         <div class="card-head">
@@ -370,6 +460,8 @@
             <span class="eos-plan-summary-note" id="eosPlanSummaryNote">EOS-Plan wird geladen &hellip;</span>
           </div>
           <p class="eos-plan-summary-help" id="eosPlanSummaryHelp" hidden></p>
+          <!-- M17: Womit EOS die am Planende noch gespeicherte Akku-Energie bewertet (ct/kWh). -->
+          <div class="eos-plan-summary-terminal" id="eosPlanSummaryTerminal" hidden></div>
           <div class="eos-plan-summary-day" id="eosPlanSummaryToday" hidden>
             <strong id="eosPlanSummaryTodayHead"></strong>
             <span id="eosPlanSummaryTodayExport"></span>
@@ -586,6 +678,13 @@
           <canvas id="eosPlanChart"></canvas>
         </div>
         <div class="chart-day-summary" id="eosPlanKpis"></div>
+        <!-- Preisschwanz (1.0.11, /api/eos/plan priceTail): wie weit EOS vorausschaut,
+             woher die Preise hinter den festen Börsenpreisen kommen (Residuallast-
+             Prognose dvhub.online) bzw. seit wann sie fehlen. leitstand-charts.js#renderEosPriceTail. -->
+        <p class="eos-price-tail" id="eosPriceTail" hidden></p>
+        <!-- Mit der Preisprognose Tage im Voraus planen (1.0.11, /api/eos/plan horizonHint,
+             eos-horizon-hint.js): Hinweis mit Laufzeit-Schätzung, stellt nichts um. -->
+        <p class="eos-horizon-hint" id="eosHorizonHint" hidden></p>
         <!-- Hinweis bei langen EOS-Läufen (/api/eos/plan runHint, eos-run-hint.js):
              schlägt 100 Generationen und Steuerzeitraum „automatisch“ vor, stellt nichts um. -->
         <p class="eos-plan-hint" id="eosPlanHint" hidden></p>
@@ -650,14 +749,15 @@
 <script src="/pro-modal.js" defer></script>
 <script src="/dvhub-powerflow.js?v=20261006-zaehlen"></script>
 <script src="/second-gx-view.js?v=20261021"></script>
+<script src="/sungrow-inverter-view.js?v=20261119-n3-slave-takt-vcl"></script>
 <script src="/eos-plan-summary.js?v=20261105-eos-frist"></script>
-<script src="/peak-shaving-view.js?v=20261026"></script>
+<script src="/peak-shaving-view.js?v=20261124"></script>
 <script src="/license-banner.js?v=20261105-lizenz-umzug"></script>
 <script src="/grid-connection-view.js?v=20261110-eos-schwelle"></script>
-<script src="/app.js?v=20261110-fable-r2"></script>
-<script src="/leitstand-charts.js?v=20261105-eos-frist"></script>
-<script src="/ev-weekly-editor.js?v=20261111-abfahrtstag3"></script>
-<script src="/ev-once.js?v=20261111-abfahrtstag3"></script>
-<script src="/ev-tile.js?v=20261111-abfahrtstag3"></script>
+<script src="/app.js?v=20261120-netzstrom-zuerst"></script>
+<script src="/leitstand-charts.js?v=20261119-pv-ensemble"></script>
+<script src="/ev-weekly-editor.js?v=20261119-m19-badge"></script>
+<script src="/ev-once.js?v=20261119-m19-badge"></script>
+<script src="/ev-tile.js?v=20261119-m19-badge"></script>
 </body>
 </html>

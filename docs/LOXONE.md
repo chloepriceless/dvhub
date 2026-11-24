@@ -44,12 +44,13 @@ dvhub_control_paused=false
 | `batteryPowerW` | Batterieleistung in W, **Laden positiv** |
 | `pvTotalW` | PV-Leistung gesamt in W |
 | `minSocPct`, `gridSetpointW` | Rücklesung der Anlage (Mindest-SoC, Netz-Sollwert) |
-| `dvControlValue`, `forcedOff` | Direktvermarkter-Signal (1 = Einspeisung erlaubt) bzw. Abregelung aktiv |
+| `dvControlValue`, `forcedOff` | Direktvermarkter-Signal (1 = Einspeisung erlaubt) bzw. Abregelung aktiv; im Not-Halt und im Lese-Modus `null` (siehe A.4) |
 | `dvhub_control_grid_setpoint_w` | **aktiver Netz-Sollwert von DVhub** in W (negativ = einspeisen) |
 | `dvhub_control_charge_current_a` | Ladestrom-Vorgabe in A |
 | `dvhub_control_min_soc_pct` | Mindest-SoC-Vorgabe in % |
 | `dvhub_control_max_discharge_w` | maximale Entladeleistung in W (`-1` = keine Begrenzung) |
 | `dvhub_control_paused` | `true`, wenn der Not-Halt aktiv ist |
+| `dvhub_control_suspended` | nur vorhanden, wenn DVhub gerade **keine Vorgabe** herausgibt — mit Grund: `not_halt`, `read_only`, `config_unsafe` (siehe A.4) |
 
 Weitere Zeilen (`costs`, `dvhub_forecast`, …) enthalten JSON und sind für Loxone meist nicht nötig.
 
@@ -79,6 +80,41 @@ Weitere Zeilen (`costs`, `dvhub_forecast`, …) enthalten JSON und sind für Lox
 
 - **`open`** (Standard) und **`restricted`**: Geräte im Heimnetz dürfen lesen, Loxone braucht nichts weiter. (Bei `restricted` muss die Gruppe „integrations“ in den LAN-sicheren Gruppen stehen — Standard.)
 - **`strict`**: nur mit API-Token (`Authorization: Bearer <apiToken>`). Kann der Loxone-Eingang keinen Header setzen, `restricted` wählen.
+
+### A.4 Im Not-Halt: keine Vorgabe
+
+Wer die Sollwerte abholt und umsetzt, steuert mit. Deshalb gibt DVhub sie in drei Lagen **nicht** heraus — wie bei ausgeschaltetem DVhub:
+
+| Lage | `dvhub_control_suspended` | Sollwert-Zeilen | Grenzen-Zeilen (`dvhub_control_grid_limit_*`) | Direktvermarkter-Signal (`dvControlValue`, `forcedOff`) |
+|---|---|---|---|---|
+| Not-Halt aktiv | `not_halt` (dazu `dvhub_control_paused=true`) | keine Vorgabe | keine Grenze (§14a ist im Not-Halt ausgesetzt) | kein Signal (`null`) |
+| Konfiguration ungültig (kaputtes oder fehlendes Herstellerprofil, kaputte `config.json`) | `config_unsafe` | keine Vorgabe | laufen weiter | läuft weiter |
+| Lese-Modus (`DVHUB_READ_ONLY=1`, Zweit-Instanz zum Mitlesen) | `read_only` | keine Vorgabe | keine Grenze | kein Signal (`null`) |
+
+**Direktvermarkter-Signal:** Im Not-Halt und im Lese-Modus steht dort `dvControlValue=null` und `forcedOff=null` — eine Loxone-Logik, die das Signal abholt und die PV selbst abregelt, soll nicht weitersteuern, während DVhub „aus“ ist. Bei **ungültiger Konfiguration läuft es weiter**: Dann schreibt DVhub selbst nichts an die Anlage und kann deshalb auch nicht abregeln. Die Weitergabe an Loxone ist in dieser Lage der einzige Weg, der Abregelung des Direktvermarkters (und damit der gesetzlichen Pflicht) zu folgen. DVhub selbst behält den Zustand (Abregelung, Ablauf der Vorgabe) auch im Not-Halt; nach dem Aufheben steht dort wieder der aktuelle Wert. Die Direktvermarkter-Schnittstelle selbst (Modbus-Server, `GET /dv/control-value`) ist davon nicht betroffen — dort liest der Direktvermarkter sein eigenes Signal zurück; eine Loxone-Logik nimmt das Signal aus `/api/integration/loxone`. Schreibbefehle des Direktvermarkters an den Modbus-Server beantwortet DVhub im Not-Halt mit der Modbus-Ausnahme 0x04 und übernimmt sie nicht; der gespeicherte Zustand ändert sich dadurch nicht.
+
+„Keine Vorgabe“ sieht genauso aus wie bei einem DVhub ohne jeden Sollwert:
+
+```
+dvhub_control_grid_setpoint_w=null
+dvhub_control_charge_current_a=null
+dvhub_control_min_soc_pct=null
+dvhub_control_max_discharge_w=null
+dvhub_control_source=none
+dvhub_control_rule=null
+dvhub_control_updated_at=null
+dvhub_control_paused=true
+dvhub_control_suspended=not_halt
+dvhub_control_grid_limit_active=false
+dvhub_control_grid_limit_source=none
+dvhub_control_grid_limit_consumption_w=null
+dvhub_control_grid_limit_production_w=null
+dvhub_control_grid_limit_production_blocked=false
+```
+
+Auch die JSON-Zeile `scheduleActive` nennt dann je Ziel `null`. **Alle Messwerte laufen weiter** (`gridTotalW`, `soc`, `batteryPowerW`, `pvTotalW`, die Rücklesungen `gridSetpointW`/`minSocPct`). Ist der Not-Halt aufgehoben bzw. die Konfiguration wieder gültig, kommen die Sollwerte (und das Direktvermarkter-Signal) mit der nächsten Abfrage wieder; die Zeile `dvhub_control_suspended` entfällt dann.
+
+`null` ist keine Zahl. Die Loxone-Logik, die einen Sollwert (oder das Direktvermarkter-Signal) umsetzt, soll in diesem Fall auf den **eigenen Grundzustand** des Speichers bzw. der PV fallen und **nicht den zuletzt gelesenen Wert weiterfahren**. Wie ein Virtueller HTTP Eingang Befehl mit `\v` auf `null` reagiert (alter Wert, Standardwert), hängt von seinen Einstellungen ab — am besten zusätzlich die Zeile `dvhub_control_suspended` bzw. `dvhub_control_paused=true` als Sperre in die Logik nehmen und das mit einem kurzen Not-Halt einmal ausprobieren.
 
 ---
 
@@ -153,7 +189,7 @@ In DVhub dann unter „MQTT-Bridge (Universal)“ die **Broker-URL des LoxBerry*
 
 ### B.6 Sollwerte von DVhub in Loxone umsetzen
 
-Ist die Anlage nur über Loxone steuerbar, liest Loxone die Vorgaben von DVhub wie in **Teil A** (`dvhub_control_grid_setpoint_w`, `dvhub_control_min_soc_pct`, `dvhub_control_max_discharge_w`, `dvhub_control_charge_current_a`) und setzt sie am Speicher/Wechselrichter um. Ohne MQTT-Broker speichert DVhub die Sollwerte nur und stellt sie dort bereit — Loxone muss sie aktiv abholen.
+Ist die Anlage nur über Loxone steuerbar, liest Loxone die Vorgaben von DVhub wie in **Teil A** (`dvhub_control_grid_setpoint_w`, `dvhub_control_min_soc_pct`, `dvhub_control_max_discharge_w`, `dvhub_control_charge_current_a`) und setzt sie am Speicher/Wechselrichter um. Ohne MQTT-Broker speichert DVhub die Sollwerte nur und stellt sie dort bereit — Loxone muss sie aktiv abholen. Im Not-Halt, bei ungültiger Konfiguration und im Lese-Modus steht dort „keine Vorgabe“ (A.4): Die Loxone-Logik muss dann selbst in den Grundzustand gehen.
 
 ---
 

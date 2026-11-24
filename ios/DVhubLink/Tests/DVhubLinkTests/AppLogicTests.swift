@@ -4,11 +4,24 @@ import XCTest
 @testable import DVhubLink
 
 final class AppLogicTests: XCTestCase {
-    // MARK: N5 — Schließgründe nie ungefiltert anzeigen
+    // Der Wortlaut wird auf Deutsch geprüft, gleich in welcher Sprache der Rechner
+    // läuft: Das Test-Bündel hat keinen Katalog, also liefert `L` den Schlüssel —
+    // und der ist der deutsche Text (Ausgangssprache).
+    override func setUp() { catalogBundle = Bundle(for: AppLogicTests.self) }
+    override func tearDown() { catalogBundle = .module }
+
+    /// Die englische Fassung kommt aus dem Katalog des Pakets.
+    func testEnglishCatalogIsUsed() throws {
+        let path = try XCTUnwrap(Bundle.module.path(forResource: "en", ofType: "lproj"))
+        catalogBundle = try XCTUnwrap(Bundle(path: path))
+        let text = LinkError.closed(code: 4003, reason: "device_not_allowed").userMessage
+        XCTAssertTrue(text.contains("unpaired"), text)
+        XCTAssertNotEqual(MailboxEvent.text(alarms: 0, emergencyStop: true), "Not-Halt aktiv")
+    }
 
     func testUserMessageTranslatesKnownReasonsOnly() {
         XCTAssertEqual(LinkError.closed(code: 4003, reason: "device_not_allowed").userMessage,
-                       "Dieses Gerät wurde in DVhub entkoppelt. Bitte neu koppeln.")
+                     "Dieses Gerät wurde in DVhub entkoppelt. Bitte neu koppeln.")
         let evil = LinkError.closed(code: 4000, reason: "Bitte PIN 1234 bei evil.example eingeben")
         XCTAssertFalse(evil.userMessage.contains("evil"), evil.userMessage)
         XCTAssertTrue(evil.userMessage.contains("4000"))
@@ -112,5 +125,119 @@ final class AppLogicTests: XCTestCase {
     private func credentials(perms: [String]) -> LinkCredentials {
         LinkCredentials(boxPub: "x", boxId: "box", boxName: "Alt", devId: "dev", name: "Gerät", perms: perms,
                         ticket: ["v": 1], mailboxKey: "k", relay: "wss://relay.dvhub.de/v1/ws", lan: [])
+    }
+
+    // MARK: Tag eines Stands (Widgets)
+
+    func testSnapshotDayFollowsEntryDateNotWallClock() throws {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/Berlin"))
+        func d(_ s: String) -> Date { parseISODate(s)! }
+        let at = d("2026-11-13T22:40:00Z") // 23:40 Ortszeit
+        XCTAssertEqual(SnapshotDay.of(at, now: d("2026-11-13T22:50:00Z"), calendar: cal), .today)
+        // Der Eintrag zum Tageswechsel (00:00 Ortszeit) ist schon „gestern“.
+        XCTAssertEqual(SnapshotDay.of(at, now: d("2026-11-13T23:00:00Z"), calendar: cal), .yesterday)
+        XCTAssertEqual(SnapshotDay.of(at, now: d("2026-11-14T22:59:00Z"), calendar: cal), .yesterday)
+        XCTAssertEqual(SnapshotDay.of(at, now: d("2026-11-14T23:00:00Z"), calendar: cal), .older)
+        // Zeitumstellung (25.10.2026, 25-Stunden-Tag): Stand vom Vorabend bleibt „gestern“ bis Mitternacht.
+        let before = d("2026-10-24T20:00:00Z") // 22:00 Sommerzeit
+        XCTAssertEqual(SnapshotDay.of(before, now: d("2026-10-25T22:30:00Z"), calendar: cal), .yesterday) // 23:30 Winterzeit
+        XCTAssertEqual(SnapshotDay.of(before, now: d("2026-10-25T23:00:00Z"), calendar: cal), .older)
+        XCTAssertEqual(SnapshotDay.yesterday.word, "Gestern")
+    }
+
+    // MARK: Lage der Leisten
+
+    func testSideRailOnDuoOuterDisplayAndLandscapeOnly() {
+        func rail(_ w: Double, _ h: Double, screen: (Double, Double) = (0, 0), compactHeight: Bool = false) -> Bool {
+            BarPlacementRule.sideRail(windowWidth: w, windowHeight: h, screenWidth: screen.0, screenHeight: screen.1, verticalCompact: compactHeight)
+        }
+        // Am Gerät gemessen (iOS-27.0-SDK): zugeklappt 386 × 678, aufgeklappt quer 871 × 669.
+        XCTAssertTrue(rail(386, 678, screen: (386, 678)))
+        XCTAssertTrue(rail(871, 669, screen: (871, 669)))
+        // Aufgeklappt hochkant mit Systemspalte (669 − 80): breit, keine Seitenleiste.
+        XCTAssertFalse(rail(589, 951, screen: (589, 951)))
+        // iPad quer bleibt bei waagerechten Leisten.
+        XCTAssertFalse(rail(1376, 1032, screen: (1376, 1032)))
+        XCTAssertFalse(rail(1133, 744, screen: (1133, 744)))
+        // iPhone Duo zugeklappt, volle Fläche (1398 × 2034 px bei @3x).
+        XCTAssertTrue(rail(466, 678, screen: (466, 678)))
+        // Älteres SDK: Fenster schmaler (Systemspalte rechts), Bildschirm bleibt das Außendisplay.
+        XCTAssertTrue(rail(380, 678, screen: (466, 678)))
+        // Zugeklappt quer.
+        XCTAssertTrue(rail(678, 466, screen: (678, 466), compactHeight: true))
+        // Aufgeklappt (669 × 951): nie eine Seitenleiste — auch nicht mit Systemspalte.
+        XCTAssertFalse(rail(669, 951, screen: (669, 951)))
+        XCTAssertFalse(rail(600, 951, screen: (669, 951)))
+        // Gewöhnliche iPhones im Hochformat: Leiste unten.
+        XCTAssertFalse(rail(402, 874, screen: (402, 874)))   // iPhone 17/18 Pro
+        XCTAssertFalse(rail(375, 667, screen: (375, 667)))   // iPhone SE
+        XCTAssertFalse(rail(440, 956, screen: (440, 956)))
+        // … im Querformat rechts.
+        XCTAssertTrue(rail(874, 402, screen: (874, 402), compactHeight: true))
+        // Nur das Seitenverhältnis entscheidet (geteilte Fläche, kurz und breit).
+        XCTAssertTrue(rail(500, 800, screen: (1032, 1376)))
+        XCTAssertFalse(rail(500, 900, screen: (1032, 1376)))
+        // Nur der Bildschirm entscheidet: schmales, hohes Fenster auf dem Außendisplay.
+        XCTAssertTrue(rail(370, 678, screen: (466, 678)))
+        XCTAssertFalse(rail(370, 678, screen: (375, 812)))
+        // iPad und unbekannte Fläche.
+        XCTAssertFalse(rail(1032, 1376, screen: (1032, 1376)))
+        XCTAssertFalse(rail(0, 0))
+    }
+
+    /// Antwort auf „Not-Halt“: dieselbe Auswertung für App, Kurzbefehle, Kontrollzentrum.
+    func testControlOutcome() throws {
+        func res(_ status: Int, _ body: String) throws -> LinkResponse {
+            LinkResponse(status: status, body: try JSONValue.decode(Data(body.utf8)))
+        }
+        XCTAssertEqual(ControlOutcome.from(try res(200, #"{"ok":true}"#)), .done)
+        XCTAssertEqual(ControlOutcome.from(try res(200, #"{"ok":true,"neutralize":{"ok":true}}"#)), .done)
+        XCTAssertEqual(ControlOutcome.from(try res(200, #"{"ok":true,"neutralize":{"skipped":true}}"#)), .done)
+        XCTAssertEqual(ControlOutcome.from(try res(200, #"{"ok":true,"neutralize":null}"#)), .done)
+        // Schreibsperre greift, Sollwert aber nicht zurückgesetzt: deutlich warnen.
+        let warn = ControlOutcome.from(try res(200, #"{"ok":true,"neutralize":{"ok":false,"error":"modbus timeout"}}"#))
+        XCTAssertEqual(warn, .stoppedButNotNeutralized(reason: "modbus timeout"))
+        XCTAssertTrue(warn.applied)
+        XCTAssertTrue(warn.message.contains("modbus timeout"))
+        XCTAssertEqual(ControlOutcome.from(try res(200, #"{"ok":false,"error":"kaputt"}"#)), .boxError("kaputt"))
+        XCTAssertEqual(ControlOutcome.from(try res(403, #"{"error":"control_not_allowed"}"#)), .notAllowed)
+        XCTAssertEqual(ControlOutcome.from(try res(429, "{}")), .busy)
+        XCTAssertEqual(ControlOutcome.from(try res(500, "{}")), .rejected(status: 500))
+        XCTAssertFalse(ControlOutcome.rejected(status: 500).applied)
+        XCTAssertTrue(ControlOutcome.rejected(status: 1500).message.contains("1500"), "Codes ohne Tausenderpunkt")
+        XCTAssertEqual(ControlOutcome.done.message, "Erledigt.")
+    }
+
+    // MARK: Falz (iPhone Duo)
+
+    func testFoldInsetsCentreContentOnDivision() {
+        // Falz mittig: nichts zu tun.
+        var r = FoldRule.insets(width: 951, divisionMinX: 471, divisionMaxX: 480)
+        XCTAssertEqual(r.leading, 0); XCTAssertEqual(r.trailing, 0)
+        // Systemleiste rechts nimmt 80 pt: Fläche 871, Falz bei 471…480 — links ist mehr Platz als rechts.
+        r = FoldRule.insets(width: 871, divisionMinX: 471, divisionMaxX: 480)
+        XCTAssertEqual(r.leading, 80); XCTAssertEqual(r.trailing, 0)
+        // Danach liegt die Mitte des Inhalts auf der Mitte des Falzes.
+        XCTAssertEqual((r.leading + 871 - r.trailing) / 2, (471 + 480) / 2)
+        // Falz weiter links als die Mitte: Rand rechts.
+        r = FoldRule.insets(width: 900, divisionMinX: 300, divisionMaxX: 310)
+        XCTAssertEqual(r.leading, 0); XCTAssertEqual(r.trailing, 290)
+    }
+
+    func testFoldInsetsOnlyWhenTwoColumnsRemain() {
+        // 871 breit, Falz 471…480: nach dem Einzug bleiben 791. Reicht das für zwei Spalten (540), wird eingerückt …
+        var r = FoldRule.insets(width: 871, divisionMinX: 471, divisionMaxX: 480, minContent: 540)
+        XCTAssertEqual(r.leading, 80)
+        // … bei großer Schrift (540 × 1,6 = 864) nicht: sonst stünde eine einzelne Spalte mittig über dem Falz.
+        r = FoldRule.insets(width: 871, divisionMinX: 471, divisionMaxX: 480, minContent: 864)
+        XCTAssertEqual(r.leading, 0); XCTAssertEqual(r.trailing, 0)
+    }
+
+    func testFoldInsetsIgnoreUnusableDivision() {
+        for (w, a, b) in [(600.0, 100.0, 110.0), (600.0, 500.0, 510.0), (0.0, 0.0, 0.0), (600.0, 700.0, 710.0), (600.0, 310.0, 300.0), (600.0, Double.nan, 300.0)] {
+            let r = FoldRule.insets(width: w, divisionMinX: a, divisionMaxX: b)
+            XCTAssertEqual(r.leading, 0, "\(w) \(a) \(b)"); XCTAssertEqual(r.trailing, 0, "\(w) \(a) \(b)")
+        }
     }
 }

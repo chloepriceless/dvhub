@@ -1,6 +1,5 @@
 {
-  "label": "Sungrow SH Hybrid (Modbus TCP) — Beta",
-  "beta": true,
+  "label": "Sungrow SH Hybrid (Modbus TCP)",
   "_doc": [
     "Sungrow-Herstellerprofil (T-0422, Beta seit 11.11.2026) — Hybrid-Wechselrichter mit Akku:",
     "SH3.0–10RS (1-phasig), SH5.0–10RT inkl. -20/-V112/-V122 und SH5T–SH25T (3-phasig), MG5/6RL.",
@@ -32,15 +31,41 @@
     "    Einspeise-Wunsch nie Entladen ins Netz. Ohne frische Messwerte oder ohne Sollwert seit 2 min →",
     "    Self-consumption.",
     "  • Abregelung (Direktvermarkter, §51 bei negativem Preis): Einspeisebegrenzung am Netzpunkt —",
-    "    13088 Quote = 0 (wenn vorhanden), 13074 Wert = 0 W, dann 13087 = 0xAA. Die Werte davor werden",
-    "    gesichert und bei Freigabe zurückgeschrieben (eine vom Installateur gesetzte Grenze bleibt).",
+    "    13088 Quote = 0 (wenn vorhanden), 13074 Wert = 0 W, 31222 Wide-Range = 0 (wenn vorhanden), dann",
+    "    13087 = 0xAA. Die Werte davor werden gesichert und bei Freigabe zurückgeschrieben (eine vom",
+    "    Installateur gesetzte Grenze bleibt). 31222 wird mitgeführt, weil es am Gerät sonst (Feld 16.11.)",
+    "    auf seinem alten Wert (z. B. 2420 = 24,2 kW) stehen bleibt, obwohl 13074 schon 0 ist.",
+    "    Geräte-Quirk (13088, dokumentiert): Nach dem Schreiben von 0 kann das Zurücklesen der Quote 13088",
+    "    „modbus exception 4“ liefern, obwohl der Wert übernommen wurde — v. a. wenn die Begrenzung vorher",
+    "    aus war (13088 las 0xFFFF). Dann wird 13088 ohnehin nicht als Ist-Wert gesichert (NEU1); die Sperre",
+    "    trägt der verifizierte Watt-Wert 13074 mit Vorrang-Quote 0. Nur ein WIRKLICH fehlendes Register",
+    "    (Exception 1/2, alte Firmware) nimmt den Schritt aus der Sequenz.",
     "  • Not-Halt: hat DVhub den Zwangsbetrieb gesetzt, einmal zurück in Self-consumption, dann nichts.",
     "  • External EMS: Herzschlag 13080 = Frist (Standard 30 s) in jedem Takt; bleibt er aus, kehrt der",
     "    Wechselrichter laut Doku selbst in Self-consumption zurück. Firmware ohne 13080 → keine Akku-Steuerung.",
+    "    Der Herzschlag wird NACH dem Moduswechsel geschrieben (Doku V1.1.11: mode 3 setzen, dann den",
+    "    Herzschlag-Wert liefern) — der WR setzt 13080 beim Eintritt in Modus 3 selbst (am Gerät 600 s) und",
+    "    übernimmt unseren Wert erst danach. Manche Sungrow (SH10RT-20) nehmen 13080 nur per FC 16 (Write",
+    "    Multiple) an — DVhub versucht per Auto erst FC 06, dann FC 16 (sungrow.heartbeatWriteFc 6|16 erzwingt",
+    "    eine), und merkt sich je Verbindung die funktionierende. Übernimmt er gar keinen Wert (Rücklesung ≠ Soll),",
+    "    bricht DVhub External EMS sofort ab und geht zurück in Self-consumption; sungrow.acceptDeviceHeartbeatS",
+    "    (Opt-in, ≤600 s) fährt notfalls mit dem Gerätewert. sungrow.heartbeatAfterMode schaltet die Reihenfolge um.",
     "  • Nicht genutzt: Min-/Max-SoC (13058/13059), Max. Lade-/Entladeleistung (33047/33048).",
     "",
     "UNGEPRÜFT bis zum Kundentest: Vorzeichen der Akku-Leistung 5214 (laut mkaiser positiv =",
-    "Entladen → scale −1), Verhalten des Forced mode beim Laden aus PV + Netz, Reaktionszeit."
+    "Entladen → scale −1), Verhalten des Forced mode beim Laden aus PV + Netz, Reaktionszeit.",
+    "",
+    "Zwei WR (Master/Slave-Parallelbetrieb, seit 2026-11-14): Laut Sungrow-Doku V1.1.9/V1.1.11 (Energy-",
+    "Management, Note; ebenso Einspeise- und Wirkleistungsbegrenzung Note 4) werden die Steuerregister NUR an",
+    "den Master geschrieben — der Master verteilt Laden/Entladen intern auf den Slave. DVhub steuert daher nur",
+    "den Master (die victron.*-Verbindung = Master mit dem Smart Meter); ein zweiter Schreibpfad würde gegen die",
+    "Master-Koordination arbeiten und ist bewusst NICHT gebaut. Netz/Last/Einspeisung kommen vom einzigen Zähler",
+    "am Master = System-Werte. PV (5017) und Akku (5214) sind je WR eigene DC-Messungen; ob der Master sie im",
+    "Parallelbetrieb aufsummiert, steht NICHT in der Doku → am Gerät zu prüfen. Optional kann der zweite WR über",
+    "sungrow.secondInverter.host (Port 502, Unit-ID 1) NUR LESEND angebunden werden (services/inverter/",
+    "sungrow-second.js, eigener Modbus-Pool, kein Write). Erst wenn am Gerät bestätigt ist, dass der Master die",
+    "System-Summen NICHT meldet, darf sungrow.secondInverter.aggregateTelemetry eingeschaltet werden — dann",
+    "zählt der Regler PV/Akku/Leistungsgrenze beider WR zusammen. Standard aus = ein WR wie bisher."
   ],
 
   "identify": {
@@ -144,7 +169,7 @@
     "minSocPct": { "enabled": false },
     "maxDischargeW": { "enabled": false },
     "feedInLimitRatio": {
-      "_comment": "Doku 13088 Feed-in Limitation Ratio, U16, 0,1 % (0–1000). Hat Vorrang vor 13074 — deshalb bei der Abregelung ebenfalls 0. Erst ab Protokoll V1.1.7: ohne das Register (0xFFFF/Exception) wird der Schritt übersprungen.",
+      "_comment": "Doku 13088 Feed-in Limitation Ratio, U16, 0,1 % (0–1000). Note 2: Vorrang vor 13074 — zum Sperren MUSS die Quote deshalb auf 0 (sonst gibt 100 % trotz 13074=0 die Einspeisung frei). Verpflichtend-wenn-vorhanden: liest sie 0xFFFF (Funktion gerade aus), wird sie trotzdem auf 0 geschrieben; NUR ein wirklich fehlendes Register (alte Firmware, Modbus-Exception 1/2) wird übersprungen. Freigabe stellt die gesicherte Quote zurück; ohne Sicherung (war aus) bleibt sie unangetastet — die Kunden-Grenze trägt das Enable-Register 13087, dessen Rückstellung die Begrenzung wieder abschaltet.",
       "enabled": true,
       "fc": 6,
       "address": 13087,
@@ -163,6 +188,17 @@
       "scale": 1,
       "offset": 0,
       "verify": true
+    },
+    "feedInLimitWideRange": {
+      "_comment": "Doku 31222 Feed-in Limitation Value (wide range), U16, 0,01 kW. M16 (Feld 16.11.): am Gerät blieb 31222=2420 (24,20 kW) stehen, OBWOHL 13074=0 geschrieben war — ein widersprüchlicher Zustand. Wirksam ist zwar 13074 (W, Grenze am Netzpunkt mit Smart Meter), aber 31222 wird zum Sperren konsistent mitgeführt (auf 0) und bei der Freigabe aus der Sicherung zurückgestellt. optional: true — fehlt das Register (alte Firmware → Modbus-Exception 1/2), wird der Schritt übersprungen, ohne die Sequenz zu kippen; am Gerät ist es vorhanden und lesbar (2420 gelesen), daher mit Rücklesen (verify).",
+      "enabled": true,
+      "fc": 6,
+      "address": 31221,
+      "writeType": "uint16",
+      "scale": 1,
+      "offset": 0,
+      "verify": true,
+      "notAvailableRaw": [65535]
     },
     "feedInLimitEnable": {
       "_comment": "Doku 13087 Feed-in Limitation, U16: 0xAA (170) an, 0x55 (85) aus.",
@@ -185,11 +221,13 @@
         "0": [
           { "point": "feedInLimitRatio", "value": 0, "saveBefore": true, "optional": true },
           { "point": "feedInLimitW", "value": 0, "saveBefore": true },
+          { "point": "feedInLimitWideRange", "value": 0, "saveBefore": true, "optional": true },
           { "point": "feedInLimitEnable", "value": 170, "saveBefore": true }
         ],
         "1": [
           { "point": "feedInLimitRatio", "restore": true, "optional": true },
           { "point": "feedInLimitW", "restore": true },
+          { "point": "feedInLimitWideRange", "restore": true, "optional": true },
           { "point": "feedInLimitEnable", "restore": true }
         ]
       }

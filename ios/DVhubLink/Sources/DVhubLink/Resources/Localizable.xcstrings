@@ -1,0 +1,1192 @@
+{
+  "sourceLanguage" : "de",
+  "strings" : {
+    "%lld Alarme aktiv" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld alarms active"
+          }
+        }
+      }
+    },
+    "1 Alarm aktiv" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 alarm active"
+          }
+        }
+      }
+    },
+    "Abendspitze: Wann sich Einspeisen aus dem Akku lohnt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Evening peak: when feeding in from the battery pays off"
+          }
+        }
+      }
+    },
+    "Abgebrochen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelled."
+          }
+        }
+      }
+    },
+    "Akku (Laden +)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Battery (charging +)"
+          }
+        }
+      }
+    },
+    "Akku aus dem Netz laden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Charge battery from the grid"
+          }
+        }
+      }
+    },
+    "Akku ins Netz entladen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Discharge battery to the grid"
+          }
+        }
+      }
+    },
+    "Akku, Erzeugung, Netz und Tagesergebnis stehen als Widget bereit – in der Demo mit den Werten der Beispielanlage." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Battery, production, grid and the day’s result are available as widgets – in the demo with the sample system’s values."
+          }
+        }
+      }
+    },
+    "Alles wieder normal" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Everything back to normal"
+          }
+        }
+      }
+    },
+    "Am frühen Abend ist Strom an der Börse am teuersten. Der Fahrplan zeigt, wie viel Akku dafür frei ist – und was für die Nacht bleiben muss." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Electricity is most expensive on the exchange in the early evening. The plan shows how much battery is free for that – and what has to stay for the night."
+          }
+        }
+      }
+    },
+    "An sonnigen Tagen fällt der Day-Ahead-Preis um die Mittagszeit unter null. Die Demo-Anlage lädt dann den Akku und setzt die Einspeisung aus – zu sehen im Markt und im Leitstand." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On sunny days the day-ahead price drops below zero around midday. The demo system then charges the battery and pauses feed-in – visible under Market and on the Dashboard."
+          }
+        }
+      }
+    },
+    "Anlage nicht verbunden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "System not connected"
+          }
+        }
+      }
+    },
+    "Anmeldung abgelehnt. Bitte neu koppeln." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign-in rejected. Please pair again."
+          }
+        }
+      }
+    },
+    "Balken zeigen, was die Einspeisung bringt, die Linie, was der Bezug kostet. Der Abstand ist die Spanne, mit der ein Akku arbeiten kann." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bars show what feed-in earns, the line what import costs. The gap is the spread a battery can work with."
+          }
+        }
+      }
+    },
+    "Beendet – der Not-Halt ist aktiv, DVhub steuert die Wallbox erst nach dem Aufheben wieder." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ended – the emergency stop is active; DVhub controls the wallbox again only after it is lifted."
+          }
+        }
+      }
+    },
+    "Beendet, aber die Wallbox meldet: %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ended, but the wallbox reports: %@."
+          }
+        }
+      }
+    },
+    "Beendet. Es gilt wieder der Plan von EOS." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ended. The EOS plan applies again."
+          }
+        }
+      }
+    },
+    "Beginn und Ende dürfen nicht gleich sein." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start and end must not be the same."
+          }
+        }
+      }
+    },
+    "Beispiel · Markt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Example · Market"
+          }
+        }
+      }
+    },
+    "Beispiel · Praxis" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Example · Practice"
+          }
+        }
+      }
+    },
+    "Beispiel · Technik" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Example · Tech"
+          }
+        }
+      }
+    },
+    "Bitte Beginn und Ende als Uhrzeit angeben." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Please enter start and end as times."
+          }
+        }
+      }
+    },
+    "Bitte die Uhrzeiten vollständig angeben." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Please enter the times completely."
+          }
+        }
+      }
+    },
+    "Bitte einen Wochentag wählen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Please choose a weekday."
+          }
+        }
+      }
+    },
+    "Dafür braucht DVhub eine Pro-Lizenz." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This needs a Pro licence in DVhub."
+          }
+        }
+      }
+    },
+    "Das Relay hat die Verbindung begrenzt. Gleich erneut." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The relay limited the connection. Trying again shortly."
+          }
+        }
+      }
+    },
+    "Das Relay ist gerade ausgelastet. Gleich erneut." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The relay is busy right now. Trying again shortly."
+          }
+        }
+      }
+    },
+    "Das Relay startet neu." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The relay is restarting."
+          }
+        }
+      }
+    },
+    "Der Ladestand muss zwischen 0 und 100 % liegen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The charge level must be between 0 and 100%."
+          }
+        }
+      }
+    },
+    "Der Not-Halt ist aktiv – „Laden stoppen“ bleibt bis zum Aufheben bestehen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The emergency stop is active – “Stop charging” stays in place until it is lifted."
+          }
+        }
+      }
+    },
+    "Der Wert liegt außerhalb des erlaubten Bereichs (höchstens %lld)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The value is outside the allowed range (at most %lld)."
+          }
+        }
+      }
+    },
+    "Der Wochenplan hat sich inzwischen geändert. Bitte noch einmal ansehen und dann speichern." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The weekly plan has changed in the meantime. Please check it again and then save."
+          }
+        }
+      }
+    },
+    "Der Zeitplan hat sich inzwischen geändert. Bitte neu laden und noch einmal versuchen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The schedule has changed in the meantime. Please reload and try again."
+          }
+        }
+      }
+    },
+    "Die Anlage hat abgelehnt (HTTP %@)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The system rejected the request (HTTP %@)."
+          }
+        }
+      }
+    },
+    "Die Anlage ist gerade nicht verbunden." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The system is not connected right now."
+          }
+        }
+      }
+    },
+    "Die Anlage meldet einen Fehler: %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The system reports an error: %@."
+          }
+        }
+      }
+    },
+    "Die Anlage nimmt die Eingabe nicht an: %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The system does not accept the input: %@."
+          }
+        }
+      }
+    },
+    "Die Box hat sich nicht korrekt ausgewiesen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The box did not identify itself correctly"
+          }
+        }
+      }
+    },
+    "Die Handy-App ist in DVhub ausgeschaltet." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The phone app is turned off in DVhub."
+          }
+        }
+      }
+    },
+    "Diese Art von Regel lässt sich in der App nicht anlegen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This kind of rule cannot be created in the app."
+          }
+        }
+      }
+    },
+    "Diese Regel verwaltet DVhub selbst. In der App lässt sie sich nur ein- und ausschalten." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DVhub manages this rule itself. In the app it can only be switched on and off."
+          }
+        }
+      }
+    },
+    "Dieser QR-Code ist schon verbraucht oder abgelaufen. Bitte in DVhub einen neuen erzeugen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This QR code has already been used or has expired. Please create a new one in DVhub."
+          }
+        }
+      }
+    },
+    "Dieses Gerät darf das nicht. Die Freigabe „Steuern“ vergibst du in DVhub unter „Handy-App“." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device is not allowed to do that. You grant “Control” in DVhub under “Mobile app”."
+          }
+        }
+      }
+    },
+    "Dieses Gerät darf nicht steuern. In DVhub unter „Handy-App“ freigeben." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device is not allowed to control. Allow it in DVhub under “Phone app”."
+          }
+        }
+      }
+    },
+    "Dieses Gerät wurde in DVhub entkoppelt. Bitte neu koppeln." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device was unpaired in DVhub. Please pair again."
+          }
+        }
+      }
+    },
+    "Dynamischer Tarif: Einspeisung und Bezug in einem Bild" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dynamic tariff: feed-in and import in one chart"
+          }
+        }
+      }
+    },
+    "E-Auto" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Electric car"
+          }
+        }
+      }
+    },
+    "E-Auto laden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Charge electric car"
+          }
+        }
+      }
+    },
+    "E-Auto: Mindest-Ladestand zur Abfahrt, der Rest wenn es günstig ist" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Electric car: minimum charge by departure, the rest when it is cheap"
+          }
+        }
+      }
+    },
+    "Einspeisung aussetzen (negativer Preis)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pause feed-in (negative price)"
+          }
+        }
+      }
+    },
+    "Entschlüsselung fehlgeschlagen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Decryption failed"
+          }
+        }
+      }
+    },
+    "Erledigt." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done."
+          }
+        }
+      }
+    },
+    "Falsche Länge" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wrong length"
+          }
+        }
+      }
+    },
+    "Feld zu lang" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Field too long"
+          }
+        }
+      }
+    },
+    "Gerade zu viele Anfragen. Bitte gleich noch einmal." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Too many requests right now. Please try again in a moment."
+          }
+        }
+      }
+    },
+    "Gespeichert – aber der Not-Halt ist aktiv. Es wirkt erst nach dem Aufheben." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved – but the emergency stop is active. It takes effect only after it is lifted."
+          }
+        }
+      }
+    },
+    "Gespeichert – aber ohne Pro-Lizenz steuert DVhub die Wallbox nicht." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved – but without a Pro licence DVhub does not control the wallbox."
+          }
+        }
+      }
+    },
+    "Gespeichert, aber die Wallbox meldet: %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved, but the wallbox reports: %@."
+          }
+        }
+      }
+    },
+    "Gespeichert." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved."
+          }
+        }
+      }
+    },
+    "Gestern" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Yesterday"
+          }
+        }
+      }
+    },
+    "Handshake: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Handshake: %@"
+          }
+        }
+      }
+    },
+    "Hausverbrauch" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "House consumption"
+          }
+        }
+      }
+    },
+    "Heizstab Warmwasser" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hot water heating element"
+          }
+        }
+      }
+    },
+    "Heute" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Today"
+          }
+        }
+      }
+    },
+    "Historie lesen: Autarkie, Eigenverbrauch und das Ergebnis des Tages" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reading the history: self-sufficiency, self-consumption and the day’s result"
+          }
+        }
+      }
+    },
+    "Kein DVhub-Kopplungscode" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not a DVhub pairing code"
+          }
+        }
+      }
+    },
+    "Kein Weg zur Anlage" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No route to the system"
+          }
+        }
+      }
+    },
+    "Keine Antwort (Zeitüberschreitung)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No response (timed out)."
+          }
+        }
+      }
+    },
+    "Keine Verbindung (Netzwerkfehler %@)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No connection (network error %@)."
+          }
+        }
+      }
+    },
+    "Kopplung abgelehnt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing rejected"
+          }
+        }
+      }
+    },
+    "Laden ist gestoppt." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Charging is stopped."
+          }
+        }
+      }
+    },
+    "Ladestand" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "State of charge"
+          }
+        }
+      }
+    },
+    "Lädt jetzt mit %@ kW." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Now charging at %@ kW."
+          }
+        }
+      }
+    },
+    "Mehr als %lld Abfahrten in der Woche gehen nicht." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "More than %lld departures per week are not possible."
+          }
+        }
+      }
+    },
+    "Mindest-Ladestand" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Minimum state of charge"
+          }
+        }
+      }
+    },
+    "Mit Wochenplan und Einmal-Ziel plant DVhub das Laden um Preise und Sonne herum. „Sofort laden“ geht jederzeit und ist im Energiefluss sofort zu sehen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "With the weekly plan and a one-time target, DVhub plans charging around prices and sun. “Charge now” works at any time and shows up in the energy flow right away."
+          }
+        }
+      }
+    },
+    "Netz" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grid"
+          }
+        }
+      }
+    },
+    "Netz-Sollwert" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grid setpoint"
+          }
+        }
+      }
+    },
+    "Not-Halt aktiv" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Emergency stop active"
+          }
+        }
+      }
+    },
+    "Not-Halt in zwei Schritten: So bleibt die Anlage in der Hand" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Emergency stop in two steps: staying in control of the system"
+          }
+        }
+      }
+    },
+    "Not-Halt ist aktiv, aber der Wechselrichter konnte nicht auf 0 W gesetzt werden%@. Der letzte Sollwert kann noch wirken — bitte an der Anlage prüfen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Emergency stop is active, but the inverter could not be set to 0 W%@. The last setpoint may still be in effect — please check at the system."
+          }
+        }
+      }
+    },
+    "PV gesamt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PV total"
+          }
+        }
+      }
+    },
+    "Protokollfehler: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Protocol error: %@"
+          }
+        }
+      }
+    },
+    "Protokollversion wird nicht unterstützt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Protocol version is not supported"
+          }
+        }
+      }
+    },
+    "Relay: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Relay: %@"
+          }
+        }
+      }
+    },
+    "Residuallast: Was die Ampel der nächsten Tage sagt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Residual load: what the traffic light says about the coming days"
+          }
+        }
+      }
+    },
+    "Schlüsselbund-Fehler %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keychain error %@"
+          }
+        }
+      }
+    },
+    "Sofort laden läuft." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Charge now is running."
+          }
+        }
+      }
+    },
+    "Sonniger Mittag drückt den Börsenpreis ins Minus" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sunny midday pushes the exchange price below zero"
+          }
+        }
+      }
+    },
+    "Tag, Woche, Monat und Jahr zeigen, woher der Strom kam, wohin der Solarstrom ging und was die Anlage verdient oder gekostet hat." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Day, week, month and year show where the electricity came from, where the solar power went and what the system earned or cost."
+          }
+        }
+      }
+    },
+    "Unbekannter Fehler." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unknown error."
+          }
+        }
+      }
+    },
+    "Unerwartete Antwort der Gegenstelle." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unexpected response from the other side."
+          }
+        }
+      }
+    },
+    "Ungültige Kodierung" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid encoding"
+          }
+        }
+      }
+    },
+    "Ungültiger Schlüssel" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid key"
+          }
+        }
+      }
+    },
+    "Ungültiger Sitzungsschlüssel" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid session key"
+          }
+        }
+      }
+    },
+    "Unter Mehr → Steuern hält DVhub alle eigenen Vorgaben an. In der Demo lässt sich das gefahrlos ausprobieren: Geschaltet wird nichts." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Under More → Control, DVhub halts all of its own setpoints. In the demo you can try this safely: nothing is switched."
+          }
+        }
+      }
+    },
+    "Unter der gespeicherten Adresse antwortet eine andere Anlage." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A different system answers at the saved address."
+          }
+        }
+      }
+    },
+    "Verbindung geschlossen (%@)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection closed (%@)"
+          }
+        }
+      }
+    },
+    "Verbindung geschlossen: %@ (%@)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Verbindung geschlossen: %1$@ (%2$@)"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection closed: %@ (%@)"
+          }
+        }
+      }
+    },
+    "Verbindung getrennt (Code %@)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection lost (code %@)."
+          }
+        }
+      }
+    },
+    "Vorzeichen: + = Bezug" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign: + = import"
+          }
+        }
+      }
+    },
+    "Wallbox" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wallbox"
+          }
+        }
+      }
+    },
+    "Wenig Wind und wenig Sonne machen Strom teuer. Die Tageskarten im Markt zeigen, wo das Tagesmittel im üblichen Bereich der letzten vier Wochen liegt." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Little wind and little sun make electricity expensive. The day cards under Market show where the daily mean sits within the usual range of the past four weeks."
+          }
+        }
+      }
+    },
+    "Widgets und Sperrbildschirm: Akkustand auf einen Blick" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Widgets and Lock Screen: battery level at a glance"
+          }
+        }
+      }
+    },
+    "Wärmepumpe" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Heat pump"
+          }
+        }
+      }
+    },
+    "Zeitüberschreitung" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Timed out"
+          }
+        }
+      }
+    },
+    "Zugriff nicht erlaubt (Code 4003)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access not allowed (code 4003)."
+          }
+        }
+      }
+    },
+    "Zuletzt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last"
+          }
+        }
+      }
+    },
+    "berechnet aus der Energiebilanz" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "calculated from the energy balance"
+          }
+        }
+      }
+    },
+    "bereit" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ready"
+          }
+        }
+      }
+    },
+    "günstig" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "cheap"
+          }
+        }
+      }
+    },
+    "kein Fahrzeug" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no vehicle"
+          }
+        }
+      }
+    },
+    "keine Antwort" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no response"
+          }
+        }
+      }
+    },
+    "lädt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "charging"
+          }
+        }
+      }
+    },
+    "normal" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "normal"
+          }
+        }
+      }
+    },
+    "teuer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "expensive"
+          }
+        }
+      }
+    },
+    "unbekannt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "unknown"
+          }
+        }
+      }
+    },
+    "„Zuhause ab“ muss vor der Abfahrt liegen – oder am Vortag." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“Home from” must be before the departure – or on the day before."
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

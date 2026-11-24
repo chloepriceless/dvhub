@@ -6,7 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createGridVoltagePoller, readVictronGridVoltage, freshGridVoltage,
+  createGridVoltagePoller, readVictronGridVoltage, readSungrowGridVoltage, freshGridVoltage,
   VICTRON_GRID_REGS, GRID_SCAN_ORDER, GRID_VOLTAGE_POLL_MS, GRID_VOLTAGE_MAX_AGE_MS, GRID_UNIT_RESCAN_MS,
 } from '../services/grid-voltage.js';
 import { buildVictronSnapshot } from '../runtime-state.js';
@@ -320,4 +320,45 @@ test('Victron Modbus: weggefallene Unit mit Zeitüberschreitung hält die fälli
   await h.poller.onPoll(h.cfg);
   assert.equal(h.st.victron.gridVoltage.unitId, 41);
   assert.equal(h.st.victron.gridVoltage.error, null);
+});
+
+// --- Punkt 5: Netzspannung/-frequenz für Sungrow (5019–5021, 5036) ------------------------------------
+
+function sungrowMb(regs) {
+  return {
+    type: 'modbus',
+    async mbRequest({ fc, address, quantity }) {
+      assert.equal(fc, 4, 'Sungrow liest Netzspannung per FC 4');
+      const out = [];
+      for (let a = address; a < address + quantity; a++) {
+        if (!(a in regs)) throw new Error('modbus exception 2');
+        out.push(regs[a]);
+      }
+      return out;
+    },
+  };
+}
+// Draht 5018/5019/5020 = Doku 5019/5020/5021 (237,0/236,6/237,3 V), Draht 5035 = Doku 5036 (50,0 Hz).
+const SUNGROW_GRID = { 5018: 2370, 5019: 2366, 5020: 2373, 5035: 500 };
+
+test('readSungrowGridVoltage: 5019–5021 ×0,1 V, 5036 ×0,1 Hz (FC 4)', async () => {
+  const m = await readSungrowGridVoltage(sungrowMb(SUNGROW_GRID).mbRequest, { host: 'wr', unitId: 1 });
+  assert.deepEqual([m.l1, m.l2, m.l3, m.frequencyHz], [237, 236.6, 237.3, 50]);
+});
+
+test('Poller: Sungrow nutzt den eigenen Netzspannungs-Pfad (source sungrow-inverter)', async () => {
+  const h = harness({ cfg: { manufacturer: 'sungrow', victron: { host: 'wr', port: 502, unitId: 1 } }, transport: sungrowMb(SUNGROW_GRID) });
+  await h.poller.onPoll(h.cfg);
+  const gv = h.st.victron.gridVoltage;
+  assert.equal(gv.source, 'sungrow-inverter');
+  assert.deepEqual([gv.l1, gv.l2, gv.l3, gv.frequencyHz], [237, 236.6, 237.3, 50]);
+  assert.equal(gv.error, null);
+});
+
+test('Poller: Sungrow ohne Werte (Register fehlen) → Fehler, kein Log-Spam-Absturz', async () => {
+  const h = harness({ cfg: { manufacturer: 'sungrow', victron: { host: 'wr', port: 502, unitId: 1 } }, transport: sungrowMb({}) });
+  await h.poller.onPoll(h.cfg);
+  const gv = h.st.victron.gridVoltage;
+  assert.equal(gv.source, 'sungrow-inverter');
+  assert.ok(gv.error);
 });

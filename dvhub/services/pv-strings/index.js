@@ -31,6 +31,8 @@ import { VRM_API_BASE as VRM_BASE, resolveVrmSiteId } from '../../vrm-site.js';
 
 export const PV_STRING_SERIES_PREFIX = 'pv_string_';
 const SLOT_S = 300;
+// Per-MPPT-Reihen (T-MPPT-TELEMETRY) liegen als 15-min-kWh-Slots (energy_slots_15m).
+const SLOT_15M_S = 900;
 const DAY_S = 86400;
 const COVERAGE_TAIL_DAYS = 3;
 const COVERAGE_MAX_AGE_MS = 24 * 3600 * 1000;
@@ -227,6 +229,35 @@ export function buildPvnodeCsv(rows, { timeZone = 'Europe/Berlin' } = {}) {
     lines.push(`${isoWithOffset(ms, timeZone)};${Math.max(0, Math.round(w))}`);
   }
   return `${lines.join('\n')}\n`;
+}
+
+// ── T-MPPT-TELEMETRY: SunSpec-M160-Per-MPPT-Reihen (pv_mppt_<n>_w) ──────────
+// Quelle ist NICHT dieser Service (er holt VRM/Fronius-HTTP), sondern der
+// Modbus-Poller (polling.js) via state.victron.mppt → telemetry-runtime.js. Die
+// Werte liegen als 15-min-kWh-Slots in energy_slots_15m (wie pv_total_w). Hier
+// nur das Lesen fuer Leitstand/Export.
+export const PV_MPPT_SERIES_PREFIX = 'pv_mppt_';
+export function mpptSeriesKey(n) { return `${PV_MPPT_SERIES_PREFIX}${Number(n)}_w`; }
+export function isMpptModule(n) {
+  const v = Number(n);
+  return Number.isInteger(v) && v >= 1 && v <= 999;
+}
+
+/** kWh je 15-min-Slot → mittlere Leistung (W) im Slot. energy_slots_15m haelt kWh. */
+export function slotKwhToAvgW(kWh, slotSeconds = SLOT_15M_S) {
+  const n = Number(kWh);
+  if (!Number.isFinite(n) || !(slotSeconds > 0)) return 0;
+  return (n * 3_600_000) / slotSeconds;
+}
+
+/**
+ * pvnode-CSV fuer EINE MPPT-Reihe aus 15-min-kWh-Slots: timestamp;pv_power (W).
+ * Nutzt denselben Formatierer wie der VRM/Fronius-Pfad (buildPvnodeCsv).
+ */
+export function buildMpptPvnodeCsv(slotRows, { timeZone = 'Europe/Berlin', slotSeconds = SLOT_15M_S } = {}) {
+  const rows = (Array.isArray(slotRows) ? slotRows : [])
+    .map((r) => ({ ts: r.ts, value: slotKwhToAvgW(r.kWh, slotSeconds) }));
+  return buildPvnodeCsv(rows, { timeZone });
 }
 
 function vrmCreds(cfg) {
@@ -633,6 +664,65 @@ export function createPvStringsService(ctx) {
     return { source, rows };
   }
 
+  // ── T-MPPT-TELEMETRY: SunSpec-M160-Per-MPPT-Reihen ──────────────────────────
+  /** Rohe 15-min-kWh-Slots einer MPPT-Reihe fuer den pvnode-Export. */
+  async function readMpptSeries(n, { start, end }) {
+    if (!isMpptModule(n)) return null;
+    const seriesKey = mpptSeriesKey(n);
+    const rows = await store()?.readMaterializedSeries?.({ seriesKeys: [seriesKey], start, end, sourceKinds: ['local_live'] }) || [];
+    return { n: Number(n), seriesKey, rows };
+  }
+
+  /**
+   * Leitstand-Uebersicht je MPPT-String: Abdeckung + Tagesertraege (kWh) aus
+   * energy_slots_15m. `activeModules` sind die aktuell vom Poller gelesenen
+   * Modulnummern (state.victron.mppt) — die Route reicht sie herein, damit auch
+   * ein noch nicht beschrifteter String auftaucht. Das Fenster ist begrenzt
+   * (default 90 Tage), damit die Abfrage auf kleinen Boards klein bleibt.
+   */
+  async function mpptOverview(activeModules = [], { days = 90 } = {}) {
+    const cfg = getCfg();
+    const tz = tzOf(cfg);
+    const meta = cfg?.pvStrings?.mppt || {};
+    const labels = meta.labels || {};
+    const kwp = meta.kwp || {};
+    const endMs = now();
+    const startIso = new Date(endMs - Math.max(1, days) * DAY_S * 1000).toISOString();
+    const endIso = new Date(endMs).toISOString();
+    const nums = [...new Set([
+      ...Object.keys(labels).map(Number),
+      ...Object.keys(kwp).map(Number),
+      ...(Array.isArray(activeModules) ? activeModules.map(Number) : [])
+    ])].filter(isMpptModule).sort((a, b) => a - b);
+    const out = [];
+    for (const n of nums) {
+      const seriesKey = mpptSeriesKey(n);
+      const rows = await store()?.readMaterializedSeries?.({ seriesKeys: [seriesKey], start: startIso, end: endIso, sourceKinds: ['local_live'] }) || [];
+      const byDay = new Map();
+      let firstTs = null;
+      let lastTs = null;
+      for (const r of rows) {
+        const day = isoWithOffset(Date.parse(r.ts), tz).slice(0, 10);
+        byDay.set(day, (byDay.get(day) || 0) + Number(r.kWh));
+        if (!firstTs) firstTs = r.ts;
+        lastTs = r.ts;
+      }
+      out.push({
+        n,
+        seriesKey,
+        label: labels[n] || labels[String(n)] || `MPPT ${n}`,
+        kwp: Number(kwp[n] ?? kwp[String(n)]) > 0 ? Number(kwp[n] ?? kwp[String(n)]) : null,
+        slots: rows.length,
+        firstTs,
+        lastTs,
+        coverageDays: byDay.size,
+        windowDays: days,
+        dailyKwh: [...byDay].sort().map(([day, k]) => ({ day, kwh: Math.round(k * 100) / 100 }))
+      });
+    }
+    return out;
+  }
+
   // Abdeckung (Anzahl, erster, letzter Wert) je Reihe. Ueber die ganze Historie
   // gezaehlt dauert das auf kleinen Boards lange (eHive, 2026-10-05: 40 s —
   // alle komprimierten Bloecke muessen entpackt werden; die Einstellungen
@@ -782,5 +872,5 @@ export function createPvStringsService(ctx) {
     return discoverFroniusMppts({ host, fetchImpl });
   }
 
-  return { start, stop, syncRecent, syncWindow, backfill, readSeries, overview, discover, discoverFronius, getStatus };
+  return { start, stop, syncRecent, syncWindow, backfill, readSeries, overview, discover, discoverFronius, getStatus, readMpptSeries, mpptOverview };
 }

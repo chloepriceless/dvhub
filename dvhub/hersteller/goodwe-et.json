@@ -1,0 +1,130 @@
+{
+  "label": "GoodWe ET/EH/BT/BH (Hybrid) — nur Anzeige",
+  "beta": true,
+  "readOnly": true,
+  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz (GoodWe-Zähler am Wechselrichter), PV (MPPT 1–4), Akku-Leistung und SoC über das LAN-Kit (Modbus TCP, Port 502, Slave-ID 247) und rechnet die Hauslast aus der Energiebilanz. DVhub schreibt nichts an den Wechselrichter. Vorzeichen von Netz und Akku stammen aus Community-Quellen und sind am Gerät noch nicht bestätigt. Anleitung: docs/hersteller/goodwe-et.md.",
+  "_doc": [
+    "GoodWe-Hybrid der ET-Plattform (ARM205-Firmware-Familie): ET/EH/BT/BH, ET Plus, ESA, mit Lynx-Home-Speicher und",
+    "GoodWe-Zähler am Wechselrichter. NICHT für netzgeführte GoodWe-WR (DT-Serie, eigene Karte), ältere Familien mit",
+    "eigener Karte (Plexlog-Legacy-Treiber) und Geräte im SunSpec-Modus (Register 45153 = 1).",
+    "NUR LESEN: readOnly erzwingt leere Schreibziele und schaltet die DV-Abregelung ab, auch mit dvControl.enabled in der",
+    "config.json. Beta: erscheint nur im Bleeding-Edge-Kanal, weil es an keinem Gerät getestet ist.",
+    "",
+    "Quellen (abgerufen 18.11.2026): [SPEC] GoodWe „Third-Party EMS Protocol — MODBUS“ V1.1.x (Rohregister 35xxx/36xxx/",
+    "37xxx) · [COMM] evcc templates/definition/meter/goodwe-hybrid.yaml (liest 36025 int32 mit scale −1, 35182 int32",
+    "unverändert, 37007 uint16, PV 35105/35109/35113/35117 je uint32). Zusammenfassung:",
+    ".planning/docs/research/2026-11-15-goodwe-modbus-control-spec.md §1–2 und 2026-11-18-hersteller-lesend-luecken.md §3.7.",
+    "",
+    "Registerwahl: die Spec empfiehlt den zusammengefassten EMS-Block 10400ff. (10412 PV, 10414 Akku, 10418 Netz,",
+    "10472 SoC). Das Profil liest stattdessen die Rohregister, auf die dieser Block verweist (35182, 36025, 37007, PV-",
+    "Strings). Grund: sie stehen ebenso in der Spec und sind über evcc im Feld genutzt; ob der 104xx-Block auf jeder",
+    "ET-Firmware existiert, belegt keine Quelle. Der 104xx-Block bleibt die Alternative für den Gerätetest.",
+    "",
+    "Transport: Modbus TCP 502 nur mit LAN-Kit (WiFi+LAN-Modul), Slave-ID 247, FC 03, High-Wort zuerst. Ohne DC und AC",
+    "(nachts dunkel und netzlos) antwortet das Gerät nicht.",
+    "",
+    "Bewusst NICHT gelesen bzw. nicht abbildbar:",
+    "- Netz je Phase 10481/10483/10485 (→ 36127/36129/36131): Phasenwerte bleiben leer, bis der Gerätetest Summe und",
+    "  Vorzeichen bestätigt (ließen sich als meter.phases nachtragen).",
+    "- Hauslast: kein Lastregister in der Spec (10416 ist nur der Back-up-Ausgang) → Energiebilanz.",
+    "- Zweiter Speicher (35264/39005): kein zweiter Akku-Punkt.",
+    "- Gerätegrenzen: die Spec nennt nur Energie (10476/10478 Wh), keine Lade-/Entladeleistung oder -ströme.",
+    "- Firmware vor ARM09: Netz liegt dort nur in 36008 (S16); DVhub prüft die Firmware nicht (E10)."
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 502,
+    "unitId": 247,
+    "timeoutMs": 2000
+  },
+
+  "meter": {
+    "_comment": "Netz gesamt, Register 36025 „Meter Total Active Power“ (S32, 1 W, ab ARM09) [SPEC] = Quelle von 10418. UNSICHER (am Gerät prüfen): Vorzeichen. Annahme Rohwert + = Einspeisung — evcc liest 36025 mit scale −1 bei evcc-Konvention + = Bezug [COMM]; die Spec nennt keine Richtung [GERÄT]. DVhub erwartet + = Bezug, daher sign −1. Zeigt DVhub bei Netzbezug Einspeisung, gehört sign weg. Ältere Firmware: 36008 (S16).",
+    "layout": "point",
+    "fc": 3,
+    "address": 36025,
+    "quantity": 2,
+    "readType": "int32",
+    "sign": -1
+  },
+
+  "points": {
+    "soc": {
+      "_comment": "SoC Speicher 1, Register 37007 „BMS1 SOC“ (U16, 1 %) [SPEC] = Quelle von 10472; evcc ebenso [COMM]. 0xFFFF = kein Wert (evcc uint16nan).",
+      "enabled": true,
+      "fc": 3,
+      "address": 37007,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [65535]
+    },
+    "batteryPowerW": {
+      "_comment": "Akku 1, Register 35182 „Battery1 Power“ (S32, 1 W, 200-ms-Mittel) [SPEC] = Quelle von 10414. UNSICHER (am Gerät prüfen): Vorzeichen. Annahme Rohwert + = Entladen — evcc liest 35182 unverändert bei evcc-Konvention + = Entladen [COMM]; die Spec sagt nur „BMS-Konvention“ [GERÄT]. DVhub erwartet + = Laden, daher sign −1. Zeigt DVhub beim Laden einen negativen Wert, gehört sign weg.",
+      "enabled": true,
+      "fc": 3,
+      "address": 35182,
+      "quantity": 2,
+      "readType": "int32",
+      "sign": -1,
+      "scale": 1,
+      "offset": 0
+    },
+    "pvPowerW": {
+      "_comment": "PV = PV1 + PV2 + PV3 + PV4, Register 35105/35109/35113/35117 (je U32, 1 W) [SPEC], summiert (combine); evcc liest dieselben vier [COMM]. Geräte mit weniger MPPT melden die übrigen vermutlich mit 0 W. 0xFFFFFFFF = kein Wert (evcc uint32nan): dann ist die PV-Summe unbekannt statt 4,3 GW (am Gerät prüfen, ob ein unbelegter String so antwortet). Alternative: 10412 „PV Total Power“ (U32) aus dem EMS-Block.",
+      "enabled": true,
+      "fc": 3,
+      "readType": "uint32",
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [4294967295],
+      "combine": [
+        { "address": 35105 },
+        { "address": 35109 },
+        { "address": 35113 },
+        { "address": 35117 }
+      ]
+    },
+    "selfConsumptionW": {
+      "_comment": "Kein Lastregister in der Spec. Hauslast = PV + Bezug − Einspeisung − Akku (+ = Laden), jeden Takt neu (E6).",
+      "enabled": false,
+      "derive": "energy_balance"
+    }
+  },
+
+  "controlWrite": {},
+
+  "dvControl": {
+    "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
+    "enabled": false
+  },
+
+  "peakShavingBuiltin": {
+    "_doc": [
+      "Eingebaute Peak-Shaving-Funktion (P5, Christin 24.11.2026) — UNGETESTET, an keinem Gerät geprüft.",
+      "47542–47543 „Peak Shaving Power Limit“ (U32, 1 W, Flash) und 47544 „Peak Shaving SOC“ (Reserve, 1 %, Flash).",
+      "Nur Peak-Shaving-Schreibpunkte in diesem Nur-Lese-Profil: DVhub schreibt nur mit Peak Shaving + Schalter",
+      "peakShaving.builtin.enabled, über das Schreibtor, Grenze mit Sicherung/Rücknahme, Reserve nur mit eingetragenem",
+      "Wert und nie zurück (H-8). Ob zusätzlich die Betriebsart (47511) auf Peak Shaving stehen muss, ist ungeprüft."
+    ],
+    "status": "ungetestet",
+    "source": ".planning/docs/research/2026-11-15-goodwe-modbus-control-spec.md (Getrennte Lade-/Entlade-Grenzen, [SPEC] GoodWe EMS-Protokoll)",
+    "limit": {
+      "address": 47542,
+      "fc": 16,
+      "writeType": "uint32",
+      "wordOrder": "be",
+      "scale": 1,
+      "unit": "W"
+    },
+    "reserveSoc": {
+      "address": 47544,
+      "fc": 6,
+      "writeType": "uint16",
+      "scale": 1,
+      "unit": "%"
+    }
+  }
+}

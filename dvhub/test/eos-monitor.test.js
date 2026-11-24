@@ -26,6 +26,19 @@ test('eos-monitor: up → busy bei Timeout (rechnet) → down nach 5 min', async
   assert.equal(r.m.isUp(), false);
 });
 
+test('eos-monitor: Motor erkannt — Python (ohne native-Feld) vs. nativer Dienst', async () => {
+  const r = rig();
+  // Python-EOS meldet weder native noch engine.
+  await r.m.checkHealth();
+  assert.equal(r.m.status().native, false);
+  assert.equal(r.m.status().engine, 'python');
+  // Die native Fassade (dvhub-optimize serve) meldet native:true + engine.
+  r.health = { ok: true, data: { pid: 7, native: true, engine: 'dvhub-optimize 0.1.0', version: '0.4.0rc3' } };
+  r.t += 30_000; await r.m.checkHealth();
+  assert.equal(r.m.status().native, true);
+  assert.equal(r.m.status().engine, 'dvhub-optimize 0.1.0');
+});
+
 test('eos-monitor: Verbindung abgelehnt = sofort down', async () => {
   const r = rig();
   await r.m.checkHealth();

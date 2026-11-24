@@ -88,3 +88,19 @@ describe('PV-Strings-Editor', () => {
     assert.equal(saved.forecast?.pv?.strings, undefined);
   });
 });
+
+// M11 (Feld 16.11.): totalKwp aus der String-Summe ableiten — Lizenz/Portal zeigten 12,3 statt 24,2 kWp.
+describe('M11: totalKwp aus String-Summe', () => {
+  it('leitet totalKwp aus der String-Summe ab (Laden + Speichern)', () => {
+    const eff = normalizeConfigInput({ forecast: { pv: { configLevel: 'detailed', totalKwp: 12.32, strings: [{ label: 'A', kwp: 12.32 }, { label: 'B', kwp: 11.88 }] } } }).effectiveConfig;
+    assert.equal(eff.forecast.pv.totalKwp, 24.2);
+  });
+  it('lässt totalKwp ohne Strings unverändert', () => {
+    const eff = normalizeConfigInput({ forecast: { pv: { totalKwp: 10 } } }).effectiveConfig;
+    assert.equal(eff.forecast.pv.totalKwp, 10);
+  });
+  it('zählt nur gültige Strings (0/negativ zählen nicht)', () => {
+    const eff = normalizeConfigInput({ forecast: { pv: { configLevel: 'detailed', totalKwp: 5, strings: [{ label: 'A', kwp: 9.5 }, { label: 'B', kwp: 0 }] } } }).effectiveConfig;
+    assert.equal(eff.forecast.pv.totalKwp, 9.5);
+  });
+});

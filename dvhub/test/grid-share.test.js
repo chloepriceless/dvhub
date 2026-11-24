@@ -1,9 +1,11 @@
 // test/grid-share.test.js — Netzstrom-Zähler im Akku (Christin 01./02.11.2026).
 //
-// Netz→Akku erhöht den Netzstrom-Anteil, Entladen senkt ihn anteilig (Anteil ×
-// Entladung), Verluste anteilig. Solange der Anteil über der Schwelle liegt,
-// darf der Akku nicht ins Netz entladen — Netzstrom darf rechnerisch nie mit
-// Marktprämie verkauft werden.
+// Netz→Akku erhöht den Netzstrom-Anteil. Akku→Haus senkt ihn 1:1 (Netzstrom
+// zuerst ins Haus, Christin 20.11.2026), Akku→Netz nimmt zuerst den PV-Teil des
+// Inhalts (mehr dazu in grid-share-netzstrom-zuerst.test.js). Mehr Netzstrom als
+// der Inhalt über dem Boden ist Verlust (M21). Solange der Anteil über der
+// Schwelle liegt, darf der Akku nicht ins Netz entladen — Netzstrom darf
+// rechnerisch nie mit Marktprämie verkauft werden.
 
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
@@ -50,26 +52,28 @@ test('Netz→Akku erhöht den Netzstrom-Anteil', () => {
   assert.equal(r.toGridWh, 0);
 });
 
-test('Entladen ins Haus senkt den Anteil anteilig (Anteil × Entladung)', () => {
-  // 20 kWh im Akku (Ladestand 26 % von 77 kWh = 20,02 kWh), davon 10 kWh Netzstrom.
+test('Entladen ins Haus senkt den Anteil 1:1 (Netzstrom zuerst ins Haus, Christin 20.11.2026)', () => {
+  // 20 kWh im Akku (Ladestand 26 % von 77 kWh = 20,02 kWh), davon 10 kWh Netzstrom. Bis 20.11. anteilig
+  // (10/20,02 × 2 kWh ≈ 1 kWh), jetzt kommen die 2 kWh ganz aus dem Netzstrom.
   const r = stepGridShare(10_000, { dtMs: 3_600_000, batteryToHomeW: 2_000, socPct: 26, capacityWh: 77_000 });
-  const share = 10_000 / (0.26 * 77_000);
-  near(r.toHomeWh, share * 2_000);
-  near(r.gridWh, 10_000 - share * 2_000);
+  near(r.toHomeWh, 2_000);
+  near(r.gridWh, 8_000);
   assert.equal(r.toGridWh, 0);
 });
 
-test('Akku→Netz wird als Netzstrom-Export gezählt (Nachweis)', () => {
-  const r = stepGridShare(5_000, { dtMs: 3_600_000, batteryToGridW: 1_000, socPct: 10, capacityWh: 50_000 });
-  near(r.toGridWh, 1_000);           // Anteil 100 %: 5 kWh Netzstrom bei 5 kWh im Akku
+test('Akku→Netz ohne PV-Teil im Akku wird als Netzstrom-Export gezählt (Nachweis)', () => {
+  // Die Lesung zeigt den Stand nach dem Schritt (8 % = 4 kWh): vorher 5 kWh, alles Netzstrom — kein PV-Teil.
+  const r = stepGridShare(5_000, { dtMs: 3_600_000, batteryToGridW: 1_000, socPct: 8, capacityWh: 50_000 });
+  near(r.toGridWh, 1_000);
   near(r.gridWh, 4_000);
 });
 
-test('Verluste anteilig: der Anteil kann nie größer sein als der Akku-Inhalt (Ladestand + 1 % Rundung)', () => {
-  // Akku-Inhalt laut Ladestand nur noch 10 % von 50 kWh (bis 11 % wegen ganzzahligem SoC).
+test('Verluste: der Anteil kann nie größer sein als der Akku-Inhalt (M21: genau der Inhalt, ohne Reserve)', () => {
+  // Akku-Inhalt laut Ladestand nur noch 10 % von 50 kWh. Bis M21 galt Ladestand + 1 % (5,5 kWh, ganzzahliger
+  // Victron-SoC); Christin 19.11.2026: „wie im Feld gemessen“ → genau 5 kWh, der Rest ist Verlust.
   const r = stepGridShare(8_000, { dtMs: 1_000, socPct: 10, capacityWh: 50_000 });
-  near(r.gridWh, 5_500);
-  near(r.lossWh, 2_500);
+  near(r.gridWh, 5_000);
+  near(r.lossWh, 3_000);
   assert.equal(r.share, 1);
 });
 
@@ -141,7 +145,10 @@ test('„Netzladen erlaubt“ an, aber ohne MiSpeL-Freigabe: Regelrauschen sperr
   }
 });
 
-test('Kappung am Ladestand erst, wenn er 60 s lang zu niedrig ist (einzelner Fehlwert kostet nichts)', () => {
+// Bis M21 kappte der Zähler erst nach 60 s unter dem Zählerstand („ein Fehlwert darf keinen Netzstrom verschwinden
+// lassen“). Christin 19.11.2026: „m21 bitte wie im feld gemessen — das führt sonst nur zu problemen“: jeder sichere
+// Ladestand gilt sofort. Ein unsicherer (Lesefehler, alter Stempel, Einfrier-Wächter, Kreuzprobe) kappt weiterhin nie.
+test('Kappung am Ladestand sofort mit jedem sicheren Wert; unsicherer Ladestand kappt nicht (M21)', () => {
   const dir = mkDir();
   try {
     const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
@@ -150,14 +157,54 @@ test('Kappung am Ladestand erst, wenn er 60 s lang zu niedrig ist (einzelner Feh
     t.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 8_000 });
     t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 8_000 });
     near(t.summary().gridWh, 200, 0.01);
-    t.tick({ nowMs: t0 + 65_000, victron: {}, socPct: 0, capacityWh: 8_000 });   // Fehlwert: 0 %
-    near(t.summary().gridWh, 200, 0.01);
-    t.tick({ nowMs: t0 + 70_000, victron: {}, socPct: 50, capacityWh: 8_000 });
+    // Unsicherer Ladestand (Lesefehler) bei 0 %: keine Kappung.
+    t.tick({ nowMs: t0 + 65_000, victron: { errors: { soc: 'timeout' } }, socPct: 0, capacityWh: 8_000 });
     near(t.summary().gridWh, 200, 0.01);
     assert.equal(t.isLocked(), true);
-    // Echt niedrig über 60 s: dann wird gekappt (Obergrenze 1 % von 8 kWh = 80 Wh).
-    for (let i = 1; i <= 8; i++) t.tick({ nowMs: t0 + 70_000 + i * 10_000, victron: {}, socPct: 0, capacityWh: 8_000 });
+    // Sicherer Ladestand 1 % (80 Wh Inhalt): sofort auf 80 Wh, Sperre fällt erst unter 50 Wh (Hysterese).
+    t.tick({ nowMs: t0 + 70_000, victron: {}, socPct: 1, capacityWh: 8_000 });
     near(t.summary().gridWh, 80, 0.01);
+    assert.equal(t.isLocked(), true, 'zwischen 50 und 100 Wh bleibt die Sperre');
+    // Am Boden (0 %): Inhalt 0 → Netzanteil 0, der Rest als Verlust, die Sperre fällt (M10).
+    t.tick({ nowMs: t0 + 75_000, victron: {}, socPct: 0, capacityWh: 8_000 });
+    near(t.summary().gridWh, 0, 0.01);
+    assert.equal(t.isLocked(), false, 'Sperre fällt bei leerem Akku (M10)');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('M10: Deckel am nutzbaren Inhalt ÜBER dem Boden (floorPct)', () => {
+  // soc 50 %, Boden 11 %, Kapazität 10 kWh → nutzbar (50−11)=39 % → storedWh 3900 Wh = Obergrenze (M21: ohne +1 %).
+  const r = stepGridShare(5000, { dtMs: 0, socPct: 50, capacityWh: 10000, floorPct: 11 });
+  assert.equal(Math.round(r.storedWh), 3900);
+  assert.equal(Math.round(r.gridWh), 3900);
+  assert.equal(Math.round(r.lossWh), 1100);
+});
+
+test('M10/M21: Akku am Boden → nutzbarer Inhalt 0 → Netzanteil sofort 0 (keine 1 %-Ladereserve mehr)', () => {
+  // soc 10,95 %, Boden 11 % → nutzbar 0. Bis M21 blieb 1 % (≈ 193 Wh) als Ladereserve und der Tracker setzte erst
+  // nach 60 s Ruhe auf 0; Christin 19.11.2026: wie im Feld gemessen — der Inhalt ist die Grenze.
+  const r = stepGridShare(400, { dtMs: 0, socPct: 10.95, capacityWh: 19290, floorPct: 11 });
+  assert.equal(Math.round(r.storedWh), 0);
+  assert.equal(r.gridWh, 0);
+  near(r.lossWh, 400);
+});
+
+test('M10 (Feld 16.11.): Akku real knapp unter dem Boden + idle → Netzanteil auf 0, Sperre fällt', () => {
+  const dir = mkDir();
+  try {
+    const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
+    const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.now();
+    t.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 19290, floorPct: 11 });
+    t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 19290, floorPct: 11 });
+    assert.ok(t.summary().gridWh > 100);
+    assert.equal(t.isLocked(), true, 'erst gesperrt');
+    // Akku entleert sich bis knapp unter den Boden (real 10,95 %, Boden 11 %), idle (kein Laden), über 60 s.
+    for (let i = 1; i <= 8; i++) t.tick({ nowMs: t0 + 60_000 + i * 10_000, victron: {}, socPct: 10.95, capacityWh: 19290, floorPct: 11 });
+    near(t.summary().gridWh, 0, 0.01);
+    assert.equal(t.isLocked(), false, 'Sperre gefallen (M10)');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -169,14 +216,15 @@ test('Sperre mit Hysterese: an über 100 Wh, frei erst bei höchstens 50 Wh', ()
     const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
     const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
     const t0 = Date.now();
-    t.tick({ nowMs: t0, victron: {}, socPct: 1, capacityWh: 10_000 });
-    t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 6_600, gridImportW: 6_600 }, socPct: 1, capacityWh: 10_000 });
+    // Ladestand 1,1 % von 10 kWh = 110 Wh Inhalt (M21: der Anteil ist nie größer als der Inhalt).
+    t.tick({ nowMs: t0, victron: {}, socPct: 1.1, capacityWh: 10_000 });
+    t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 6_600, gridImportW: 6_600 }, socPct: 1.1, capacityWh: 10_000 });
     assert.equal(t.isLocked(), true);   // 110 Wh
-    // Anteil 100 % (110 Wh bei 100 Wh Inhalt): 30 Wh ins Haus → 80 Wh, bleibt gesperrt
-    t.tick({ nowMs: t0 + 70_000, victron: { batteryDirectUseW: 10_800 }, socPct: 1, capacityWh: 10_000 });
+    // Anteil 100 % (110 Wh bei 110 Wh Inhalt): 30 Wh ins Haus → 80 Wh, bleibt gesperrt
+    t.tick({ nowMs: t0 + 70_000, victron: { batteryDirectUseW: 10_800 }, socPct: 1.1, capacityWh: 10_000 });
     assert.ok(t.summary().gridWh < 100 && t.summary().gridWh > 50, `${t.summary().gridWh}`);
     assert.equal(t.isLocked(), true, 'zwischen 50 und 100 Wh bleibt die Sperre');
-    t.tick({ nowMs: t0 + 80_000, victron: { batteryDirectUseW: 18_000 }, socPct: 1, capacityWh: 10_000 });
+    t.tick({ nowMs: t0 + 80_000, victron: { batteryDirectUseW: 18_000 }, socPct: 1.1, capacityWh: 10_000 });
     assert.equal(t.isLocked(), false);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -429,6 +477,59 @@ test('zweite Anlage einbezogen, aber ihre Werte veraltet: nichts abbuchen', () =
   }
 });
 
+// Feld Nebeling 19.11.: 575 min unsichere Akkuwerte, die Sperre fiel nie — im Leitstand nicht zu sehen.
+test('Episode im Zustand: summary().uncertain zeigt Gründe, auch im lesenden Web-Prozess; weg nach dem Ende', () => {
+  const dir = mkDir();
+  try {
+    const { t, t0 } = charged200(dir);
+    const bad = (n) => ({ errors: { soc: 'MQTT-Wert nicht verfügbar oder veraltet für: soc' }, fieldUpdatedAt: { batteryPowerW: n, soc: n } });
+    const good = (n) => ({ errors: {}, fieldUpdatedAt: { batteryPowerW: n, soc: n } });
+    assert.equal(t.summary().uncertain, null, 'vorher nichts');
+    t.tick({ nowMs: t0 + 30_000, socPct: 6, capacityWh: 10_000, victron: bad(t0 + 30_000) });
+    const u = t.summary().uncertain;
+    assert.deepEqual(u?.reasons, ['soc_error']);
+    assert.equal(u.since, new Date(t0 + 30_000).toISOString());
+    t.persist();
+    const web = createGridShareTracker({ getCfg: () => ({}), dataDir: dir, readOnly: true });
+    assert.deepEqual(web.summary().uncertain?.reasons, ['soc_error'], 'Web-Prozess sieht es aus der Datei');
+    for (let i = 1; i <= 7; i += 1) t.tick({ nowMs: t0 + 30_000 + i * 10_000, socPct: 6, capacityWh: 10_000, victron: good(t0 + 30_000 + i * 10_000) });
+    assert.equal(t.summary().uncertain, null, 'nach 60 s sicherer Werte weg');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Neustart: eine alte Unsicherheit aus der Datei verschwindet mit dem ersten sicheren Wert', () => {
+  const dir = mkDir();
+  try {
+    const { t, t0 } = charged200(dir);
+    t.tick({ nowMs: t0 + 30_000, socPct: 6, capacityWh: 10_000, victron: { errors: { soc: 'x' }, fieldUpdatedAt: { batteryPowerW: t0 + 30_000, soc: t0 + 30_000 } } });
+    t.persist();
+    const t2 = createGridShareTracker({ getCfg: () => ({}), dataDir: dir });
+    assert.ok(t2.summary().uncertain, 'aus der Datei geladen');
+    t2.tick({ nowMs: t0 + 40_000, socPct: 6, capacityWh: 10_000, victron: { errors: {}, fieldUpdatedAt: { batteryPowerW: t0 + 40_000, soc: t0 + 40_000 } } });
+    assert.equal(t2.summary().uncertain, null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Codex cbd4195e P2: nach einem Neustart kann die neue Episode andere Gründe in gleicher Anzahl haben.
+test('Neustart mit anderer Ursache: neue Episode ersetzt die alten Gründe', () => {
+  const dir = mkDir();
+  try {
+    const { t, t0 } = charged200(dir);
+    t.tick({ nowMs: t0 + 30_000, socPct: 6, capacityWh: 10_000, victron: { errors: { soc: 'x' }, fieldUpdatedAt: { batteryPowerW: t0 + 30_000, soc: t0 + 30_000 } } });
+    t.persist();
+    const t2 = createGridShareTracker({ getCfg: () => ({}), dataDir: dir });
+    t2.tick({ nowMs: t0 + 40_000, socPct: 6, capacityWh: 10_000, victron: { errors: { batteryPowerW: 'y' }, fieldUpdatedAt: { batteryPowerW: t0 + 40_000, soc: t0 + 40_000 } } });
+    assert.deepEqual(t2.summary().uncertain?.reasons, ['battery_power_error']);
+    assert.equal(t2.summary().uncertain.since, new Date(t0 + 40_000).toISOString());
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('Episode: Ende erst nach 60 s sicherer Werte im Log, Tageszeile und CSV nennen die Minuten ohne Abbuchung', () => {
   const dir = mkDir();
   try {
@@ -508,15 +609,14 @@ test('alte Ladeleistung bei frischem Ladestand: Zubuchen wird am Ladestand gekap
   try {
     const { t, t0 } = charged200(dir);
     // Akkuleistung mit Lesefehler (alter Wert +6000 W), Haus zieht 1 kW aus dem
-    // Netz, Ladestand frisch bei 50 % von 10 kWh → Obergrenze 5,1 kWh.
+    // Netz, Ladestand frisch bei 50 % von 10 kWh → Obergrenze 5 kWh (M21: der
+    // Inhalt, sofort; vorher 5,1 kWh nach 60 s Bestätigung).
     // 6 h × 1 kW = 6 kWh + 200 Wh → ohne Kappung 6,2 kWh.
     for (let i = 1; i <= 360; i += 1) {
       const n = t0 + i * 60_000;
       t.tick({ nowMs: n, socPct: 50, capacityWh: 10_000, victron: { gridToBatteryW: 6_000, gridImportW: 1_000, errors: { batteryPowerW: 'timeout' }, fieldUpdatedAt: { batteryPowerW: t0, soc: n } } });
     }
-    // Obergrenze 5,1 kWh; die Kappung wartet 60 s auf Bestätigung → höchstens
-    // zwei Minuten Zufluss (je 16,7 Wh) darüber.
-    assert.ok(t.summary().gridWh >= 5_100 - 0.01 && t.summary().gridWh <= 5_100 + 34, `${t.summary().gridWh}`);
+    near(t.summary().gridWh, 5_000, 0.01);
     const s = t.summary();
     assert.ok(s.today.uncertainGridToBatteryKwh > 0, 'Zubuchen bei unsicheren Werten ist ausgewiesen');
   } finally {
@@ -568,16 +668,16 @@ test('MQTT-Wertalter mit eigener Frist: kurzes telemetryMaxAgeMs macht 30 s alte
   }
 });
 
-test('am Kapazitätsdeckel mit weiterem Zufluss: frischer Ladestand kappt nach 60 s trotzdem (Gegenprüfung c1bc97e0, P3)', () => {
+test('am Kapazitätsdeckel mit weiterem Zufluss: der erste frische Ladestand kappt sofort (Gegenprüfung c1bc97e0, P3; M21)', () => {
   const dir = mkDir();
   try {
     const { t, t0 } = charged200(dir);
     // Ausfall ohne Ladestand: Zähler läuft bis an den Deckel 10 kWh.
     for (let i = 1; i <= 120; i += 1) t.tick({ nowMs: t0 + i * 60_000, socPct: 50, capacityWh: 10_000, victron: { gridToBatteryW: 6_000, gridImportW: 6_000, errors: { soc: 'timeout' } } });
     near(t.summary().gridWh, 10_000, 0.01);
-    // Ladestand wieder frisch bei 50 %, Netzladen läuft weiter → nach 60 s auf 5,1 kWh (+ Zufluss bis zur Kappung).
-    for (let i = 121; i <= 124; i += 1) t.tick({ nowMs: t0 + i * 60_000, socPct: 50, capacityWh: 10_000, victron: { gridToBatteryW: 6_000, gridImportW: 6_000 } });
-    assert.ok(t.summary().gridWh <= 5_100 + 200, `${t.summary().gridWh}`);
+    // Ladestand wieder frisch bei 50 %, Netzladen läuft weiter → sofort auf den Inhalt 5 kWh (M21, vorher 5,1 kWh nach 60 s).
+    t.tick({ nowMs: t0 + 121 * 60_000, socPct: 50, capacityWh: 10_000, victron: { gridToBatteryW: 6_000, gridImportW: 6_000 } });
+    near(t.summary().gridWh, 5_000, 0.01);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

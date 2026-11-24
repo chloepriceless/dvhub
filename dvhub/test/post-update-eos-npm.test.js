@@ -46,7 +46,7 @@ function sandbox() {
 
 const EOS_BLOCK = block('EOS_DIR="$INSTALL_DIR/eos"', '# ── 11.');
 
-function eosCase({ venvPython, nativeMarker = 'https://x/eos.git@v1 ok akkudoktoreos_native-0.2.0-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl\n' }) {
+function eosCase({ venvPython, configDir = true, nativeMarker = 'https://x/eos.git@v1 ok akkudoktoreos_native-0.2.0-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl\n' }) {
   const s = sandbox();
   const inst = join(s.dir, 'opt');
   const data = join(s.dir, 'data');
@@ -57,7 +57,9 @@ function eosCase({ venvPython, nativeMarker = 'https://x/eos.git@v1 ok akkudokto
   writeFileSync(join(data, '.eos-provisioned'), 'https://x/eos.git@v1\n');
   if (nativeMarker !== null) writeFileSync(join(data, '.eos-native'), nativeMarker);
   const unit = join(s.dir, 'eos.service');
-  writeFileSync(unit, '[Unit]\n');
+  // configDir=true: gesunde Box MIT dem 1.0.11-Fix (Unit setzt EOS_CONFIG_DIR).
+  // false: 1.0.10-Bestandsbox ohne den Fix (A1-Falle).
+  writeFileSync(unit, configDir ? '[Unit]\nEnvironment=EOS_CONFIG_DIR=/var/lib/dvhub/cfg\n' : '[Unit]\n');
   if (venvPython) {
     mkdirSync(join(inst, 'eos-venv', 'bin'), { recursive: true });
     writeFileSync(join(inst, 'eos-venv', 'bin', 'python'), '#!/bin/sh\n');
@@ -84,6 +86,33 @@ test('EOS-Schnellweg: alles vorhanden → OK, keine Provisionierung', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /EOS: OK/);
     assert.ok(!s.calls().some((l) => l.startsWith('systemd-run')));
+  } finally { s.cleanup(); }
+});
+
+// A1 (1.0.11): Bestandsbox 1.0.10→1.0.11 — EOS gesund und aktuell (Pin
+// unverändert, Rust-Kern ok), aber die Unit stammt noch von VOR dem
+// EOS_CONFIG_DIR-Fix. Der Schnellweg meldete bisher „EOS: OK" und rief
+// eos-provision.sh NIE auf → die PermissionError-Falle lief weiter. Jetzt muss der
+// leichte Konfig-Fix entkoppelt angestoßen werden (ROT gegen den Stand vor A1).
+test('A1: aktuell, aber Unit OHNE EOS_CONFIG_DIR (1.0.10-Falle) → leichter Konfig-Fix entkoppelt (EOS_CONFIG_FIX_ONLY=1), nicht still OK', () => {
+  const { s, r } = eosCase({ venvPython: true, configDir: false });
+  try {
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stdout, /EOS: OK/);
+    const run = s.calls().find((l) => l.startsWith('systemd-run') && l.includes('eos-provision.sh'));
+    assert.ok(run, `erwartet: entkoppelter Konfig-Fix.\n${s.calls().join('\n')}`);
+    assert.match(run, /--setenv=EOS_CONFIG_FIX_ONLY=1/);
+    assert.ok(!/--setenv=EOS_NATIVE_ONLY=1/.test(run), 'kein Kern-Nachzug, nur der leichte Konfig-Fix');
+    assert.match(r.stdout, /ohne git\/pip/);
+  } finally { s.cleanup(); }
+});
+
+test('A1 idempotent: Unit MIT EOS_CONFIG_DIR → OK, kein erneuter Konfig-Fix', () => {
+  const { s, r } = eosCase({ venvPython: true, configDir: true });
+  try {
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /EOS: OK/);
+    assert.ok(!s.calls().some((l) => l.startsWith('systemd-run')), 'Fix bereits angewandt — kein erneuter Lauf');
   } finally { s.cleanup(); }
 });
 
@@ -187,4 +216,118 @@ test('.gitignore: Laufzeitordner im Repo-Ordner gelten nicht als untracked', () 
   const out = spawnSync('git', ['-C', ROOT, 'check-ignore', '--no-index', ...paths], { encoding: 'utf8' });
   const ignored = out.stdout.trim().split('\n').filter(Boolean);
   assert.deepEqual(ignored.sort(), [...paths].sort());
+});
+
+// ── local-native: Motor-Entscheidung im EOS-Schnellweg (engine-Marker) ──────
+// Deckt Codex-P2 #1 (Fallback-Box darf nicht bei jedem Start neu provisionieren)
+// und die native Schnellweg-Erkennung ab. Arch-agnostisch: alle drei Binär-Pins.
+const SHA = 'a'.repeat(64);
+function eosNativeCase({ mode = 'local-native', optin = true, engineMarker, binExists = true, unitNative = true, binPin = true, pinArchs = ['X86_64', 'AARCH64', 'ARMV7L'], unameM = null }) {
+  const s = sandbox();
+  const inst = join(s.dir, 'opt');
+  const data = join(s.dir, 'data');
+  mkdirSync(join(inst, 'eos', '.git'), { recursive: true });
+  mkdirSync(join(inst, 'bin'), { recursive: true });
+  mkdirSync(data);
+  writeFileSync(join(inst, 'eos-provision.sh'), '');
+  const pins = ['EOS_REPO_URL=https://x/eos.git', 'EOS_PIN=v1'];
+  if (binPin) for (const a of pinArchs) pins.push(`EOS_NATIVE_BIN_${a}=dvhub-optimize-x`, `EOS_NATIVE_BIN_${a}_SHA256=${SHA}`);
+  writeFileSync(join(inst, 'eos-version.env'), pins.join('\n') + '\n');
+  writeFileSync(join(data, '.eos-provisioned'), 'https://x/eos.git@v1\n');
+  writeFileSync(join(data, '.eos-native'), 'https://x/eos.git@v1 ok akkudoktoreos_native-...whl\n');
+  if (engineMarker) writeFileSync(join(data, '.eos-native-engine'), engineMarker);
+  if (binExists) { writeFileSync(join(inst, 'bin', 'dvhub-optimize'), '#!/bin/sh\n'); chmodSync(join(inst, 'bin', 'dvhub-optimize'), 0o755); }
+  // venv vorhanden (für den Python-Schnellweg im Fallback-Fall)
+  mkdirSync(join(inst, 'eos-venv', 'bin'), { recursive: true });
+  writeFileSync(join(inst, 'eos-venv', 'bin', 'python'), '#!/bin/sh\n'); chmodSync(join(inst, 'eos-venv', 'bin', 'python'), 0o755);
+  const unit = join(s.dir, 'eos.service');
+  writeFileSync(unit, unitNative ? '[Service]\nExecStart=/opt/bin/dvhub-optimize serve --listen 127.0.0.1:8503\n' : '[Unit]\nEnvironment=EOS_CONFIG_DIR=/var/lib/dvhub/cfg\n');
+  const cfg = join(s.dir, 'config.json');
+  writeFileSync(cfg, JSON.stringify({ optimizer: { eosProxy: { mode } } }));
+  const optinMarker = join(s.dir, 'optin'); if (optin) writeFileSync(optinMarker, '');
+  s.fake('systemctl', '[[ "$1" == is-active ]] && exit 1; exit 0');
+  s.fake('systemd-run');
+  if (unameM) s.fake('uname', `[[ "$1" == -m ]] && { echo ${unameM}; exit 0; }; exec /usr/bin/uname "$@"`);
+  const r = s.run(`INSTALL_DIR='${inst}'\nDATA_DIR='${data}'\nSERVICE_USER=dvhub\nEOS_UNIT_PATH='${unit}'\nCONFIG_PATH='${cfg}'\nEOS_NATIVE_OPTIN_MARKER='${optinMarker}'\n${EOS_BLOCK}`);
+  return { s, r };
+}
+const sig = `dvhub-optimize-x:${SHA.slice(0, 12)}`;
+
+test('local-native: Motor-Marker native + Binär + Unit → OK, keine Provisionierung', () => {
+  const { s, r } = eosNativeCase({ engineMarker: `native https://x/eos.git@v1 ${sig}\n` });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /nativer Optimierer aktuell/);
+    assert.ok(!s.calls().some((c) => c.startsWith('systemd-run')), 'keine (Neu-)Provisionierung');
+  } finally { s.cleanup(); }
+});
+
+test('local-native Fallback vermerkt → kein Churn: OK, keine Neu-Provisionierung (Codex-P2 #1)', () => {
+  const { s, r } = eosNativeCase({ engineMarker: `fallback https://x/eos.git@v1 ${sig}\n`, unitNative: false });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(!s.calls().some((c) => c.startsWith('systemd-run')), 'Fallback ist abgeschlossen — kein teurer Neuversuch');
+  } finally { s.cleanup(); }
+});
+
+test('local-native gewünscht, aber noch kein Motor-Marker → Provisionierung angestoßen', () => {
+  const { s, r } = eosNativeCase({ engineMarker: null });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(s.calls().some((c) => c.startsWith('systemd-run')), 'Motorwechsel → Neu-Provisionierung');
+  } finally { s.cleanup(); }
+});
+
+test('local-native, aber anderer Binär-Pin als der Marker → Neu-Provisionierung (Codex-P2 #2)', () => {
+  const { s, r } = eosNativeCase({ engineMarker: `native https://x/eos.git@v1 dvhub-optimize-x:${'b'.repeat(12)}\n` });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(s.calls().some((c) => c.startsWith('systemd-run')), 'neuer Binär-Pin → neu provisionieren');
+  } finally { s.cleanup(); }
+});
+
+test('Rückweg: mode=local, aber Motor-Marker noch native → Neu-Provisionierung (stellt Python her)', () => {
+  const { s, r } = eosNativeCase({ mode: 'local', engineMarker: `native https://x/eos.git@v1 ${sig}\n` });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(s.calls().some((c) => c.startsWith('systemd-run')), 'Motorwechsel native→python');
+  } finally { s.cleanup(); }
+});
+
+test('mode=local-native ohne Opt-in → kein nativer Wunsch, Python-Schnellweg (kein Churn)', () => {
+  const { s, r } = eosNativeCase({ optin: false, engineMarker: null, unitNative: false });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /EOS: OK \(aktuell/);
+    assert.ok(!s.calls().some((c) => c.startsWith('systemd-run')), 'ohne Opt-in bleibt alles Python, kein Churn');
+  } finally { s.cleanup(); }
+});
+
+test('local-native gewünscht, aber kein Binär-Pin für diese Arch → Python, kein Churn (Codex-P2 #1)', () => {
+  // ohne Pin: DESIRED_NATIVE=0, kein Motor-Marker → settled, Python-Schnellweg
+  const { s, r } = eosNativeCase({ binPin: false, engineMarker: null, unitNative: false });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /EOS: OK \(aktuell/);
+    assert.ok(!s.calls().some((c) => c.startsWith('systemd-run')), 'kein Pin → kein teurer Neuversuch je Start');
+  } finally { s.cleanup(); }
+});
+
+// A14 (21.11.2026): armv7l hat jetzt einen eigenen Binär-Pin. post-update.sh wählt wie
+// eos-provision.sh nach `uname -m` — ein armv7l-Pin zählt nur auf einer armv7l-Box.
+test('local-native auf armv7l mit armv7l-Pin → Provisionierung angestoßen', () => {
+  const { s, r } = eosNativeCase({ engineMarker: null, pinArchs: ['ARMV7L'], unameM: 'armv7l', unitNative: false });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(s.calls().some((c) => c.startsWith('systemd-run')), 'armv7l-Box mit Pin → nativ einrichten');
+  } finally { s.cleanup(); }
+});
+
+test('nur armv7l gepinnt, Box ist aarch64 → kein nativer Wunsch, Python-Schnellweg', () => {
+  const { s, r } = eosNativeCase({ engineMarker: null, pinArchs: ['ARMV7L'], unameM: 'aarch64', unitNative: false });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /EOS: OK \(aktuell/);
+    assert.ok(!s.calls().some((c) => c.startsWith('systemd-run')), 'fremder Arch-Pin zählt nicht');
+  } finally { s.cleanup(); }
 });

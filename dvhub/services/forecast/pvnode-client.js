@@ -23,6 +23,7 @@
 import pRetry, { AbortError } from 'p-retry';
 
 import { resolvePvnodePlan } from './pvnode-plans.js';
+import { effectivePvKwp } from './effective-pv.js';
 
 const PVNODE_BASE = 'https://api.pvnode.com/v2';
 
@@ -186,7 +187,7 @@ export function clampForecastDays(v, fallback = 2) {
 }
 
 /** Resolve geo coordinates (forecast.location preferred, sma-automation fallback). */
-function resolveLocation(cfg) {
+export function resolveLocation(cfg) {
   const fc = cfg.forecast || {};
   const lat = fc.location?.latitude
     ?? cfg.schedule?.smallMarketAutomation?.location?.latitude;
@@ -201,8 +202,9 @@ function resolveLocation(cfg) {
  * Prognose (forecast.pv.strings, level 'detailed' — same rule as pvlib and
  * Open-Meteo), then pvPlants[] geometry, then the single-string legacy fields.
  * Until 2026-10-14 the strings were ignored here (audit finding 2).
+ * Exportiert (19.11.2026) für die Einrichtungs-Regel (pv-provider-setup.js).
  */
-function resolvePlants(cfg) {
+export function resolvePlants(cfg) {
   const fc = cfg.forecast || {};
   const useStrings = fc.pv?.configLevel === 'detailed' && Array.isArray(fc.pv?.strings)
     && fc.pv.strings.some(p => Number(p?.kwp) > 0 && Number.isFinite(Number(p?.tiltDeg)) && Number.isFinite(Number(p?.azimuthDeg)));
@@ -218,10 +220,10 @@ function resolvePlants(cfg) {
       tiltDeg: Number(p.tiltDeg),
       azimuthDeg: Number(p.azimuthDeg)
     }));
-  // Legacy single-string fallback: cfg.forecast.pv.totalKwp/tiltDeg/azimuthDeg.
+  // Legacy single-string fallback: cfg.forecast.pv.totalKwp/tiltDeg/azimuthDeg (+ PV zweiter WR, Punkt 5).
   if (plants.length === 0 && Number(fc.pv?.totalKwp) > 0) {
     plants.push({
-      kwp: Number(fc.pv.totalKwp),
+      kwp: effectivePvKwp(cfg, Number(fc.pv.totalKwp)),
       tiltDeg: Number(fc.pv.tiltDeg ?? 35),
       azimuthDeg: Number(fc.pv.azimuthDeg ?? 180)
     });
@@ -255,6 +257,8 @@ async function pvnodeFetch(apiKey, { url, method, body = null, timeoutMs = 20000
       });
       if (res.status === 429) throw new AbortError('pvnode_rate_limited');
       if (res.status === 401 || res.status === 403) throw new AbortError(`pvnode_auth_${res.status}`);
+      // M23: übrige 4xx (404 Site unbekannt, 422 Validierung) bleiben beim Wiederholen gleich — nicht wiederholen.
+      if (res.status >= 400 && res.status < 500 && res.status !== 408) throw new AbortError(`pvnode_http_${res.status}`);
       if (!res.ok) throw new Error(`pvnode_http_${res.status}`);
       return res.json();
     },
@@ -297,6 +301,13 @@ export function createPvnodeClient(ctx, { store, pvnodeQuota } = {}) {
   const { getCfg, pushLog } = ctx;
   let lastFetchAt = 0;
   let cachedData = null;
+  // M23 (Feld 19.11.2026): Fehler einmal je Episode melden (bis zum nächsten Erfolg). Bisher stand bei jeder
+  // Aktualisierung erneut ein roter pvnode_error im Systemprotokoll, auch für eine falsche Site-ID.
+  let reportedNotFound = null;   // 'site:<id>' | 'inline'
+  let reportedError = null;      // Fehlermeldung
+  const SITE_NOT_FOUND_HINT = 'pvnode kennt die eingetragene Site-ID nicht (gelöscht, vertippt oder zu einem anderen '
+    + 'Konto) — Einstellungen → Prognose → pvnode: Site-ID prüfen, in der pvnode-Web-App wiederherstellen oder leeren '
+    + '(dann rechnet pvnode mit den PV-Strings aus DVhub)';
 
   function getSiteId(cfg) {
     return String(cfg.forecast?.pvnode?.siteId ?? '').trim();
@@ -365,8 +376,27 @@ export function createPvnodeClient(ctx, { store, pvnodeQuota } = {}) {
       data = await pvnodeFetch(apiKey, req);
       await bumpQuota();
       pushLog('pvnode_ok', { mode: siteId ? 'site' : 'inline' });
+      reportedNotFound = null;
+      reportedError = null;
     } catch (err) {
-      pushLog('pvnode_error', { error: err?.message || String(err) });
+      const message = err?.message || String(err);
+      if (message === 'pvnode_http_404') {
+        // M23: ohne gültigen Schlüssel antwortet pvnode 401/403 — ein 404 heißt Site-ID unbekannt (bzw. Pfad weg).
+        // Eine Einstellungssache der Anlage, kein Programmfehler: Warnung mit Hinweis, einmal je Site-ID.
+        const key = siteId ? `site:${siteId}` : 'inline';
+        if (reportedNotFound !== key) {
+          reportedNotFound = key;
+          pushLog('pvnode_site_not_found', {
+            mode: siteId ? 'site' : 'inline',
+            hint: siteId ? SITE_NOT_FOUND_HINT : 'pvnode-Endpunkt /v2/forecast/inline nicht gefunden (API geändert?)',
+          }, 'warn');
+        }
+        return cachedData;
+      }
+      if (reportedError !== message) {
+        reportedError = message;
+        pushLog('pvnode_error', { error: message });
+      }
       if (err && err.name === 'AbortError') {
         if (err.message === 'pvnode_rate_limited'
             && pvnodeQuota && typeof pvnodeQuota.markExhausted === 'function') {
@@ -477,7 +507,11 @@ export async function probePvnode({ apiKey, siteId, lat, lon, slope = 30, orient
       body: req.body != null ? req.body : undefined,
       signal: AbortSignal.timeout(20_000)
     });
-    if (!res.ok) return { ok: false, error: `pvnode HTTP ${res.status}` };
+    if (!res.ok) {
+      // M23: 404 mit Site-ID heißt „Site-ID unbekannt“ (ohne gültigen Schlüssel käme 401/403).
+      const why = res.status === 404 && sid ? ' — Site-ID bei pvnode nicht gefunden (gelöscht, vertippt oder anderes Konto?)' : '';
+      return { ok: false, error: `pvnode HTTP ${res.status}${why}` };
+    }
     const data = await res.json();
     const rows = extractValues(data);
     const first = rows[0] || null;

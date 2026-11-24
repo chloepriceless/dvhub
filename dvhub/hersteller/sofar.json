@@ -1,0 +1,145 @@
+{
+  "label": "SOFAR HYD (3PH/EP, Karte „General“) — nur Anzeige",
+  "beta": true,
+  "readOnly": true,
+  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz (mit Phasen), PV (MPPT 1+2), Akku-Leistung, SoC, Hauslast und die eingestellten Akku-Stromgrenzen über ein RS485-Ethernet-Gateway (Modbus TCP, Slave-ID 1, FC 03) und schreibt nichts an den Wechselrichter. Nur für die Registerkarte „General“ (HYD 5–20K-3PH, HYD 3–6K-EP), nicht für ME3000SP/HYD-ES. Anleitung: docs/hersteller/sofar.md.",
+  "_doc": [
+    "SOFAR-Hybrid mit der Registerkarte „SOFAR Modbus Protocol – General“ (0x0400 ff.): HYD 5…20K-3PH, HYD 3…6K-EP,",
+    "HYD-KTL-3PH/-PRO. Ältere ME3000SP und HYD 3…6K-ES haben eine andere Karte (0x0200 ff.) und sind NICHT abgedeckt.",
+    "NUR LESEN: readOnly erzwingt leere Schreibziele und schaltet die DV-Abregelung ab, auch mit dvControl.enabled in der",
+    "config.json. Beta: erscheint nur im Bleeding-Edge-Kanal, weil es an keinem Gerät getestet ist.",
+    "",
+    "Quellen (abgerufen 18.11.2026): [SPEC] SOFAR „Modbus Protocol – General, valid for HYD 5…20K-3PH and HYD3…6K-EP“",
+    "(Stand 23.11.2020). [DECOMP] Plexlog SOFAR-Treiber (nur gelesen): Netz 0x0488 × −10, PV1 0x0586 × 10, PV2 0x0589 × 10,",
+    "Akku gesamt 0x0667 × −100. [COMM] wills106 solax_modbus plugin_sofar.py (0x04AF „Active Power Load Sys“, 0x0504",
+    "„Active Power Offgrid Total“, 0x05C4 PV gesamt 0,1 kW, 0x104B/0x104C Akku-Stromgrenzen 0,01 A). Zusammenfassung:",
+    ".planning/docs/research/2026-11-15-sofar-modbus-control-spec.md §2–3 und 2026-11-18-hersteller-lesend-luecken.md §3.3.",
+    "",
+    "Transport: RTU 9600 8N1, Slave 1, Lesen FC 03, 16-bit-Werte. RS485-Ethernet-Gateway im Modus Modbus TCP. Ein",
+    "Solarman-WLAN-Stick geht nicht (V5-Protokoll, E12 fehlt); laut Community kann er auch Funktionscodes sperren.",
+    "Registeradressen in JSON dezimal: 0x0488 = 1160, 0x0493 = 1171, 0x049E = 1182, 0x04A9 = 1193, 0x04AF = 1199,",
+    "0x0586 = 1414, 0x0589 = 1417, 0x0606 = 1542, 0x0608 = 1544, 0x104B = 4171, 0x104C = 4172.",
+    "",
+    "Bewusst NICHT gelesen:",
+    "- PV3 und folgende (0x058C ff.): ob ein String-Register existiert, sagt nur die Adressmaske des Blocks (Bitmasken prüft die Kennungsprobe E10 nicht).",
+    "  Ein fehlendes Register ließe die ganze PV-Summe ausfallen. Die Zielgeräte haben 2 MPPT.",
+    "- PV gesamt 0x05C4 (0,1 kW [COMM], in der Herstellerkarte nicht bestätigt): gröber als PV1 + PV2.",
+    "- Akku 2 ff. (0x060D ff.) und Akku gesamt 0x0667/0x0668 (0,1 kW, [DECOMP]/[COMM], nicht in der Herstellerkarte):",
+    "  das Profil liest Akku 1. Bei mehreren Akku-Eingängen fehlen die weiteren — am Gerät prüfen.",
+    "- Gerätekennung/Adressmasken: DVhub prüft nicht, ob die Karte „General“ antwortet (Kennungsprobe E10 vorhanden, aber kein Register mit belegten Werten)."
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 502,
+    "unitId": 1,
+    "timeoutMs": 2000
+  },
+
+  "meter": {
+    "_comment": "Netz, 0x0488 ActivePower_PCC_Total (I16, 0,01 kW) [SPEC]. Vorzeichen [SPEC; Plexlog × −10]: positiv = Einspeisung, negativ = Bezug → scale 10 (0,01 kW → W), sign −1. Phasen 0x0493/0x049E/0x04A9 ActivePower_PCC_R/S/T (I16, 0,01 kW) [SPEC; COMM]; Vorzeichen wie die Summe angenommen (gleicher Block, Herstellerkarte nennt es nur für die Summe) — am Gerät prüfen. Bei 1-phasigen EP-Geräten bleiben S/T vermutlich 0.",
+    "layout": "point",
+    "fc": 3,
+    "address": 1160,
+    "quantity": 1,
+    "signed": true,
+    "scale": 10,
+    "sign": -1,
+    "timeoutMs": 2000,
+    "phases": [
+      { "address": 1171 },
+      { "address": 1182 },
+      { "address": 1193 }
+    ]
+  },
+
+  "points": {
+    "soc": {
+      "_comment": "SoC Akku 1, 0x0608 (U16, %) [SPEC; COMM „Battery Capacity 1“].",
+      "enabled": true,
+      "fc": 3,
+      "address": 1544,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    },
+    "batteryPowerW": {
+      "_comment": "Akku 1, 0x0606 Power_Bat1 (I16, 0,01 kW) [SPEC; COMM S16]. Vorzeichen [SPEC]: Laden positiv, Entladen negativ — wie DVhub, kein sign; scale 10. Nicht 0x0485/0x0487: deren Vorzeichen widerspricht sich in der Herstellerkarte.",
+      "enabled": true,
+      "fc": 3,
+      "address": 1542,
+      "quantity": 1,
+      "signed": true,
+      "scale": 10,
+      "offset": 0
+    },
+    "pvPowerW": {
+      "_comment": "PV = PV1 0x0586 + PV2 0x0589 (je U16, 0,01 kW) [SPEC; Plexlog × 10; COMM], getrennte Register → combine, scale 10.",
+      "enabled": true,
+      "fc": 3,
+      "signed": false,
+      "scale": 10,
+      "offset": 0,
+      "combine": [
+        { "address": 1414 },
+        { "address": 1417 }
+      ]
+    },
+    "selfConsumptionW": {
+      "_comment": "Hauslast, 0x04AF ActivePower_Load_Sys (U16, 0,01 kW) [SPEC; COMM „Active Power Load Sys“], scale 10. Nicht 0x0504: das ist laut Community die Off-Grid-/EPS-Leistung („Active Power Offgrid Total“).",
+      "enabled": true,
+      "fc": 3,
+      "address": 1199,
+      "quantity": 1,
+      "signed": false,
+      "scale": 10,
+      "offset": 0
+    },
+    "deviceMaxChargeA": {
+      "_comment": "Max. Ladestrom, 0x104B (U16, 0,01 A) [SPEC Installateur-Einstellung; COMM „BatConfig: Maximum Charge Current Limit“]. Die am WR eingestellte Grenze, keine BMS-Live-Grenze. Nur Anzeige.",
+      "enabled": true,
+      "fc": 3,
+      "address": 4171,
+      "quantity": 1,
+      "signed": false,
+      "scale": 0.01,
+      "offset": 0,
+      "pollEveryMs": 60000
+    },
+    "deviceMaxDischargeA": {
+      "_comment": "Max. Entladestrom, 0x104C (U16, 0,01 A) [SPEC Installateur-Einstellung; COMM]. Nur Anzeige.",
+      "enabled": true,
+      "fc": 3,
+      "address": 4172,
+      "quantity": 1,
+      "signed": false,
+      "scale": 0.01,
+      "offset": 0,
+      "pollEveryMs": 60000
+    }
+  },
+
+  "controlWrite": {},
+
+  "dvControl": {
+    "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
+    "enabled": false
+  },
+
+  "peakShavingBuiltin": {
+    "_doc": [
+      "Eingebaute Peak-Shaving-Funktion (P5, Christin 24.11.2026) — UNGETESTET, an keinem Gerät geprüft.",
+      "0x1110 (4368) Energy_Storage_Mode_Control = 4 (Peak Shaving). Die Bezugsgrenze stellt man am Gerät ein. Rücknahme =",
+      "gesicherter Modus vor DVhub (meist 0, Self-use). Bei Legacy-Modellen ggf. zusätzlich am LCD (ungeprüft). Nur dieser",
+      "Schreibpunkt in diesem Nur-Lese-Profil."
+    ],
+    "status": "ungetestet",
+    "source": ".planning/docs/research/2026-11-15-sofar-modbus-control-spec.md §5 (0x1110 Wert 4, Herstellerdokument)",
+    "mode": {
+      "address": 4368,
+      "fc": 6,
+      "value": 4
+    }
+  }
+}

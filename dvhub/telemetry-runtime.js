@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { monoStampOf } from './services/mono-clock.js';
 
 function pushSample(rows, seriesKey, value, unit, base = {}) {
   if (value == null) return;
@@ -81,15 +82,46 @@ export function liveSnapshotStale({ ts, meter = {}, victron = {} } = {}) {
   // reiner PV-Summe, docs/MQTT-SCHEMA.md) sind kein Messausfall (Codex 22b1fb66).
   const errors = victron?.errors || {};
   if (LIVE_ENERGY_FIELDS.some((field) => errors[field] && (victron?.[field] != null || !OPTIONAL_AC_PV_FIELDS.has(field)))) return true;
+  // Bewusst geleerte Werte (polling.js unknownFields: unbekannte Richtung E8, ausgeblendet E10) sind ein Messausfall,
+  // auch bei einem optionalen AC-PV-Kanal — leer heißt dort nicht „nie belegt“ (Codex e7a80f44).
+  const unknown = Array.isArray(victron?.unknownFields) ? victron.unknownFields : [];
+  if (LIVE_ENERGY_FIELDS.some((field) => unknown.includes(field))) return true;
   const tsMs = Date.parse(ts);
   if (!Number.isFinite(tsMs)) return false;
-  const tooOld = (at) => Number(at) > 0 && tsMs - Number(at) > LIVE_FIELD_MAX_AGE_MS;
+  // A26: ts ist die Zählerzeit (polling.js). Trägt der Zählerstempel seine monotone Marke (A24), zählt der Abstand
+  // zwischen Zähler- und Feldstempel monoton — sonst wie bisher die Wanduhr (nie gemischt).
+  const snapMono = Number(meter?.updatedAt) === tsMs ? monoStampOf(meter, 'updatedAt') : null;
+  const tooOld = (box, key) => {
+    const at = Number(box?.[key]);
+    if (!(at > 0)) return false;
+    const m = snapMono != null ? monoStampOf(box, key) : null;
+    return (m != null ? snapMono - m : tsMs - at) > LIVE_FIELD_MAX_AGE_MS;
+  };
   // MQTT liefert aus dem Cache: fieldUpdatedAt ist dort der Abfrage-Zeitpunkt,
   // die Empfangszeit des Werts steht in fieldSourceAt bzw. meter.sourceAt.
-  if (tooOld(meter?.sourceAt)) return true;
+  if (tooOld(meter, 'sourceAt')) return true;
   const stamps = victron?.fieldUpdatedAt || {};
   const sourceStamps = victron?.fieldSourceAt || {};
-  return LIVE_ENERGY_FIELDS.some((field) => tooOld(stamps[field]) || tooOld(sourceStamps[field]));
+  return LIVE_ENERGY_FIELDS.some((field) => tooOld(stamps, field) || tooOld(sourceStamps, field));
+}
+
+/** Letzte erfolgreiche MPPT-Lesung (fieldUpdatedAt.mppt) älter als 90 s vor ts? Monoton wie liveSnapshotStale. */
+function mpptReadingTooOld(ts, meter = {}, victron = {}) {
+  const at = Number(victron?.fieldUpdatedAt?.mppt);
+  const tsMs = Date.parse(ts);
+  if (!(at > 0) || !Number.isFinite(tsMs)) return false;
+  const snapMono = Number(meter?.updatedAt) === tsMs ? monoStampOf(meter, 'updatedAt') : null;
+  const m = snapMono != null ? monoStampOf(victron.fieldUpdatedAt, 'mppt') : null;
+  return (m != null ? snapMono - m : tsMs - at) > LIVE_FIELD_MAX_AGE_MS;
+}
+
+const AC_PV_FIELDS = ['acPvL1W', 'acPvL2W', 'acPvL3W', 'acPv2L1W', 'acPv2L2W', 'acPv2L3W'];
+
+/** Summe der AC-PV-Phasen beider Positionen; null, wenn kein AC-PV-Punkt einen Wert hat. */
+export function acPvTotalW(victron = {}) {
+  const present = AC_PV_FIELDS.filter((field) => victron[field] != null && Number.isFinite(Number(victron[field])));
+  if (!present.length) return null;
+  return Number(present.reduce((sum, field) => sum + Number(victron[field]), 0).toFixed(3));
 }
 
 export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, victron = {}, managed = null }) {
@@ -118,6 +150,27 @@ export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, v
   pushSample(rows, 'pv_ac_l2_w', victron.acPvL2W, 'W', base);
   pushSample(rows, 'pv_ac_l3_w', victron.acPvL3W, 'W', base);
   pushSample(rows, 'pv_total_w', victron.pvTotalW, 'W', base);
+  // AC-PV gesamt (beide Positionen, wie pvAcW in polling.js). Die History liest
+  // pvAcKwh aus der Reihe pv_ac_w, die bisher nur der VRM-Import schrieb
+  // (24.11.2026). Nur mit AC-PV-Punkten — ohne sie keine Zeile.
+  pushSample(rows, 'pv_ac_w', acPvTotalW(victron), 'W', base);
+  // T-MPPT-TELEMETRY: je SunSpec-M160-PV-String eine eigene Leistungsreihe
+  // pv_mppt_<n>_w (polling.js setzt victron.mppt aus dem M160-Block). Wie
+  // pv_total_w werden diese Reihen in energy_slots_15m verdichtet (15-min, kWh)
+  // — die materialisierten Zielreihen erkennt der Store am pv_mppt_-Präfix.
+  // Optionale Zusatzreihen DCV/DCA/DCWH je String nur, wenn das Gerät sie liefert.
+  // Nach einem M160-Lesefehler behält polling.js die alten Werte für die Anzeige (errors.mppt) — als neue Messung
+  // zählen sie nicht, ebenso wenig ohne frische Lesung (> 90 s, wie die Energiefelder) (Codex Integration 24.11., P2).
+  if (Array.isArray(victron.mppt) && !victron.errors?.mppt && !mpptReadingTooOld(ts, meter, victron)) {
+    for (const s of victron.mppt) {
+      const n = Number(s?.n);
+      if (!Number.isInteger(n) || n < 1) continue;
+      pushSample(rows, `pv_mppt_${n}_w`, s.w, 'W', base);
+      pushSample(rows, `pv_mppt_${n}_v`, s.v, 'V', base);
+      pushSample(rows, `pv_mppt_${n}_a`, s.a, 'A', base);
+      pushSample(rows, `pv_mppt_${n}_wh`, s.wh, 'Wh', base);
+    }
+  }
   pushSample(rows, 'load_power_w', victron.selfConsumptionW, 'W', base);
   // Von der Haupt-GX gemessene Last, nur solange polling.js sie um Akku 2 der
   // zweiten Anlage korrigiert (sonst gleich load_power_w, Feld fehlt). Der

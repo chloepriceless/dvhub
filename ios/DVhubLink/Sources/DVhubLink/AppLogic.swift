@@ -13,25 +13,25 @@ public extension LinkError {
         switch self {
         case .closed(let code, let reason):
             switch reason {
-            case "device_not_allowed": return "Dieses Gerät wurde in DVhub entkoppelt. Bitte neu koppeln."
-            case "box_not_allowed": return "Unter der gespeicherten Adresse antwortet eine andere Anlage."
-            case "mobile_link_disabled": return "Die Handy-App ist in DVhub ausgeschaltet."
-            case "pairing_not_open": return "Dieser QR-Code ist schon verbraucht oder abgelaufen. Bitte in DVhub einen neuen erzeugen."
-            case "auth_failed", "auth_timeout": return "Anmeldung abgelehnt. Bitte neu koppeln."
-            case "rate_limited", "too_many_devices", "relay_full": return "Das Relay ist gerade ausgelastet. Gleich erneut."
-            case "replaced", "shutdown", "box_offline": return "Die Anlage ist gerade nicht verbunden."
+            case "device_not_allowed": return L("Dieses Gerät wurde in DVhub entkoppelt. Bitte neu koppeln.")
+            case "box_not_allowed": return L("Unter der gespeicherten Adresse antwortet eine andere Anlage.")
+            case "mobile_link_disabled": return L("Die Handy-App ist in DVhub ausgeschaltet.")
+            case "pairing_not_open": return L("Dieser QR-Code ist schon verbraucht oder abgelaufen. Bitte in DVhub einen neuen erzeugen.")
+            case "auth_failed", "auth_timeout": return L("Anmeldung abgelehnt. Bitte neu koppeln.")
+            case "rate_limited", "too_many_devices", "relay_full": return L("Das Relay ist gerade ausgelastet. Gleich erneut.")
+            case "replaced", "shutdown", "box_offline": return L("Die Anlage ist gerade nicht verbunden.")
             default: break
             }
             switch code {
-            case 4002: return "Anmeldung abgelehnt. Bitte neu koppeln."
-            case 4003: return "Zugriff nicht erlaubt (Code 4003)."
-            case 4008: return "Das Relay hat die Verbindung begrenzt. Gleich erneut."
-            case 4011: return "Das Relay startet neu."
-            default: return "Verbindung getrennt (Code \(code))."
+            case 4002: return L("Anmeldung abgelehnt. Bitte neu koppeln.")
+            case 4003: return L("Zugriff nicht erlaubt (Code 4003).")
+            case 4008: return L("Das Relay hat die Verbindung begrenzt. Gleich erneut.")
+            case 4011: return L("Das Relay startet neu.")
+            default: return L("Verbindung getrennt (Code \(String(code))).")
             }
-        case .timeout: return "Keine Antwort (Zeitüberschreitung)."
-        case .boxOffline: return "Die Anlage ist gerade nicht verbunden."
-        case .relay, .protocolError, .handshake: return "Unerwartete Antwort der Gegenstelle."
+        case .timeout: return L("Keine Antwort (Zeitüberschreitung).")
+        case .boxOffline: return L("Die Anlage ist gerade nicht verbunden.")
+        case .relay, .protocolError, .handshake: return L("Unerwartete Antwort der Gegenstelle.")
         default: return description
         }
     }
@@ -39,10 +39,10 @@ public extension LinkError {
 
 public func userMessage(for error: Error) -> String {
     if let e = error as? LinkError { return e.userMessage }
-    if error is CancellationError { return "Abgebrochen." }
+    if error is CancellationError { return L("Abgebrochen.") }
     let ns = error as NSError
-    if ns.domain == NSURLErrorDomain { return "Keine Verbindung (Netzwerkfehler \(ns.code))." }
-    return "Unbekannter Fehler."
+    if ns.domain == NSURLErrorDomain { return L("Keine Verbindung (Netzwerkfehler \(String(ns.code))).") }
+    return L("Unbekannter Fehler.")
 }
 
 // MARK: - Begrüßung übernehmen
@@ -187,9 +187,9 @@ public struct MailboxEvent: Codable, Equatable, Identifiable, Sendable {
 
     public static func text(alarms: Int, emergencyStop: Bool) -> String {
         var parts: [String] = []
-        if emergencyStop { parts.append("Not-Halt aktiv") }
-        if alarms > 0 { parts.append(alarms == 1 ? "1 Alarm aktiv" : "\(alarms) Alarme aktiv") }
-        return parts.isEmpty ? "Alles wieder normal" : parts.joined(separator: " · ")
+        if emergencyStop { parts.append(L("Not-Halt aktiv")) }
+        if alarms > 0 { parts.append(alarms == 1 ? L("1 Alarm aktiv") : L("\(alarms) Alarme aktiv")) }
+        return parts.isEmpty ? L("Alles wieder normal") : parts.joined(separator: " · ")
     }
 }
 
@@ -267,5 +267,85 @@ public struct ReconnectBackoff: Sendable {
     public mutating func afterConnection(lasted seconds: TimeInterval) -> UInt64 {
         if seconds >= stableAfter { current = 0; return afterFailure() }
         return afterFailure()
+    }
+}
+
+// MARK: - Tag eines gespeicherten Stands (Widgets)
+
+/// Zu welchem Tag gehört ein Stand, gesehen vom Zeitpunkt `now`? Die Widgets
+/// zeichnen Einträge im Voraus (auch den zum Tageswechsel) — maßgeblich ist
+/// deshalb der Zeitpunkt des Eintrags, nie die Uhr beim Zeichnen.
+public enum SnapshotDay: Equatable, Sendable {
+    case today, yesterday, older
+
+    public static func of(_ at: Date, now: Date, calendar: Calendar = .current) -> SnapshotDay {
+        if calendar.isDate(at, inSameDayAs: now) { return .today }
+        if let y = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(at, inSameDayAs: y) { return .yesterday }
+        return .older
+    }
+
+    /// Wort vor den Tagessummen: „Heute verdient“, „Gestern verdient“ …
+    public var word: String {
+        switch self {
+        case .today: return L("Heute")
+        case .yesterday: return L("Gestern")
+        case .older: return L("Zuletzt")
+        }
+    }
+}
+
+// MARK: - Lage der Leisten (iPhone Duo)
+
+/// Falz des iPhone Duo: Meldet das System einen aktiven senkrechten Falz
+/// (SwiftUI `ReservedRegion`, Art „division“), rückt der Inhalt so ein, dass
+/// seine Mitte auf dem Falz liegt — zweispaltige Anordnungen haben ihren
+/// Spaltenabstand dann genau dort, und keine Karte liegt über dem Falz.
+public enum FoldRule {
+    /// Schmaler darf eine Seite neben dem Falz nicht sein; sonst bleibt alles, wie es ist.
+    public static let minSide: Double = 240
+
+    /// Zusätzlicher Rand links und rechts. `divisionMinX`/`divisionMaxX` im
+    /// Koordinatenraum der Fläche mit der Breite `width`. (0, 0), wenn der Falz
+    /// außerhalb liegt, eine Seite zu schmal wäre oder der Inhalt nach dem
+    /// Einzug schmaler als `minContent` würde: Dann steht er einspaltig, und
+    /// eine einzelne Spalte läge mittig über dem Falz — da ist ohne Einzug mehr Platz.
+    public static func insets(width: Double, divisionMinX: Double, divisionMaxX: Double, minContent: Double = 0) -> (leading: Double, trailing: Double) {
+        guard width > 0, divisionMinX.isFinite, divisionMaxX.isFinite, divisionMinX <= divisionMaxX else { return (0, 0) }
+        let left = divisionMinX, right = width - divisionMaxX
+        guard left >= minSide, right >= minSide else { return (0, 0) }
+        let half = min(left, right)
+        guard half * 2 + (divisionMaxX - divisionMinX) >= minContent else { return (0, 0) }
+        return (left - half, right - half)
+    }
+}
+
+/// Wann stehen Reiter und Aktionen in einer Leiste am rechten Rand statt unten?
+/// Nur für Builds, bei denen das System die Leisten nicht selbst umlegt
+/// (vor iOS-27.1-SDK). Maße in Punkten.
+public enum BarPlacementRule {
+    /// Ab dieser Breite gilt die Fläche als breit (Innendisplay, iPad).
+    public static let wideWidth: Double = 540
+
+    /// Am iPhone Duo abgelesen (14.11.2026, Build mit iOS-27.0-SDK, iOS 27.2.1):
+    /// zugeklappt 386 × 678 pt — das System behält rechts eine 80 pt breite
+    /// Spalte für Statusleiste und Kamera und meldet auch den Bildschirm so;
+    /// aufgeklappt quer 871 × 669 pt. Volle Flächen: 466 × 678 und 669 × 951.
+    public static func sideRail(windowWidth w: Double, windowHeight h: Double, screenWidth sw: Double = 0, screenHeight sh: Double = 0,
+                                verticalCompact: Bool) -> Bool {
+        guard w > 0, h > 0 else { return false }
+        // Querformat mit wenig Höhe (jedes iPhone quer, Außendisplay quer).
+        if verticalCompact { return true }
+        // Innendisplay quer (871 × 669): breit, aber niedrig — Leisten an die
+        // Seite, wie es das System ab dem iOS-27.1-SDK selbst macht. iPads sind höher.
+        if w > h { return h < 700 }
+        // Breite Hochformat-Fläche (aufgeklappt, iPad): Leisten waagerecht, Inhalt füllt.
+        guard w < wideWidth else { return false }
+        // Außendisplay im Hochformat: niedrig und dafür breit. Gewöhnliche iPhones
+        // sind höher (≥ 736 pt) oder schmaler (iPhone SE 375 × 667).
+        if h < 700 && w >= 380 { return true }
+        if h / w < 1.72 { return true }
+        // Der Bildschirm selbst ist kurz und breit, das Fenster nur ein Teil davon.
+        let short = min(sw, sh), long = max(sw, sh)
+        return short > 0 && short < wideWidth && long / short < 1.62
     }
 }

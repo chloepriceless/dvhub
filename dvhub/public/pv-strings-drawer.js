@@ -173,6 +173,86 @@
     }).join('');
   }
 
+  // T-MPPT-TELEMETRY: Wechselrichter-Strings (SunSpec M160). Eigener Abschnitt,
+  // Datenquelle /api/pv-strings/mppt (Live-Leistung + Abdeckung je MPPT aus
+  // energy_slots_15m). Beschriftung/kWp werden beim Haupt-„Speichern" mitgesendet.
+  function renderMppt(sources) {
+    const section = el('pvs-mppt-section');
+    const host = el('pvs-mppt');
+    if (!section || !host) return;
+    if (!sources || !sources.length) { section.hidden = true; host.innerHTML = ''; return; }
+    section.hidden = false;
+    host.innerHTML = sources.map(function (s) {
+      const days = (s.dailyKwh || []).slice(-7);
+      const max = days.reduce(function (m, d) { return Math.max(m, d.kwh); }, 0) || 1;
+      const bars = '<svg class="pvs-svg" viewBox="0 0 ' + (days.length * 12) + ' 30" preserveAspectRatio="none" role="img">'
+        + days.map(function (d, i) {
+          const h = Math.max(1, Math.round((d.kwh / max) * 28));
+          return '<rect x="' + (i * 12 + 1) + '" y="' + (30 - h) + '" width="10" height="' + h + '"><title>'
+            + esc(d.day + ': ' + d.kwh.toFixed(1) + ' kWh') + '</title></rect>';
+        }).join('') + '</svg>';
+      const enough = s.coverageDays >= 90;
+      return '<div class="pvs-card" data-n="' + esc(s.n) + '">'
+        + '<div class="pvs-card-head">'
+        + '<input type="text" class="input pvs-mppt-label" value="' + esc(s.label) + '" placeholder="Name, z. B. Süd" aria-label="Name">'
+        + '<input type="number" class="input pvs-mppt-kwp" min="0" step="0.1" value="' + (s.kwp != null ? esc(s.kwp) : '') + '" placeholder="kWp" aria-label="kWp">'
+        + '</div>'
+        + '<div class="pvs-card-body">'
+        + '<div class="pvs-meta">MPPT ' + esc(s.n) + (s.liveW != null ? ' · jetzt ' + (s.liveW / 1000).toFixed(2) + ' kW' : '') + '</div>'
+        + '<div class="pvs-cover">' + (s.slots ? (fmtDate(s.firstTs) + ' – ' + fmtDate(s.lastTs) + ' · ' + s.coverageDays + ' Tage') : 'noch keine Daten')
+        + (s.slots && !enough ? ' <span class="pvs-warn">(pvnode braucht ≥ 90 Tage)</span>' : '') + '</div>'
+        + '<div class="pvs-bars" aria-label="Tagesertrag letzte 7 Tage">' + bars + '</div>'
+        + '</div>'
+        + '<button type="button" class="btn sm pvs-mppt-csv" data-n="' + esc(s.n) + '"' + (s.slots ? '' : ' disabled') + '>CSV für pvnode</button>'
+        + '</div>';
+    }).join('');
+  }
+
+  // Beschriftung/kWp je Modulnummer aus den Karten einsammeln (fuer den Save).
+  function readMppt() {
+    const host = el('pvs-mppt');
+    const labels = {};
+    const kwp = {};
+    if (!host) return { labels: labels, kwp: kwp };
+    host.querySelectorAll('.pvs-card').forEach(function (node) {
+      const n = node.getAttribute('data-n');
+      const lab = (node.querySelector('.pvs-mppt-label').value || '').trim();
+      if (lab) labels[n] = lab;
+      const k = node.querySelector('.pvs-mppt-kwp').value;
+      if (k !== '' && Number(k) > 0) kwp[n] = Number(k);
+    });
+    return { labels: labels, kwp: kwp };
+  }
+
+  async function loadMppt() {
+    const host = el('pvs-mppt');
+    // Nicht neu rendern, waehrend der Nutzer eine Karte bearbeitet.
+    if (host && document.activeElement && host.contains(document.activeElement)) return;
+    try {
+      const res = await apiFetch('/api/pv-strings/mppt');
+      const data = await json(res);
+      if (!res.ok || !data.ok) { renderMppt([]); return; }
+      renderMppt(data.sources || []);
+    } catch (_e) { renderMppt([]); }
+  }
+
+  async function downloadMpptCsv(n) {
+    const res = await apiFetch('/api/pv-strings/mppt-export.csv?n=' + encodeURIComponent(n));
+    if (!res.ok) {
+      banner('pvs-status', res.status === 401
+        ? 'pvnode-Export braucht einen API-Token (Einstellungen → Sicherheit).'
+        : 'Download fehlgeschlagen: HTTP ' + res.status, 'error');
+      return;
+    }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'pvnode-mppt-' + n + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+
   function overviewSource(s, all) {
     if (s.kind === 'group') {
       return 'Summe: ' + s.members.map(function (m) {
@@ -225,6 +305,7 @@
       const needsVrm = rows.some(function (r) { return r.kind !== 'fronius_mppt'; });
       if (needsVrm && !data.vrmConfigured) banner('pvs-banner', 'VRM-Zugang fehlt — erst unter „VRM Cloud“ Portal-ID oder Site-ID und Token eintragen.', 'error');
       renderOverview(data);
+      loadMppt();
       renderStatus(Object.assign({}, data.status, { coveragePending: !!data.coveragePending }));
     } catch (e) {
       banner('pvs-banner', e.message, 'error');
@@ -307,7 +388,7 @@
     const res = await apiFetch('/api/pv-strings', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ enabled: !!(el('pvs-enabled') && el('pvs-enabled').checked), sources: sources, groups: groupList })
+      body: JSON.stringify({ enabled: !!(el('pvs-enabled') && el('pvs-enabled').checked), sources: sources, groups: groupList, mppt: readMppt() })
     });
     const data = await json(res);
     if (!res.ok || !data.ok) { banner('pvs-banner', data.error || ('HTTP ' + res.status), 'error'); return; }
@@ -367,6 +448,8 @@
     }
     const csv = e.target.closest('.pvs-csv');
     if (csv) downloadCsv(csv.getAttribute('data-id'));
+    const mcsv = e.target.closest('.pvs-mppt-csv');
+    if (mcsv) downloadMpptCsv(mcsv.getAttribute('data-n'));
   });
 
   window.DVhubPvStrings = { load: load };

@@ -171,7 +171,8 @@ export function createMqttHub(ctx) {
     for (const handlerSet of handlerSetsFor(topic)) {
       for (const fn of handlerSet) {
         try { fn(topic, payload, packet); }
-        catch (err) { pushLog(`[MQTT] Handler error for ${topic}: ${err.message}`); }
+        // Stufe error ausdrücklich: [MQTT]-Meldungen zählen erst ab Warnung als Fehler (log-retention.js, Codex 0752f9c0).
+        catch (err) { pushLog(`[MQTT] Handler error for ${topic}: ${err.message}`, {}, 'error'); }
       }
     }
   }

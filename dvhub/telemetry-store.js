@@ -6,7 +6,7 @@ import { round2 } from './server-utils.js';
 import { resolutionFilterLimit } from './runtime-performance.js';
 import { expandHourlyPriceRows, PRICE_COVERAGE_PAD_MS, sampleEnergyBySlot, vrmNextSampleStartLookup } from './telemetry-runtime.js';
 // Historie: eigene Messwerte zuerst, VRM füllt auf (Christin 05.11.2026, „B“).
-import { chooseRawEntries, localSampleCreditSeconds, pickSlotSourceRow, PRIMARY_FLOW_SERIES, VRM_RAW_SCOPE } from './energy-source-rule.js';
+import { chooseRawEntries, localSampleCreditSeconds, pickSlotSourceRow, PRIMARY_FLOW_SERIES, BATTERY_FLOW_SERIES, VRM_RAW_SCOPE } from './energy-source-rule.js';
 
 function isoTimestamp(input = new Date()) {
   if (input instanceof Date) return input.toISOString();
@@ -63,11 +63,11 @@ const secondBatteryKwhFields = (energyForSeries, dropLocal = false) => {
 const preferredSourceKindOf = (bySource, preferredSourceKinds) => (
   pickSlotSourceRow(bySource, preferredSourceKinds)?.source_kind ?? null
 );
-const slotFlowsFromVrm = (bucket, preferredSourceKinds) => PRIMARY_FLOW_SERIES
+const slotFlowsFromVrm = (bucket, preferredSourceKinds, series = PRIMARY_FLOW_SERIES) => series
   .some((seriesKey) => preferredSourceKindOf(bucket.get(seriesKey), preferredSourceKinds) === 'vrm_import');
 // Rohdaten-Ausweichpfad: VRM-Import landet mit scope 'history' in timeseries_samples.
 // Je Reihe gilt die gewaehlte Quelle (chooseRawEntries), nie ein Mittel aus beiden.
-const rawBucketHasVrmFlows = (bucket, bucketSeconds) => PRIMARY_FLOW_SERIES
+const rawBucketHasVrmFlows = (bucket, bucketSeconds, series = PRIMARY_FLOW_SERIES) => series
   .some((seriesKey) => chooseRawEntries(bucket.get(seriesKey), bucketSeconds).some((entry) => entry.scope === VRM_RAW_SCOPE));
 
 const MATERIALIZED_ENERGY_SERIES = new Set([
@@ -98,6 +98,35 @@ const MATERIALIZED_ENERGY_SERIES = new Set([
   // Akku der zweiten GX-Anlage (21.10.2026), wie im PG-Store.
   ...SECOND_BATTERY_SERIES
 ]);
+
+// T-MPPT-TELEMETRY: dynamische Per-MPPT-Leistungsreihen pv_mppt_<n>_w verdichten
+// wie pv_total_w (Praefix-Muster, gespiegelt aus telemetry-store-pg.js). NUR _w.
+const PV_MPPT_POWER_SERIES_RE = /^pv_mppt_[1-9]\d{0,2}_w$/;
+function isMaterializedEnergySeries(seriesKey) {
+  return MATERIALIZED_ENERGY_SERIES.has(seriesKey) || PV_MPPT_POWER_SERIES_RE.test(seriesKey);
+}
+
+// Je (Slot, Reihe) genau EINE Quelle (Reihenfolge preferredSourceKinds), nie
+// gemittelt. Gespiegelt aus telemetry-store-pg.js (pvnode-Export je MPPT).
+function dedupeMaterializedSeries(rows, preferredSourceKinds = []) {
+  const rank = new Map((preferredSourceKinds || []).map((k, i) => [k, i]));
+  const rankOf = (kind) => (rank.has(kind) ? rank.get(kind) : Number.MAX_SAFE_INTEGER);
+  const best = new Map();
+  for (const row of rows) {
+    const key = `${row.ts}\u0000${row.seriesKey}`;
+    const cur = best.get(key);
+    if (!cur || rankOf(row.sourceKind) < rankOf(cur.sourceKind)) best.set(key, row);
+  }
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    const key = `${row.ts}\u0000${row.seriesKey}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(best.get(key));
+  }
+  return out;
+}
 
 const roundKwh = round2;
 
@@ -409,7 +438,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     const nextVrmStart = vrmNextSampleStartLookup(rows);
     for (const row of rows) {
       const seriesKey = String(row.seriesKey || '').trim();
-      if (!MATERIALIZED_ENERGY_SERIES.has(seriesKey)) continue;
+      if (!isMaterializedEnergySeries(seriesKey)) continue;
 
       let sourceKind = null;
       let writeMode = null;
@@ -768,6 +797,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
           batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
           batteryToGridKwh: energyForSeries('battery_to_grid_w'),
           ...secondBatteryKwhFields(energyForSeries, rawBucketHasVrmFlows(bucket, bucketSeconds)),
+          batteryFlowsVrm: rawBucketHasVrmFlows(bucket, bucketSeconds, BATTERY_FLOW_SERIES),
           estimated: estimatedSeriesKeys.length > 0,
           incomplete: incompleteSeriesKeys.length > 0,
           estimatedSeriesCount: estimatedSeriesKeys.length,
@@ -813,6 +843,32 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
         priceEurMwh: weightedAverage(bucket.get('price_eur_mwh') || [])
       }))
       .filter((row) => row.priceCtKwh != null || row.priceEurMwh != null);
+  }
+
+  // T-MPPT-TELEMETRY: rohe 15-min-kWh-Slots einzelner Reihen (pvnode-Export je
+  // MPPT). Je (Slot, Reihe) genau eine Quelle. Spiegel des PG-Store-Readers.
+  function readMaterializedSeries({ seriesKeys, start, end, sourceKinds = ['local_live', 'vrm_import'] }) {
+    const keys = (Array.isArray(seriesKeys) ? seriesKeys : [seriesKeys]).map((k) => String(k || '').trim()).filter(Boolean);
+    if (!keys.length) return [];
+    const kinds = (Array.isArray(sourceKinds) ? sourceKinds : [sourceKinds]).map((k) => String(k || '').trim()).filter(Boolean);
+    const kindClause = kinds.length ? ` AND source_kind IN (${kinds.map(() => '?').join(', ')})` : '';
+    const rows = db.prepare(`
+      SELECT slot_start_utc, series_key, source_kind, value_num, unit
+      FROM energy_slots_15m
+      WHERE series_key IN (${keys.map(() => '?').join(', ')})
+        AND slot_start_utc >= ?
+        AND slot_start_utc < ?
+        AND value_num IS NOT NULL
+        ${kindClause}
+      ORDER BY slot_start_utc ASC, series_key ASC
+    `).all(...keys, isoTimestamp(start), isoTimestamp(end), ...kinds);
+    return dedupeMaterializedSeries(rows.map((r) => ({
+      seriesKey: r.series_key,
+      ts: new Date(r.slot_start_utc).toISOString(),
+      sourceKind: r.source_kind,
+      kWh: Number(r.value_num),
+      unit: r.unit || 'kWh'
+    })), kinds);
   }
 
   function listMaterializedEnergySlots({
@@ -914,6 +970,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
           batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
           batteryToGridKwh: energyForSeries('battery_to_grid_w'),
           ...secondBatteryKwhFields(energyForSeries, slotFlowsFromVrm(bucket, preferredSourceKinds)),
+          batteryFlowsVrm: slotFlowsFromVrm(bucket, preferredSourceKinds, BATTERY_FLOW_SERIES),
           sourceKind: overallSourceKind,
           sourceKinds: [...availableSourceKinds].sort(),
           estimated: estimatedSeriesKeys.length > 0,
@@ -1121,6 +1178,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     listMissingPriceBuckets,
     listAggregatedEnergySlots,
     listMaterializedEnergySlots,
+    readMaterializedSeries,
     listImportJobRanges,
     listPriceSlots,
     upsertSolarMarketValue(entry = {}) {

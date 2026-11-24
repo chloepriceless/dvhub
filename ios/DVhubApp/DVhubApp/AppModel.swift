@@ -1,8 +1,15 @@
-// AppModel.swift — gespeicherte Anlagen, Auswahl, Kopplung.
+// AppModel.swift — gespeicherte Anlagen, Auswahl, Kopplung — und die Demo.
+//
+// Die Demo ist ein eigener Eintrag der Anlagenliste (`entries`), neben den
+// gekoppelten Anlagen (`systems`, im Schlüsselbund). Ihr Controller verbindet
+// sich über den `DemoDialer` mit der eingebauten Beispielanlage. Verbunden ist
+// immer nur die gewählte Anlage: Solange die Demo gewählt ist, ruht jede
+// Verbindung zu einer echten.
 
 import Foundation
 import Observation
 import UIKit
+import WidgetKit
 import DVhubLink
 
 @MainActor
@@ -16,10 +23,20 @@ final class AppModel {
         case failed(String)
     }
 
+    /// Gekoppelte Anlagen (im Schlüsselbund).
     private(set) var systems: [LinkCredentials] = []
+    /// Die Demo-Anlage steht in der Anlagenliste (bleibt über Neustarts erhalten).
+    private(set) var demoActive = DemoStore.isActive
+    /// Alles, was in der Anlagenliste steht: die gekoppelten Anlagen und — als
+    /// eigener, gekennzeichneter Eintrag — die Demo.
+    var entries: [LinkCredentials] { systems + (demoActive ? [DemoStore.credentials] : []) }
     /// Gewählte Anlage — bleibt über Neustarts erhalten.
     var selectedId: String? {
-        didSet { UserDefaults.standard.set(selectedId, forKey: Self.selectedKey) }
+        didSet {
+            UserDefaults.standard.set(selectedId, forKey: Self.selectedKey)
+            // Auch für Widgets, Kurzbefehle und den Hintergrundabruf (App-Gruppe).
+            SharedStore.selectedSystemId = selectedId
+        }
     }
     static let selectedKey = "selectedSystem"
     private(set) var controllers: [String: SystemController] = [:]
@@ -41,7 +58,47 @@ final class AppModel {
     /// Nur für Simulator-Tests (Debug-Startargument): Link ohne Rückfrage koppeln.
     var pendingPairAutoStart = false
 
-    init() {}
+    /// Bereich, den ein Link, ein Widget oder das Kontrollzentrum öffnen will
+    /// (`dvhub://open/<Bereich>`); die Wurzelansicht übernimmt und leert ihn.
+    var pendingOpen: String?
+    /// Rückfrage zum Not-Halt, die von außen angestoßen wurde (Kontrollzentrum).
+    /// Der Wert ist nur die Vermutung des Knopfs; ob ausgelöst oder aufgehoben
+    /// wird, entscheidet die Ansicht „Steuern“ nach dem Live-Zustand.
+    var pendingStopRequest: Bool?
+    /// Zeit des Live-Werts, der bei der Anfrage schon da war. Die Rückfrage wartet
+    /// auf einen neueren — der alte kann aus der Zeit vor dem Hintergrund stammen.
+    var pendingStopBaseline: Date?
+
+    private let widgets = WidgetBridge()
+
+    init() {
+        // Geteilte Schlüsselbund-Gruppe einrichten und vorhandene Einträge
+        // umziehen, bevor irgendetwas gelesen wird.
+        LinkAccess.configure()
+        IntentHooks.openEmergencyStop = { [weak self] stop in
+            self?.pendingStopBaseline = self?.selected?.liveAt
+            self?.pendingStopRequest = stop
+            self?.pendingOpen = "control"
+        }
+        IntentHooks.snapshotChanged = { snapshot in await LiveActivityManager.sync(snapshot) }
+    }
+
+    /// Link in die App. Liefert false, wenn er nicht für die App ist.
+    @discardableResult
+    func handle(url: URL) -> Bool {
+        guard url.scheme == "dvhub" else { return false }
+        switch url.host {
+        case "pair":
+            // Kamera-App oder Link: dvhub://pair?…
+            pendingPairLink = url.absoluteString
+            return true
+        case "open":
+            pendingOpen = url.pathComponents.dropFirst().first
+            return true
+        default:
+            return false
+        }
+    }
 
     /// Anlagen aus dem Schlüsselbund lesen. Wird bei jedem Wechsel in den
     /// Vordergrund wiederholt, solange es nicht geklappt hat.
@@ -53,25 +110,37 @@ final class AppModel {
             storageError = nil
         } catch {
             loadFailed = true
-            storageError = "Gespeicherte Anlagen konnten nicht gelesen werden (Gerät gesperrt?). Neuer Versuch beim nächsten Öffnen."
+            storageError = String(localized: "Gespeicherte Anlagen konnten nicht gelesen werden (Gerät gesperrt?). Neuer Versuch beim nächsten Öffnen.")
         }
         loaded = true
-        for s in systems where controllers[s.id] == nil { attach(s) }
-        let remembered = UserDefaults.standard.string(forKey: Self.selectedKey)
-        if selectedId == nil || !systems.contains(where: { $0.id == selectedId }) {
-            selectedId = systems.contains(where: { $0.id == remembered }) ? remembered : systems.first?.id
+        for s in entries where controllers[s.id] == nil { attach(s) }
+        let remembered = SharedStore.selectedSystemId ?? UserDefaults.standard.string(forKey: Self.selectedKey)
+        if selectedId == nil || !entries.contains(where: { $0.id == selectedId }) {
+            // Sind die gekoppelten Anlagen gerade nicht lesbar, nicht ersatzweise die Demo wählen:
+            // Die gemerkte Auswahl bliebe sonst überschrieben, wenn das Lesen später klappt.
+            let fallback = loadFailed ? nil : entries.first?.id
+            let next = entries.contains(where: { $0.id == remembered }) ? remembered : fallback
+            if next != selectedId { selectedId = next }
         }
     }
 
     var selected: SystemController? { selectedId.flatMap { controllers[$0] } }
+    /// Die Demo ist die gewählte Anlage.
+    var selectedIsDemo: Bool { demoActive && selectedId == DemoPlant.boxId }
 
     private func attach(_ creds: LinkCredentials) {
-        let c = SystemController(credentials: creds)
+        let c = SystemController(credentials: creds, dialer: creds.isDemo ? DemoDialer(box: DemoStore.box) : LinkDialer())
         c.onCredentialsChanged = { [weak self] updated in self?.store(updated) }
+        c.onStatus = { [weak self, weak c] status, at in
+            guard let self, let c, c.credentials.id == self.selectedId else { return }
+            self.widgets.update(status, at: at, boxName: c.credentials.boxName, boxId: c.credentials.id)
+        }
         controllers[creds.id] = c
     }
 
     private func store(_ creds: LinkCredentials) {
+        // Die Demo hat keine Zugangsdaten — in den Schlüsselbund kommt von ihr nichts.
+        guard !creds.isDemo else { return }
         if let i = systems.firstIndex(where: { $0.id == creds.id }) { systems[i] = creds } else { systems.append(creds) }
         persist()
     }
@@ -84,7 +153,7 @@ final class AppModel {
             storageError = nil
             return true
         } catch {
-            storageError = "Speichern im Schlüsselbund fehlgeschlagen."
+            storageError = String(localized: "Speichern im Schlüsselbund fehlgeschlagen.")
             return false
         }
     }
@@ -98,12 +167,46 @@ final class AppModel {
 
     func deactivate() {
         for c in controllers.values { c.stop() }
+        // Beim Verlassen den letzten Stand sicher an die Widgets geben.
+        if let c = selected, let s = c.displayStatus, let at = c.displayAt {
+            widgets.update(s, at: at, boxName: c.credentials.boxName, boxId: c.credentials.id, force: true)
+        }
+        BackgroundRefresh.schedule()
     }
 
     func select(_ id: String) {
         guard id != selectedId else { return }
         selected?.stop()
         selectedId = id
+        widgets.reset()
+        selected?.start()
+    }
+
+    // MARK: Demo
+
+    /// „Demo ansehen“: Die Beispielanlage kommt in die Anlagenliste und wird
+    /// gewählt. Eine Verbindung nach außen entsteht dabei nicht.
+    func startDemo() {
+        DemoStore.start()
+        demoActive = true
+        if controllers[DemoPlant.boxId] == nil { attach(DemoStore.credentials) }
+        select(DemoPlant.boxId)
+    }
+
+    /// „Demo beenden“: Die Beispielanlage verschwindet samt allem, was darin
+    /// geändert wurde. War sie gewählt, gilt wieder die erste gekoppelte Anlage.
+    func endDemo() {
+        guard demoActive else { return }
+        let id = DemoPlant.boxId
+        let wasSelected = selectedId == id
+        controllers[id]?.stop()
+        controllers[id] = nil
+        SystemController.forgetMailbox(id)
+        demoActive = false
+        DemoStore.end()
+        guard wasSelected else { return }
+        selectedId = systems.first?.id
+        widgets.reset()
         selected?.start()
     }
 
@@ -135,7 +238,7 @@ final class AppModel {
 
     private func pair(qr: String) async {
         guard !loadFailed else {
-            pairState = .failed("Die gespeicherten Anlagen sind gerade nicht lesbar. Bitte Gerät entsperren und App neu öffnen.")
+            pairState = .failed(String(localized: "Die gespeicherten Anlagen sind gerade nicht lesbar. Bitte Gerät entsperren und App neu öffnen."))
             return
         }
         let payload: PairPayload
@@ -146,11 +249,11 @@ final class AppModel {
             return
         }
         guard payload.expires > Date() else {
-            pairState = .failed("Der QR-Code ist abgelaufen. Bitte in DVhub einen neuen erzeugen.")
+            pairState = .failed(String(localized: "Der QR-Code ist abgelaufen. Bitte in DVhub einen neuen erzeugen."))
             return
         }
         guard !payload.lan.isEmpty || payload.relay != nil else {
-            pairState = .failed("Der QR-Code enthält keinen Weg zur Anlage.")
+            pairState = .failed(String(localized: "Der QR-Code enthält keinen Weg zur Anlage."))
             return
         }
         pairState = .connecting
@@ -158,7 +261,7 @@ final class AppModel {
         do {
             created = try KeyStore.createSigner()
         } catch {
-            pairState = .failed("Geräteschlüssel konnte nicht angelegt werden: \(error.localizedDescription)")
+            pairState = .failed(String(localized: "Geräteschlüssel konnte nicht angelegt werden: \(error.localizedDescription)"))
             return
         }
         let boxName = payload.name
@@ -177,7 +280,7 @@ final class AppModel {
             guard persist() else {
                 systems = previous
                 KeyStore.deleteKey(created.keyRef)
-                pairState = .failed("Die Kopplung konnte nicht im Schlüsselbund gespeichert werden. Bitte erneut versuchen.")
+                pairState = .failed(String(localized: "Die Kopplung konnte nicht im Schlüsselbund gespeichert werden. Bitte erneut versuchen."))
                 return
             }
             if let old {
@@ -186,15 +289,21 @@ final class AppModel {
                 if let ref = old.keyRef, ref != created.keyRef { KeyStore.deleteKey(ref) }
             }
             attach(creds)
+            let changed = selectedId != creds.id
             selected?.stop()
             selectedId = creds.id
+            // Stand der Demo oder einer anderen Anlage nicht als Stand der neuen in den Widgets stehen lassen
+            // (wie select(_:); Codex Integration 24.11.).
+            if changed { widgets.reset() }
             selected?.start()
+            // Mit der eigenen Anlage ist die Demo erledigt (unter „Anlagen“ lässt sie sich wieder starten).
+            endDemo()
             pairState = .done(creds.boxName)
         } catch {
             KeyStore.deleteKey(created.keyRef)
             switch error as? LinkError {
-            case .pairingDenied: pairState = .failed("In DVhub abgelehnt.")
-            case .boxSignatureInvalid: pairState = .failed("Die Gegenstelle hat sich nicht als diese Anlage ausgewiesen.")
+            case .pairingDenied: pairState = .failed(String(localized: "In DVhub abgelehnt."))
+            case .boxSignatureInvalid: pairState = .failed(String(localized: "Die Gegenstelle hat sich nicht als diese Anlage ausgewiesen."))
             default: pairState = .failed(userMessage(for: error))
             }
         }
@@ -205,6 +314,7 @@ final class AppModel {
     /// Nur auf dem Handy entfernen. Die Kopplung in DVhub bleibt bestehen, bis
     /// sie dort unter „Handy-App“ entfernt wird.
     func remove(_ id: String) {
+        if id == DemoPlant.boxId { endDemo(); return }
         guard !loadFailed else { return }
         controllers[id]?.stop()
         controllers[id] = nil
@@ -214,7 +324,53 @@ final class AppModel {
         persist()
         if selectedId == id {
             selectedId = systems.first?.id
+            widgets.reset()
             selected?.start()
         }
+    }
+}
+
+/// Gibt den letzten Stand der gewählten Anlage an Widgets, Kontrollzentrum
+/// und Live-Aktivität (App-Gruppe). Gedrosselt: Live-Werte kommen alle 2 s,
+/// die Widgets brauchen das nicht — und das System begrenzt, wie oft eine App
+/// ihre Widgets neu zeichnen lässt. Not-Halt und Alarme gehen sofort durch.
+@MainActor
+final class WidgetBridge {
+    private var lastWrite: Date?
+    private var lastReload: Date?
+    private var lastSnapshot: WidgetSnapshot?
+    static let writeEvery: TimeInterval = 30
+    static let reloadEvery: TimeInterval = 300
+
+    func update(_ s: LiveStatus, at: Date, boxName: String, boxId: String, force: Bool = false) {
+        let now = Date()
+        let snap = WidgetSnapshot(s, at: at, boxName: boxName, boxId: boxId)
+        // Wichtiges (Not-Halt, Alarm) wartet nicht auf die Drosselung.
+        let urgent = lastSnapshot.map { $0.emergencyStop != snap.emergencyStop || $0.alarmsActive != snap.alarmsActive } ?? true
+        if !force, !urgent, let lastWrite, now.timeIntervalSince(lastWrite) < Self.writeEvery { return }
+        lastWrite = now
+        lastSnapshot = snap
+        // Die Live-Aktivität braucht keine App-Gruppe.
+        Task { await LiveActivityManager.sync(snap) }
+        // Ein älterer Stand des Controllers überschreibt keinen jüngeren, den Hintergrund oder Widget inzwischen
+        // geholt haben (Codex Integration 24.11.).
+        guard SharedStore.isAvailable, SharedStore.write(snap, onlyIfNewer: true) else { return }
+        if urgent { ControlCenter.shared.reloadControls(ofKind: SharedStore.controlKindStop) }
+        if force || urgent || lastReload.map({ now.timeIntervalSince($0) >= Self.reloadEvery }) ?? true {
+            lastReload = now
+            WidgetCenter.shared.reloadAllTimelines()
+        }
+    }
+
+    /// Anlage gewechselt oder entfernt: alten Stand löschen.
+    func reset() {
+        lastWrite = nil
+        lastSnapshot = nil
+        Task { await LiveActivityManager.endAll() }
+        guard SharedStore.isAvailable else { return }
+        SharedStore.clear()
+        lastReload = Date()
+        WidgetCenter.shared.reloadAllTimelines()
+        ControlCenter.shared.reloadControls(ofKind: SharedStore.controlKindStop)
     }
 }

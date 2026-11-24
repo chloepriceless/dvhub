@@ -86,9 +86,54 @@ if [[ -n "$PG_VER" && "${PKG_MAINTAIN_STATUS_ONLY:-}" != "1" ]] && command -v ap
     apt-get update >/dev/null 2>&1 || true
   fi
   # Snapshot installed versions to detect whether apt actually upgraded anything.
+  # Timescale liefert je Version einen Bau pro PostgreSQL-Minor: …-1806 verlangt
+  # postgresql-18 (>= 18.6), …-1807 (>= 18.7). apt nimmt den hoechsten Bau. Hat die
+  # Distribution erst 18.6, ist der nicht installierbar („Unable to satisfy
+  # dependencies“) und DVhub fiele ohne Not auf das Apache-Paket zurueck (CI rot
+  # 19.11.2026, Ubuntu 26.04 mit 18.6, packagecloud 2.32.1~ubuntu26.04-1807).
+  # Darum, wenn der apt-Kandidat nicht passt, die neueste Version unterhalb waehlen, deren PostgreSQL-Abhaengigkeit die
+  # INSTALLIERTE PostgreSQL-Version erfuellt. Gesucht wird die eigenstaendige
+  # Abhaengigkeit „postgresql-N (>= …)“, nicht das Ende von „…-loader-postgresql-N (>= …)“. Ausgabe: "<paket>=<version>", oder nur
+  # "<paket>" (apt entscheidet wie bisher), wenn sich nichts bestimmen laesst.
+  # Gleiche Funktion in timescale-provision.sh.
+  ts_pkg_spec() {
+    local pkg="$1" pg_pkg="postgresql-${PG_VER}" have ver deps need re cand pol neg
+    have="$(dpkg-query -W -f='${Version}' "$pg_pkg" 2>/dev/null || true)"
+    if [[ -z "$have" ]]; then printf '%s\n' "$pkg"; return 0; fi
+    # apt-Kandidat = was apt nach den Regeln der Box (Pins, Prioritaeten) nehmen wuerde.
+    # Nie darueber hinausgehen: eine ausdrueckliche Version uebergeht sonst einen Pin
+    # des Betreibers (Codex 684697ca). Ohne Kandidat entscheidet apt wie bisher.
+    # LC_ALL=C: auf einer deutschen Box heisst die Zeile sonst „Installationskandidat:“.
+    pol="$(LC_ALL=C apt-cache policy "$pkg" 2>/dev/null || true)"
+    cand="$(printf '%s\n' "$pol" | sed -n 's/^ *Candidate: //p' | head -n1 || true)"
+    if [[ -z "$cand" || "$cand" == "(none)" ]]; then printf '%s\n' "$pkg"; return 0; fi
+    # Gesperrte Bauten (Pin-Priority < 0) auslassen: apt installiert eine ausdrueckliche
+    # Version auch dann, wenn der Betreiber sie gesperrt hat (apt 2.6 bis 3.2 im Container
+    # geprueft, Codex 711c4e3e). Versionstabelle: "     <version> <prioritaet>"; Quellzeilen
+    # haben mehr Felder oder keine Zahl am Ende. Der installierte Bau (" *** ") zaehlt nicht:
+    # ihn zu waehlen aendert nichts, ihn auszulassen verlangte ein Downgrade. Ist die Tabelle
+    # nicht lesbar, bleibt die Liste leer (Verhalten wie bisher).
+    neg="$(printf '%s\n' "$pol" | awk '/^ *Version table:/ { t = 1; next } t && NF == 2 && $2 ~ /^-[0-9]+$/ { print $1 }' || true)"
+    re="(^|, )${pg_pkg} \\(>= ([^)]+)\\)"
+    while IFS= read -r ver; do
+      [[ -n "$ver" ]] || continue
+      dpkg --compare-versions "$ver" le "$cand" || continue
+      if grep -qxF -- "$ver" <<<"$neg"; then continue; fi
+      deps="$(apt-cache show "${pkg}=${ver}" 2>/dev/null | sed -n 's/^Depends: //p' | head -n1 || true)"
+      need=""
+      if [[ "$deps" =~ $re ]]; then need="${BASH_REMATCH[2]}"; fi
+      if [[ -z "$need" ]] || dpkg --compare-versions "$have" ge "$need"; then
+        # Passt schon der Kandidat, bleibt es beim Paketnamen — apt waehlt wie immer.
+        if [[ "$ver" == "$cand" ]]; then printf '%s\n' "$pkg"; else printf '%s=%s\n' "$pkg" "$ver"; fi
+        return 0
+      fi
+    done < <(apt-cache madison "$pkg" 2>/dev/null | awk -F'|' '{gsub(/[ \t]/,"",$2); if ($2!="") print $2}' | sort -rV | uniq || true)
+    printf '%s\n' "$pkg"
+  }
   PKG_BEFORE="$(dpkg-query -W -f='${Version}' "$TSL_PKG" 2>/dev/null || true)"
+  # --only-upgrade bleibt: ein nicht installiertes Paket wird auch mit =Version nie neu installiert.
   DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade \
-    "$TSL_LOADER" "$TSL_PKG" "$TSL_TOOLKIT" >/dev/null 2>&1 || true
+    "$(ts_pkg_spec "$TSL_LOADER")" "$(ts_pkg_spec "$TSL_PKG")" "$TSL_TOOLKIT" >/dev/null 2>&1 || true
   PKG_AFTER="$(dpkg-query -W -f='${Version}' "$TSL_PKG" 2>/dev/null || true)"
   if [[ -n "$PKG_AFTER" && "$PKG_BEFORE" != "$PKG_AFTER" ]]; then
     LAST_PKG_UPGRADE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -138,6 +183,8 @@ if command -v node >/dev/null 2>&1; then
     // Ein frueherer Fehlschlag gilt als erledigt, sobald die Bibliothek laedt und
     // nichts mehr geparkt ist (sonst stuende er bis zur naechsten Nachruestung).
     if(prev&&prev.result==='failed'&&e.EXT_VERSION&&!e.LOAD_ERROR&&!rescue)prev=null;
+    // Apache-Rueckfall (timescale-provision.sh, S12 a1) gilt als erledigt, sobald Community laeuft.
+    if(prev&&prev.result==='apache'&&e.LICENSE==='timescale')prev=null;
     const o={
       extVersion: e.EXT_VERSION||null,
       binaryVersion: e.BIN_VERSION||null,

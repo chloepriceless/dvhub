@@ -67,6 +67,25 @@ export function parseOpenMeteoResponse(data) {
 }
 
 /**
+ * Resolve lat/lon from config with fallback to SMA location (D-12).
+ * Pure + exportiert (19.11.2026) für die Einrichtungs-Regel der PV-Prognosedienste.
+ * @returns {{ lat: number, lon: number }|null}
+ */
+export function resolveWeatherLocation(cfg) {
+  let lat = cfg?.forecast?.location?.latitude;
+  let lon = cfg?.forecast?.location?.longitude;
+
+  // Fallback: schedule.smallMarketAutomation.location (D-12)
+  if (lat == null || lon == null) {
+    lat = cfg?.schedule?.smallMarketAutomation?.location?.latitude;
+    lon = cfg?.schedule?.smallMarketAutomation?.location?.longitude;
+  }
+
+  if (lat == null || lon == null) return null;
+  return { lat, lon };
+}
+
+/**
  * Create a weather fetch service that fetches from Open-Meteo periodically.
  * @param {object} ctx - DI context { state, getCfg, pushLog }
  * @param {{ store: object }} deps - forecast-store instance
@@ -78,29 +97,10 @@ export function createWeatherFetch(ctx, { store }) {
   let timer = null;
 
   /**
-   * Resolve lat/lon from config with fallback to SMA location.
-   * @returns {{ lat: number, lon: number }|null}
-   */
-  function resolveLocation() {
-    const cfg = getCfg();
-    let lat = cfg.forecast?.location?.latitude;
-    let lon = cfg.forecast?.location?.longitude;
-
-    // Fallback: schedule.smallMarketAutomation.location (D-12)
-    if (lat == null || lon == null) {
-      lat = cfg.schedule?.smallMarketAutomation?.location?.latitude;
-      lon = cfg.schedule?.smallMarketAutomation?.location?.longitude;
-    }
-
-    if (lat == null || lon == null) return null;
-    return { lat, lon };
-  }
-
-  /**
    * Fetch weather data from Open-Meteo and persist via forecast-store.
    */
   async function fetchWeather() {
-    const loc = resolveLocation();
+    const loc = resolveWeatherLocation(getCfg());
     if (!loc) {
       pushLog('weather_fetch_skip', { reason: 'no_location_configured' });
       return;

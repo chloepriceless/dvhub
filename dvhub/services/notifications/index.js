@@ -28,14 +28,22 @@ export const PROVIDER_FACTORIES = {
 };
 
 /**
+ * Bekannter Anbieter? Nur eigene Schlüssel und nur Texte (A8, Christin 21.11.2026) — ein Konfig-Schlüssel
+ * „constructor“ oder „toString“ träfe sonst eine Funktion über den Prototyp und würde als Fabrik aufgerufen.
+ */
+export function hasNotificationProvider(name) {
+  return typeof name === 'string' && Object.hasOwn(PROVIDER_FACTORIES, name);
+}
+
+/**
  * Provider aus der Konfiguration bauen — EINE Stelle für alle Versender
  * (Benachrichtigungsdienst, Lizenz-Meldung). ntfy nie an interne Adressen
  * (Box selbst, link-local/Metadaten), auch nicht für gespeicherte Altwerte
  * und Importe (Gegenprüfungen edeb17db, bca61061).
  */
 export function createProviderFromConfig(name, pCfg) {
+  if (!hasNotificationProvider(name)) return null;
   const factory = PROVIDER_FACTORIES[name];
-  if (!factory) return null;
   // Leere Adresse: die Fabrik meldet „requires topicUrl“ — „nicht erlaubt“ führte
   // beim Lesen des Protokolls in die Irre (Prod-Test 02.11.2026).
   if (name === 'ntfy' && String(pCfg?.topicUrl || '').trim() && !isAllowedOutboundUrl(pCfg.topicUrl)) throw new Error('topic_url_not_allowed');
@@ -204,7 +212,7 @@ export function createNotificationService(ctx) {
     providers = new Map();
     for (const [name, pCfg] of Object.entries(nCfg.providers || {})) {
       if (!pCfg.enabled) continue;
-      if (!PROVIDER_FACTORIES[name]) continue;
+      if (!hasNotificationProvider(name)) continue;
       try {
         providers.set(name, createProviderFromConfig(name, pCfg));
       } catch (err) {

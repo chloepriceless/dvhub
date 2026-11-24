@@ -82,7 +82,38 @@ const VICTRON_FIELDS = [
   'sourceMismatch',
   // Netzspannung L1–L3 + Frequenz des Netzzählers (services/grid-voltage.js,
   // 05.11.2026) — Ortsnetz und Datenspende lesen sie hier, der Leitstand zeigt sie.
-  'gridVoltage'
+  'gridVoltage',
+  // Zweiter Sungrow-WR im Master/Slave-Parallelbetrieb (services/inverter/sungrow-second, T-0422): sanitierte
+  // Slave-Zusammenfassung (ohne host/LAN-IP) und die effektiven System-Summen PV/Akku/Last. Müssen whitelisted
+  // sein, sonst verliert der IPC-Snapshot sie und /api/status zeigt im Split-Prozess-Betrieb nichts davon.
+  'sungrowSecond',
+  'sungrowSystemPvW',
+  'sungrowSystemBatteryW',
+  'sungrowSystemLoadW',
+  // Master-Rohwerte vor der System-Aggregation (Diagnose: Master vs. System) und der niedrigere der beiden
+  // SoC als SoC-Boden-Grundlage.
+  'sungrowMasterLoadW',
+  'sungrowMasterBatteryW',
+  'sungrowMasterPvW',
+  'sungrowMasterSocPct',
+  'socFloorPct',
+  // Master-Betriebszustand (Sungrow 13000) für die Wechselrichter-Kachel: Klartext + Notladungs-Flag (runningState
+  // 16385 = lädt eigenmächtig unter Min-SoC aus dem Netz). Müssen whitelisted sein, sonst verliert der IPC-Snapshot
+  // sie und die Kachel zeigt im Split-Prozess-Betrieb weder Zustand noch den Notladungs-Hinweis.
+  'runningState',
+  'runningStateText',
+  'emergencyCharge',
+  // Gerätegrenzen aus dem Herstellerprofil (Lese-Engine E13, 18.11.2026): gelesene BMS-/WR-Grenzen für Laden/
+  // Entladen in W bzw. A — nur Anzeige. Whitelisted, sonst verliert der IPC-Snapshot sie im Split-Prozess-Betrieb.
+  'deviceMaxChargeW',
+  'deviceMaxDischargeW',
+  'deviceMaxChargeA',
+  'deviceMaxDischargeA',
+  // Kennungsprobe des Herstellerprofils (Lese-Engine E10, 19.11.2026): {status, text, hidden, checks, checkedAt}.
+  // Whitelisted, sonst sähe /api/status im Split-Prozess-Betrieb weder den Hinweis noch, was ausgeblendet ist.
+  'identityProbe',
+  // SunSpec-M160 je MPPT/String (Live-Leistung je String, klein): /api/pv-strings/mppt im getrennten Betrieb.
+  'mppt'
 ];
 
 const SCHEDULE_FIELDS = [
@@ -250,7 +281,49 @@ function buildVpnSnapshot(vpn = null) {
 // Steuerzeitraum des Plans. Im getrennten Betrieb (DVHUB_ENABLE_RUNTIME_WORKER=1)
 // laufen die Läufe im Runtime-Prozess, /api/eos/plan im Web-Prozess
 // (Codex-Gegenprüfung 57608a1e).
-const EOS_RUN_FIELDS = ['avgDurationS', 'recentRuns', 'lastDurationS', 'lastDoneAt', 'lastPlanControl'];
+// secPerControlHour/avgControlHours: Laufzeit je Stunde Steuerzeitraum für den
+// Hinweis „Tage im Voraus planen“ (eos-horizon-hint.js, 1.0.11).
+const EOS_RUN_FIELDS = ['avgDurationS', 'recentRuns', 'lastDurationS', 'lastDoneAt', 'lastPlanControl', 'secPerControlHour', 'avgControlHours'];
+
+// Preisschwanz des letzten Pushs (eos-forecast-bridge eosPriceTail): Zeile
+// unter dem EOS-Fahrplan und PV-Grenze für den Hinweis „Tage im Voraus“
+// (Codex b1afb66c) — die Pushes laufen im Runtime-Prozess.
+const EOS_PRICE_TAIL_FIELDS = ['used', 'status', 'reason', 'why', 'from', 'until', 'slots', 'leadDaysMax', 'realUntil',
+  'issuedAt', 'fetchedAt', 'unavailableSince', 'at', 'lookahead'];
+
+function buildEosPriceTailSnapshot(tail = null) {
+  if (!tail || typeof tail !== 'object') return null;
+  return pickFields(tail, EOS_PRICE_TAIL_FIELDS);
+}
+
+// Platz-Wache (services/storage-guard.js) läuft im Runtime-Prozess; Status,
+// Kompression, tuneTimescale-Ergebnis und ihre Systemhinweise braucht der
+// Web-Prozess für /api/storage/status und /api/status (Codex 949b20f2).
+export const STORAGE_WARNING_IDS = Object.freeze(['storage', 'storage_other', 'db_compression']);
+
+function buildStorageSnapshot(storage = null) {
+  if (!storage || typeof storage !== 'object') return null;
+  const warnings = Array.isArray(storage.warnings)
+    ? storage.warnings.filter((w) => w && STORAGE_WARNING_IDS.includes(w.id))
+      .map((w) => ({ id: w.id, message: String(w.message || ''), ...(w.severity === 'error' ? { severity: 'error' } : {}) }))
+    : [];
+  return {
+    status: storage.status && typeof storage.status === 'object' ? storage.status : null,
+    compression: storage.compression && typeof storage.compression === 'object' ? storage.compression : null,
+    timescaleTuning: storage.timescaleTuning && typeof storage.timescaleTuning === 'object' ? storage.timescaleTuning : null,
+    warnings,
+  };
+}
+
+/** Web-Prozess: Stand der Platz-Wache und ihre Hinweise übernehmen. */
+export function applyRuntimeStorage(state, snapshot) {
+  if (!state || !snapshot || typeof snapshot !== 'object' || !('storage' in snapshot)) return;
+  const st = snapshot.storage;
+  state.storageRuntime = st || null;
+  if (!Array.isArray(state.systemWarnings)) state.systemWarnings = [];
+  const keep = state.systemWarnings.filter((w) => !STORAGE_WARNING_IDS.includes(w?.id));
+  state.systemWarnings.splice(0, state.systemWarnings.length, ...keep, ...((st && st.warnings) || []));
+}
 
 function buildEosRunSnapshot(eosRun = null) {
   if (!eosRun || typeof eosRun !== 'object') return null;
@@ -259,8 +332,15 @@ function buildEosRunSnapshot(eosRun = null) {
 
 /** Web-Prozess: eosRun aus dem Runtime-Schnappschuss übernehmen (eigene Felder bleiben). */
 export function applyRuntimeEosRun(state, snapshot) {
-  const run = snapshot && typeof snapshot === 'object' ? snapshot.eosRun : null;
-  if (!state || !run || typeof run !== 'object') return;
+  if (!state || !snapshot || typeof snapshot !== 'object') return;
+  // Preisschwanz: wie im Runtime-Prozess, auch null (kein Schwanz-Zustand) —
+  // unabhängig davon, ob es schon Läufe gab.
+  if ('eosPriceTail' in snapshot) {
+    state.optimizer = state.optimizer || {};
+    state.optimizer.eosPriceTail = snapshot.eosPriceTail;
+  }
+  const run = snapshot.eosRun;
+  if (!run || typeof run !== 'object') return;
   state.optimizer = state.optimizer || {};
   state.optimizer.eosRun = { ...(state.optimizer.eosRun || {}), ...run };
 }
@@ -273,7 +353,9 @@ export function buildRuntimeSnapshot({
   telemetry = {},
   historyImport = null,
   vpn = null,
-  eosRun = null
+  eosRun = null,
+  eosPriceTail = undefined,
+  storage = undefined
 } = {}) {
   return {
     capturedAt: normalizeIso(now),
@@ -283,7 +365,9 @@ export function buildRuntimeSnapshot({
     telemetry: buildTelemetrySnapshot(telemetry),
     historyImport: buildHistoryImportSnapshot(historyImport),
     vpn: buildVpnSnapshot(vpn),
-    eosRun: buildEosRunSnapshot(eosRun)
+    eosRun: buildEosRunSnapshot(eosRun),
+    ...(eosPriceTail === undefined ? {} : { eosPriceTail: buildEosPriceTailSnapshot(eosPriceTail) }),
+    ...(storage === undefined ? {} : { storage: buildStorageSnapshot(storage) })
   };
 }
 

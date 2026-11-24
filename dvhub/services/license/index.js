@@ -47,7 +47,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { PROVIDER_FACTORIES, createProviderFromConfig } from '../notifications/index.js';
+import { hasNotificationProvider, createProviderFromConfig } from '../notifications/index.js';
 import { verifyKeygenSignedKey, verifyKeygenMachineFile, readApplianceId, decodeKeygenPayload } from './keygen-verify.js';
 
 const KEYGEN_BASE = 'https://license.dvhub.de';
@@ -1587,7 +1587,7 @@ export function createLicenseService(ctx) {
     const providers = cfg?.notifications?.providers || {};
     for (const [name, pCfg] of Object.entries(providers)) {
       if (!pCfg?.enabled) continue;
-      if (!PROVIDER_FACTORIES[name]) continue;
+      if (!hasNotificationProvider(name)) continue;
       try {
         // Gegenprüfung bca61061 (P3): mit derselben Adressprüfung wie der Dienst.
         const provider = createProviderFromConfig(name, pCfg);
@@ -1633,7 +1633,7 @@ export function createLicenseService(ctx) {
     const providers = getCfg()?.notifications?.providers || {};
     let sent = 0;
     for (const [name, pCfg] of Object.entries(providers)) {
-      if (!pCfg?.enabled || !PROVIDER_FACTORIES[name]) continue;
+      if (!pCfg?.enabled || !hasNotificationProvider(name)) continue;
       try {
         const r = await createProviderFromConfig(name, pCfg).notify({ level: msg.level, title: msg.title, body: msg.body });
         if (r?.ok !== false) sent += 1;

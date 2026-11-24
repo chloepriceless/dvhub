@@ -32,7 +32,8 @@ import {
 import { createRuntimeCommandRequest, validateRuntimeCommand } from './runtime-commands.js';
 import {
   buildRuntimeSnapshot,
-  applyRuntimeEosRun
+  applyRuntimeEosRun,
+  applyRuntimeStorage
 } from './runtime-state.js';
 import { RUNTIME_MESSAGE_TYPES, startRuntimeWorker, createRuntimeCommandClient, attachRuntimeCommandServer } from './runtime-worker-protocol.js';
 import { createDirectNotifier, notifyDirectHandler } from './services/notifications/direct-relay.js';
@@ -42,12 +43,22 @@ import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtim
 import { createHistoryVizAggregator } from './services/history-viz/aggregator.js';
 import { createInverterEfficiencyDaily } from './services/inverter-efficiency/daily.js';
 import { createInverterCurveCalibrator } from './services/inverter-efficiency/calibrator.js';
+import { createStorageEfficiencyDaily, loadStorageEfficiency, storageEfficiencyCapability } from './services/inverter-efficiency/storage.js';
+import { createCoverageBackfill } from './services/history-backfill/coverage.js';
+import { createPvAcBackfill } from './services/history-backfill/pv-ac.js';
 import { createLogRetention } from './services/log-retention.js';
-import { applyDbTuning, dbBudgetMb, tuneTimescale, dbPoolMax } from './services/db-tuning.js';
+import { applyDbTuning, dbBudgetMb, tuneTimescale, dbPoolMax, fileWalOwner } from './services/db-tuning.js';
 import { createMemoryWatch, trackRequest } from './services/memory-watch.js';
 import { createStorageGuard } from './services/storage-guard.js';
+import { readPgDataDirectory } from './services/storage-mounts.js';
+import { startupProfile as storageStartupProfile } from './services/storage-profile.js';
+import { createTelemetryTiers } from './services/telemetry-tiers.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
-import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
+import {
+  APPLICABLE_VALUE_TICK_MS,
+  applicableValuesNeeded,
+  createBundesnetzagenturApplicableValueService
+} from './bundesnetzagentur-applicable-values.js';
 import { createPvgisExpectedProductionService } from './pvgis-expected-production.js';
 import { restoreRedacted, redactUrlCreds } from './config-redaction.js';
 import { readAppVersionInfo } from './app-version.js';
@@ -56,6 +67,7 @@ import {
   createMarketAutomationBuilder
 } from './market-automation-builder.js';
 import { createScheduleEvaluator } from './schedule-eval.js';
+import { createCurtailmentTest } from './services/curtailment-test.js';
 import { createEvccIntegration } from './evcc-integration.js';
 import { createPvStringsService } from './services/pv-strings/index.js';
 import {
@@ -70,7 +82,7 @@ import {
   mergeLoadedScheduleRules
 } from './schedule-runtime.js';
 import { createHistoryImportManager, sleepMs } from './history-import.js';
-import { createModbusTransport } from './transport-modbus.js';
+import { createModbusTransport, modbusPacingFromConfig, modbusFramingFromConfig } from './transport-modbus.js';
 import { createMqttTransport } from './transport-mqtt.js';
 import { discoverSystems as discoverConfiguredSystems } from './system-discovery.js';
 import {
@@ -84,7 +96,8 @@ import {
 // HTTP-Server zu booten (server-utils.js ist bewusst importfrei).
 import { atomicWriteControlState, readControlState } from './control-state-io.js';
 import { createModbusServer } from './modbus-server.js';
-import { createDvLimitController } from './dv-interface-luox.js';
+import { createDvLimitController, ctrlDeadlinePassed } from './dv-interface-luox.js';
+import { stampMono, monoNow } from './services/mono-clock.js';
 import { createFeedInLimitArbiter } from './services/feed-in-limit-arbiter.js';
 import { setNotHaltProbe } from './services/emergency-stop/policy.js';
 import { createFeedInCap } from './services/feed-in-cap/index.js';
@@ -208,8 +221,12 @@ import { energyBalanceBattery } from './services/energy-balance-battery.js';
 import { createGridShareTracker } from './services/optimizer/grid-share.js';
 import { createGridSharePollTick } from './services/optimizer/grid-share-poll.js';
 import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
+import { createSungrowSecond } from './services/inverter/sungrow-second.js';
+import { createModbusHealth } from './services/inverter/modbus-health.js';
+import { createLegacyGate } from './services/gate/legacy.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
-import { createEosRemoteFacade, eosRemoteActive, readEosPin, EOS_REMOTE_FACADE_PORT } from './services/optimizer/eos-remote.js';
+import { createPriceOutlookService } from './services/optimizer/price-outlook.js';
+import { createEosRemoteFacade, eosRemoteActive, readEosPin, readEosBuildInfo, EOS_REMOTE_FACADE_PORT } from './services/optimizer/eos-remote.js';
 import { createOptimizerService } from './services/optimizer/index.js';
 import { createOptimizerRuleStore, optimizerRulesPath, readOptimizerRules, createScheduleRuleStore, scheduleRulesPath, readScheduleRules } from './services/optimizer/rule-store.js';
 import { createFamilyService } from './services/family/index.js';
@@ -465,7 +482,12 @@ const transport = cfg.victron?.transport === 'mqtt'
       // sichtbar, die Ursache aber nie (Kundenfall 2026-09-29).
       onEvent: (event, details, level) => pushLog(event, details, level)
     })
-  : createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs });
+  // E7: Anfrage-Taktung des Herstellerprofils (victron.requestPacing) nur für die Anlagen-Verbindung
+  // victron.host:victron.port; ohne Angabe im Profil (alle Stable-Profile) keine Taktung.
+  // E12: ebenso der Rahmen (victron.framing "rtu-over-tcp" = transparentes RS485-Gateway); ohne Angabe Modbus TCP.
+  // NUR dieser Transport: eine zweite Verbindung zum selben transparenten Gateway (Scan, Sungrow-Slave, zweite GX)
+  // bekäme dessen serielle Bytes ebenfalls — deshalb sprechen die anderen Pools immer Modbus TCP.
+  : createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs, pacingFor: modbusPacingFromConfig(() => cfg), framingFor: modbusFramingFromConfig(() => cfg) });
 
 // Separate Modbus-Instanz für Scan-Tool (funktioniert immer über Modbus)
 const scanTransport = createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs });
@@ -477,8 +499,18 @@ let historyImportManager = null;
 let historyRuntime = null;
 let historyApi = null;
 let energyChartsMarketValueService = null;
+// Anzulegende Werte (BNetzA): Quelle wählbar (Standard dvhub.online mit Rückfall
+// direkt), nur mit eingetragener PV-Anlage, wöchentlich ohne Neustart (Takt
+// unten beim Start). Holen darf nur der Laufzeit-Prozess; der Web-Prozess liest
+// den Cache nach (getrennter Betrieb).
 const applicableValueService = createBundesnetzagenturApplicableValueService({
-  cachePath: APPLICABLE_VALUES_CACHE_PATH
+  cachePath: APPLICABLE_VALUES_CACHE_PATH,
+  getSource: () => cfg.referenceData?.applicableValueSource,
+  getCentralBaseUrl: () => cfg.epex?.priceApiUrl || 'https://dvhub.online',
+  isNeeded: () => applicableValuesNeeded(cfg),
+  getPvPlants: () => cfg.userEnergyPricing?.pvPlants,
+  ownsRefresh: IS_RUNTIME_PROCESS,
+  pushLog: (event, details, level) => pushLog(event, details, level)
 });
 // WS3 (2026-05-30): PVGIS expected-production cache for the curtailment KPI.
 const PVGIS_EXPECTED_CACHE_PATH = path.join(
@@ -634,6 +666,12 @@ function saveAndApplyConfig(nextRawConfig, opts = {}) {
   // sofort folgen lassen, nicht erst beim nächsten Lizenz-Revalidate. Beim
   // allerersten Speichern während des Boots gibt es den Dienst noch nicht.
   try { licenseService.syncProActive(); } catch { /* Dienst noch nicht da */ }
+  // Anzulegende Werte: Quelle umgestellt oder erste PV-Anlage eingetragen →
+  // gleich prüfen, nicht erst beim nächsten 15-min-Takt (der Dienst holt nur,
+  // wenn fällig; im Web-Prozess des getrennten Betriebs ohne Wirkung).
+  setTimeout(() => {
+    try { void applicableValueService.tick(); } catch { /* Dienst noch nicht da (Speichern beim Boot) */ }
+  }, 0).unref?.();
   const changedPaths = collectChangedPaths(previousRaw, rawCfg);
   const restart = detectRestartRequired(changedPaths);
   return {
@@ -765,7 +803,7 @@ function persistConfig(source = 'config_persist') {
 
 let dbPool = null; // raw pg pool — shared between telemetry store and forecast services
 
-async function tuneDatabase(dbConfig) {
+async function tuneDatabase(dbConfig, storageProfile = null) {
   const adminUser = process.env.DVHUB_DB_ADMIN_USER;
   const adminPassword = process.env.DVHUB_DB_ADMIN_PASSWORD;
   if (!adminUser || !adminPassword || cfg.telemetry?.database?.selfTune === false) {
@@ -775,8 +813,11 @@ async function tuneDatabase(dbConfig) {
   const admin = createPool({ ...dbConfig, user: adminUser, password: adminPassword, name: 'postgres', pool: { min: 0, max: 1 } });
   try {
     const budgetMb = dbBudgetMb({ totalMemBytes: os.totalmem() });
-    const r = await applyDbTuning((q, p) => admin.query(q, p), { budgetMb });
-    state.dbTuning = { applied: true, budgetMb, ...r, at: new Date().toISOString() };
+    // WAL-Grenzen nach Speicherprofil (Speicher-Konzept Schritt 3, S7: im Container per ALTER SYSTEM).
+    const r = await applyDbTuning((q, p) => admin.query(q, p), {
+      budgetMb, storageProfile, walOwner: fileWalOwner(DATA_DIR || '/var/lib/dvhub'),
+    });
+    state.dbTuning = { applied: true, budgetMb, storageProfile: storageProfile?.name || null, ...r, at: new Date().toISOString() };
     if (r.changed.length || r.pendingRestart.length) pushLog('db_tuning', state.dbTuning);
   } finally {
     await admin.end().catch(() => {});
@@ -837,12 +878,21 @@ async function createTelemetryStoreIfEnabled() {
     // Datenbank selbst einstellen (schreibarm + kleiner Speicher-Footprint,
     // services/db-tuning.js) — wo ein Admin-Zugang da ist (Container/balena).
     // Nativ setzt pg-write-tuning.sh dieselben Werte. Blockiert den Start nie.
-    if (IS_RUNTIME_PROCESS) tuneDatabase(dbConfig).catch((e) => pushLog('db_tuning_error', { error: e.message }, 'warn'));
+    // Speicherprofil (storage-profile.json, Platz-Wache) gilt schon beim Start.
+    const storageProfile = storageStartupProfile(DATA_DIR || '/var/lib/dvhub');
+    if (IS_RUNTIME_PROCESS) tuneDatabase(dbConfig, storageProfile).catch((e) => pushLog('db_tuning_error', { error: e.message }, 'warn'));
     // Messwerte: Tagesblöcke, Kompression nach 2 Tagen (als Eigentümer, überall).
+    // Ergebnis nicht mehr verschlucken (23.11.2026): „nicht möglich“ oder ein
+    // Fehler führen über die Platz-Wache zum roten Hinweis „Datenbank ohne
+    // Kompression“ (services/storage-guard.js); /api/storage/status zeigt es.
     if (IS_RUNTIME_PROCESS) {
-      tuneTimescale((q, p) => pool.query(q, p))
-        .then((r) => { state.timescaleTuning = r; if (r.changed?.length || r.deferred) pushLog('timescale_tuning', r); })
-        .catch((e) => pushLog('timescale_tuning_error', { error: e.message }, 'warn'));
+      tuneTimescale((q, p) => pool.query(q, p), storageProfile)
+        .then((r) => { state.timescaleTuning = { ...r, at: new Date().toISOString() }; if (r.changed?.length || r.deferred || r.skipped) pushLog('timescale_tuning', r); })
+        .catch((e) => {
+          state.timescaleTuning = { error: e.message, at: new Date().toISOString() };
+          pushLog('timescale_tuning_error', { error: e.message }, 'warn');
+        })
+        .finally(() => { ctx.storageGuard?.checkCompression?.().catch(() => {}); });
     }
     return store;
   } catch (error) {
@@ -889,7 +939,17 @@ function buildCurrentRuntimeSnapshot() {
     telemetry: state.telemetry,
     historyImport: historyImportManager ? historyImportManager.getStatus() : null,
     vpn: state.vpn,
-    eosRun: state.optimizer?.eosRun || null
+    eosRun: state.optimizer?.eosRun || null,
+    eosPriceTail: state.optimizer?.eosPriceTail || null,
+    // Nur der Prozess mit der Platz-Wache meldet ihren Stand (Codex 949b20f2).
+    ...(ctx.storageGuard ? {
+      storage: {
+        status: ctx.storageGuard.status?.() || null,
+        compression: ctx.storageGuard.compressionStatus?.() || null,
+        timescaleTuning: state.timescaleTuning || null,
+        warnings: state.systemWarnings,
+      },
+    } : {})
   });
 }
 
@@ -1081,6 +1141,8 @@ function startDedicatedRuntimeWorker() {
       runtimeWorkerSnapshot = message.snapshot;
       // Laufdauer und Steuerzeitraum des EOS-Plans für /api/eos/plan.
       applyRuntimeEosRun(state, message.snapshot);
+      // Platz-Wache: Status und Hinweise für /api/storage/status und /api/status.
+      applyRuntimeStorage(state, message.snapshot);
       runtimeWorkerStatusPayload = message.status || null;
       runtimeWorkerHeartbeatAt = Date.now();
       return;
@@ -1174,12 +1236,22 @@ const CONTROL_STATE_PATH = path.join(DATA_DIR || __dirname, 'control_state.json'
 // StorCtl_Mod/OutWRte) müssen einen Neustart WÄHREND einer aktiven Sperre
 // überleben, sonst schreibt die Freigabe nur die pauschalen restoreDefaults.
 const DV_SEQ_SAVED_PATH = path.join(DATA_DIR || __dirname, 'dv_seq_saved.json');
+// M14b: Tages-Schreibzähler für den dvControl-Einspeise-Sequenzpfad (13074/13087/
+// 13088/31222) — eigener Zähler neben dem 13050-EMS-Budget. Reset zur lokalen
+// Mitternacht; persistiert, damit ein Neustart das Tagesbudget nicht zurücksetzt.
+const DV_SEQ_WRITEDAY_PATH = path.join(DATA_DIR || __dirname, 'dv_seq_writeday.json');
 // Sungrow-EMS (T-0422): Merker, dass DVhub den Zwangs-/External-EMS-Betrieb gesetzt hat (übersteht Neustarts).
 const SUNGROW_EMS_STATE_PATH = path.join(DATA_DIR || __dirname, 'sungrow_ems_state.json');
+const SUNGROW_SLAVE_EMS_STATE_PATH = path.join(DATA_DIR || __dirname, 'sungrow_ems_slave_state.json');
+// Lebenszeichen für den unabhängigen Box-Watchdog (Absicherung C4, Dauer-Forced): der Master-Aktuator frischt es
+// auf, der externe Watchdog (scripts/sungrow-forced-watchdog.mjs) liest es.
+const SUNGROW_FORCED_HEARTBEAT_PATH = path.join(DATA_DIR || __dirname, 'sungrow_forced_heartbeat.json');
 // Peak Shaving (GitHub #28): eine von DVhub aufgehobene Akku-Sperre (Victron
 // 2704) steht gespeichert im GX — der Merker sorgt dafür, dass ein neuer
 // Prozess sie zurückschreibt statt sie zu vergessen.
 const PEAK_SHAVING_LIFT_PATH = path.join(DATA_DIR || __dirname, 'peak_shaving_lift.json');
+// Ist-Werte der eingebauten Peak-Shaving-Funktion vor DVhub (P5, services/peak-shaving/builtin.js).
+const PEAK_SHAVING_BUILTIN_PATH = path.join(DATA_DIR || __dirname, 'peak_shaving_builtin_saved.json');
 // Netzanschluss „Akku zuerst“ (Nicht-Victron): angehobene Entladegrenze, damit
 // ein Neustart den Wert davor zurückschreibt (services/grid-connection).
 const GRID_CONNECTION_ASSIST_PATH = path.join(DATA_DIR || __dirname, 'grid_connection_assist.json');
@@ -1318,8 +1390,17 @@ function pushLog(event, details = {}, levelOrOptions = {}) {
 // fast at boot rather than silently swallowing interval errors.
 configureSafeAsync({ logger: appLogger, pushLog });
 
+// DV-Lease (A24, Christin 23.11.2026): offUntil bleibt der Wanduhr-Zeitpunkt (Status, Protokoll, Installateur-Portal).
+// Beim Setzen merkt sich DVhub die Restzeit monoton (stampMono mit wallNow); ob das Lease abgelaufen ist, misst die
+// monotone Uhr. Nach einem Rücksprung der Systemzeit blieb die Abregelung sonst um die Sprungweite länger stehen, nach
+// einem Sprung vorwärts endete sie vor der Frist des Direktvermarkters. Ohne Marke (z. B. ein Pfad, der offUntil ohne
+// Stempel setzt) wie bisher die Wanduhr.
+function stampLease() {
+  stampMono(state.ctrl, 'offUntil', { wallNow: Date.now() });
+}
+
 function expireLeaseIfNeeded() {
-  if (state.ctrl.forcedOff && Date.now() > state.ctrl.offUntil) {
+  if (state.ctrl.forcedOff && ctrlDeadlinePassed(state.ctrl, 'offUntil')) {
     state.ctrl.forcedOff = false;
     state.ctrl.offUntil = 0;
     state.ctrl.lastSignal = 'lease_expired';
@@ -1341,6 +1422,7 @@ function expireLeaseIfNeeded() {
 function setForcedOff(reason, { until } = {}) {
   state.ctrl.forcedOff = true;
   state.ctrl.offUntil = Number.isFinite(until) ? until : Date.now() + cfg.offLeaseMs;
+  stampLease();
   state.ctrl.lastSignal = reason;
   state.ctrl.updatedAt = Date.now();
   pushLog('ctrl_off', { reason, offUntil: new Date(state.ctrl.offUntil).toISOString() });
@@ -1398,8 +1480,13 @@ setNotHaltProbe(() => state.ctrl.discretionaryWritesPaused === true);
 
 const ctx = {
   dvSeqSavedPath: DV_SEQ_SAVED_PATH,
+  dvSeqWritedayPath: DV_SEQ_WRITEDAY_PATH,
   sungrowEmsStatePath: SUNGROW_EMS_STATE_PATH,
+  sungrowSlaveEmsStatePath: SUNGROW_SLAVE_EMS_STATE_PATH,
+  sungrowForcedHeartbeatPath: IS_RUNTIME_PROCESS ? SUNGROW_FORCED_HEARTBEAT_PATH : null,
   peakShavingLiftPath: PEAK_SHAVING_LIFT_PATH,
+  // Nur der Laufzeit-Prozess schreibt — nur er sichert die Ist-Werte.
+  peakShavingBuiltinPath: IS_RUNTIME_PROCESS ? PEAK_SHAVING_BUILTIN_PATH : null,
   // Nur der Laufzeit-Prozess regelt — nur er liest und schreibt den Merker.
   gridConnectionAssistPath: IS_RUNTIME_PROCESS ? GRID_CONNECTION_ASSIST_PATH : null,
   floorHandoffStore,
@@ -1486,6 +1573,23 @@ ctx.gridShare = createGridShareTracker({
 // Ein Zählschritt je Abfrage, aufgerufen von polling.js vor onPollComplete —
 // der echte onPollComplete kommt erst nach der Datenbank (Befund 7).
 ctx.gridSharePollTick = createGridSharePollTick(ctx);
+// Speicherprofil per Klick (S2 a): die Platz-Wache läuft im Runtime-Prozess.
+ctx.chooseStorageProfile = async (choice) => {
+  if (!IS_RUNTIME_PROCESS) {
+    const r = await runtimeCommandClient.send('storage_profile_choose', { choice });
+    if (!r.ok) return { ok: false, error: r.error || 'runtime_command_failed' };
+    return r.result && typeof r.result === 'object' ? r.result : { ok: false, error: 'runtime_command_failed' };
+  }
+  if (!ctx.storageGuard) return { ok: false, error: 'storage_guard_unavailable' };
+  try {
+    // Speichern + sofort im Status; Umsetzung läuft im Hintergrund (Codex 246e360a:
+    // nicht den Befehlskanal des Workers blockieren).
+    const st = ctx.storageGuard.chooseProfile(choice);
+    return { ok: true, mode: st.mode, base: st.base, profile: ctx.storageGuard.profile(), applying: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+};
 ctx.resetGridShare = async ({ reason = '', actor = null } = {}) => {
   if (IS_RUNTIME_PROCESS) return ctx.gridShare.reset({ reason, actor });
   const r = await runtimeCommandClient.send('grid_share_reset', { reason, actor });
@@ -1504,6 +1608,8 @@ if (PROCESS_ROLE === 'runtime-worker' && typeof process.send === 'function') {
       grid_share_reset: (p) => ctx.gridShare.reset({ reason: p.reason || '', actor: p.actor ?? null }),
       // Direktmeldungen aus dem Web-Prozess (Support-Tunnel, Fern-Support).
       notify_direct: notifyDirectHandler(() => ctx.notificationService),
+      // Speicherprofil per Klick (Einstellungen → Speicher).
+      storage_profile_choose: (p) => ctx.chooseStorageProfile(p.choice),
     },
   });
 }
@@ -1522,6 +1628,11 @@ ctx.gridConnection = createGridConnectionGuard(ctx);
 // Akku zuerst für mehrere Quellen (§14a, EOS-Schwelle): request/release/
 // status — das strengste Ziel gewinnt (services/grid-connection).
 ctx.batteryAssist = ctx.gridConnection.batteryAssist;
+// M7b: gemeinsamer Modbus-Gesundheitszähler des Master-WR — Poll UND EMS zählen hinein (wie beim Slave der Poller).
+// Nur für Sungrow über Modbus; der Poller (createPoller) und der Master-EMS (schedule-eval) legen sich damit über
+// dieselbe Verbindung, sodass die Kachel den vollen Master-Modbus-Verkehr zeigt, nicht nur die wenigen EMS-Writes.
+// M22: Modbus-Fehler des Masters (Poll + EMS) als sungrow_modbus_error ins Protokoll, Häufungen zusammengefasst.
+if (cfg.manufacturer === 'sungrow' && transport.type === 'modbus') ctx.sungrowMasterHealth = createModbusHealth(Date.now, { pushLog, wr: 'master' });
 const poller = createPoller(ctx);
 ctx.requestPoll = poller.requestPoll;
 ctx.getSunTimesCacheForPlanning = getSunTimesCacheForPlanning;
@@ -1544,8 +1655,29 @@ ctx.getIsDay = (now = Date.now()) => {
 };
 const mab = createMarketAutomationBuilder(ctx);
 ctx.regenerateSmallMarketAutomationRules = mab.regenerateSmallMarketAutomationRules;
+// Gemeinsamer Modbus-Pool für den ZWEITEN Sungrow-WR (Lesen durch den Companion, Schreiben durch den
+// Slave-EMS der Split-Steuerung): EINE Verbindung zum Slave, damit ein WiNet-S (nur ein Modbus-Client) nicht
+// durch zwei Verbindungen blockiert. Eigener Pool, damit ein hängender Slave den Master-Pfad nie ausbremst.
+ctx.sungrowSlaveTransport = (transport.type === 'modbus')
+  ? createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs })
+  : null;
+// Schreibtor (VCL-Vertrag v6 D.1, H-1): EIN Tor je Prozess, angelegt neben Transport und Scheduler. Phase 2: der
+// Sungrow-EMS (Master UND Slave, schedule-eval.js) schreibt im Legacy-Modus darüber; setEmergencyStop meldet den
+// Not-Halt-Eintritt (fence) neben der Modbus-Sperrmarke. Not-Halt-Marke wie die Bestandsprüfungen.
+ctx.gate = createLegacyGate({ isHalted: () => state.ctrl?.discretionaryWritesPaused === true });
 const scheduler = createScheduleEvaluator(ctx);
 ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
+// Feldtest-Auslöser „Abregelung testen (X min)" (M14b): über denselben
+// Ernstfallpfad (setForcedOff / priceNegative) mit selbst-ablaufendem Lease.
+// Das 1-s-Protokoll tastet im expireLeaseInterval unten ab (sample()).
+const curtailmentTest = createCurtailmentTest({
+  state,
+  pushLog,
+  getCfg: () => cfg,
+  setForcedOff,
+  clearForcedOff,
+});
+ctx.curtailmentTest = curtailmentTest;
 // Sungrow-EMS (T-0422): Not-Halt nimmt einen von DVhub gesetzten Zwangsbetrieb
 // einmal zurück (services/control-commands.js setEmergencyStop).
 ctx.sungrowEms = scheduler.sungrowEms;
@@ -1559,10 +1691,12 @@ ctx.feedInLimit = createFeedInLimitArbiter({
 });
 // Feste Einspeisegrenze (60/70 %/eigener Wert/keine — ab Werk nicht angegeben):
 // Quelle 'fixed' im Begrenzer, Regelschleife für SunSpec-Geräte, Überwachung.
-const setSystemWarning = (id, message) => {
+// severity 'error' → roter Hinweis im Leitstand (sonst gelb).
+const setSystemWarning = (id, message, severity) => {
   const i = state.systemWarnings.findIndex((w) => w.id === id);
   if (message == null) { if (i >= 0) state.systemWarnings.splice(i, 1); return; }
-  if (i >= 0) state.systemWarnings[i] = { id, message }; else state.systemWarnings.push({ id, message });
+  const w = severity === 'error' ? { id, message, severity } : { id, message };
+  if (i >= 0) state.systemWarnings[i] = w; else state.systemWarnings.push(w);
 };
 // T-0099 / Fable R2 P2-7: einen aktiven Not-Halt laden, BEVOR der erste Dienst
 // startet — hier, sobald setSystemWarning steht. Vorher lag das Laden hinter
@@ -1606,6 +1740,11 @@ ctx.onMultiGxAvailability = createEosResyncOnAvailability({
 });
 ctx.multiGx = createMultiGx(ctx, { transport: createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs }) });
 if (IS_RUNTIME_PROCESS) ctx.multiGx.start();
+// Zweiter Sungrow-WR im Master/Slave-Parallelbetrieb (services/inverter/sungrow-second): NUR LESEND, eigener
+// Modbus-Pool. Steuerung geht laut Sungrow-Doku nur an den Master (createSungrowEms). Ohne
+// sungrow.secondInverter.host keine einzige Anfrage.
+ctx.sungrowSecond = createSungrowSecond(ctx, { transport: ctx.sungrowSlaveTransport || createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs }) });
+if (IS_RUNTIME_PROCESS) ctx.sungrowSecond.start();
 ctx.applyControlTarget = scheduler.applyControlTarget;
 // Geteilte Steuer-Primitiven (services/control-commands.js): HTTP-Routen UND der
 // MQTT-Command-Subscriber gehen durch denselben geprüften Pfad.
@@ -2058,6 +2197,18 @@ ctx.getSolarMarketValueSummary = ({ year }) =>
   energyChartsMarketValueService?.getSolarMarketValueSummary?.({ year });
 ctx.getApplicableValueSummary = ({ year, pvPlants }) =>
   applicableValueService?.getApplicableValueSummary?.({ year, pvPlants });
+// Quelle und Stand der anzulegenden Werte für die Einstellungen (GET /api/config).
+ctx.getApplicableValueStatus = () => applicableValueService?.getStatus?.() ?? null;
+// Preisschwanz für EOS (1.0.11): Residuallast-Prognose von dvhub.online,
+// letzte gültige auf der Platte (übersteht Neustarts, höchstens 48 h alt).
+// Kennung ohne persönliche Daten: nur Programm und Version.
+ctx.priceOutlook = createPriceOutlookService({
+  getCfg: () => cfg,
+  cacheFile: path.join(DATA_DIR || __dirname, 'price_outlook_cache.json'),
+  pushLog,
+  userAgent: `DVhub/${String(APP_VERSION?.version || 'unknown').replace(/[^0-9A-Za-z.+-]/g, '')} (price-outlook)`,
+});
+ctx.priceOutlook.start();
 const eosForecastBridge = createEosForecastBridge(ctx);
 // Nur noch fuer optimizer.eosStartAfterPreviousRun (EOS rechnet nach eigenem
 // Takt): dann liest EOS den SoC aus Messwerten und verlangt ihn hoechstens
@@ -2143,6 +2294,9 @@ ctx.getRawCfg = () => rawCfg;
 ctx.getLoadedConfig = () => loadedConfig;
 ctx.getConfigDefinition = () => CONFIG_DEFINITION;
 ctx.getAppVersion = () => APP_VERSION;
+// DVhub-EOS-Bauidentität (Rust-Kern + Build-Tag) für die Anzeige in /api/eos/status —
+// der rohe /v1/health-version-String ist nur Upstreams Paketnummer (0.3.0.dev…).
+ctx.eosBuildInfo = readEosBuildInfo(__dirname);
 ctx.getAppBuild = () => APP_BUILD;
 ctx.getTransportType = () => transport.type;
 ctx.getAppDir = () => __dirname;
@@ -2490,6 +2644,7 @@ const telemetryReady = (async () => {
         teslaUpdatedAt: teslamateService.getFieldUpdatedAt(),
         devices: deviceService.getDevices(),
         nowMs: Date.now(),
+        monoNow, // A26: Frische der TeslaMate-Felder monoton (Empfangsmarke)
         freshnessSeconds: sepCfg.freshnessSeconds ?? DEFAULT_FRESHNESS_SECONDS,
         homeGeofence: sepCfg.homeGeofence ?? DEFAULT_HOME_GEOFENCE
       });
@@ -2565,7 +2720,15 @@ const telemetryReady = (async () => {
     // Akku der zweiten GX-Anlage: Kapazität für die Ladestand-Korrektur des
     // Gesamtverlusts (auch für Zeiträume, in denen sie lief).
     getSecondBatteryCapacityKwh: () => (Number(cfg.multiGx?.batteryCapacityWh) > 0 ? Number(cfg.multiGx.batteryCapacityWh) / 1000 : null),
-    getForecastConfig: () => cfg.forecast || {}
+    getForecastConfig: () => cfg.forecast || {},
+    // T12: Speicherweg mit Wandlung (Systemwirkungsgrad) aus dem Tagesjob unten.
+    // Ohne PostgreSQL (ctx.db) bleibt der Wert weg.
+    getStorageEfficiency: async ({ from, toExclusive, capacityKwhForDay }) => {
+      const capability = storageEfficiencyCapability(cfg);
+      if (!capability.measurable) return { capability, totals: null };
+      const totals = ctx.db ? await loadStorageEfficiency(ctx.db, { from, toExclusive, capacityKwhForDay }) : null;
+      return { capability, totals };
+    }
   }) : null;
   historyApi = createHistoryApiHandlers({
     historyRuntime,
@@ -2585,13 +2748,23 @@ const telemetryReady = (async () => {
   // Created in every process so the routes can reach it, but the timer runs
   // ONLY in the web/monolith process (where the run-now/status routes live) so
   // a future web+runtime-worker split can't double-run the backup.
-  ctx.dbBackupScheduler = createDbBackupScheduler({ getCfg: ctx.getCfg, pushLog: ctx.pushLog });
+  ctx.dbBackupScheduler = createDbBackupScheduler({
+    getCfg: ctx.getCfg, pushLog: ctx.pushLog,
+    // Platzprüfung und Profilgrenze (Speicher-Konzept Schritt 6): Stand der Platz-Wache,
+    // im getrennten Betrieb aus dem Runtime-Schnappschuss.
+    // Noch nicht gemessen (erste 5 min nach dem Start): jetzt messen (Codex 2739f099).
+    getStorage: async () => (ctx.storageGuard
+      ? (ctx.storageGuard.status?.() || await ctx.storageGuard.check())
+      : (state.storageRuntime?.status || null)),
+  });
   if (IS_WEB_PROCESS) ctx.dbBackupScheduler.start();
   await refreshTelemetryStatus();
   if (IS_RUNTIME_PROCESS) {
-    applicableValueService.refresh().catch((error) => {
-      pushLog('applicable_value_refresh_error', { error: error.message });
-    });
+    // Anzulegende Werte: beim Start nur, wenn fällig (kein Stand, älter als eine
+    // Woche, Quelle umgestellt …), dann alle 15 min prüfen. Fehler loggt der
+    // Dienst selbst (warn mit gültigem Stand, error ohne Stand bei PV-Anlage).
+    void applicableValueService.tick();
+    safeInterval('applicable-values.refresh', () => applicableValueService.tick(), APPLICABLE_VALUE_TICK_MS);
     pvgisExpectedProductionService.refresh()
       .then((r) => { if (r && r.ok === false && r.error) pushLog('pvgis_expected_refresh_skip', r); })
       .catch((error) => { pushLog('pvgis_expected_refresh_error', { error: error.message }); });
@@ -2626,8 +2799,14 @@ const telemetryReady = (async () => {
     const inverterEfficiencyDaily = createInverterEfficiencyDaily({
       getDb: () => ctx.db, getCfg: ctx.getCfg, pushLog,
     });
+    // T12: Speicherweg mit Wandlung (Systemwirkungsgrad) im selben Takt, nur
+    // lesend auf den Rohwerten; läuft nur, wo er messbar ist (storage.js).
+    const storageEfficiencyDaily = createStorageEfficiencyDaily({
+      getDb: () => ctx.db, getCfg: ctx.getCfg, pushLog,
+    });
     const runInverterEfficiencyDaily = () => {
       inverterEfficiencyDaily.runOnce()
+        .then(() => storageEfficiencyDaily.runOnce())
         // Danach die Kurve (180 Tage bis zum letzten 30-Tage-Periodenende) — ändert sich nur
         // alle 30 Tage (curveHash), dann EOS neu. Kosten: 1 Abfrage ~2 ms.
         .then(() => ctx.inverterCurve.refresh())
@@ -2636,11 +2815,43 @@ const telemetryReady = (async () => {
         });
     };
     setTimeout(runInverterEfficiencyDaily, 3 * 60 * 1000).unref();
+    // T14 (Christin 24.11.2026): Abdeckung der eigenen 15-min-Werte für den
+    // Altbestand aus den Rohwerten nachrechnen (services/history-backfill/coverage.js).
+    // Je Lauf höchstens ein Tag (ein UPDATE, auf der A7S ~12 s), alle 5 min, ab 6 min
+    // nach dem Start; wiederaufnehmbar über die Datenbank, danach nur noch ein
+    // Kontroll-Scan je Tag.
+    const coverageBackfill = createCoverageBackfill({
+      getDb: () => ctx.db, pushLog,
+      onDayUpdated: (fromIso) => telemetryStore?.noteHistoryRangeChanged?.(fromIso),
+    });
+    const runCoverageBackfill = () => {
+      coverageBackfill.runOnce().catch((error) => pushLog('history_coverage_backfill_error', { error: error.message }));
+    };
+    setTimeout(() => {
+      runCoverageBackfill();
+      setInterval(runCoverageBackfill, 5 * 60 * 1000).unref();
+    }, 6 * 60 * 1000).unref();
+    // AC-PV (pv_ac_w) der eigenen Viertelstunden vor dem 24.11.2026 aus den Rohwerten
+    // nachtragen (services/history-backfill/pv-ac.js), gleicher Takt, versetzt.
+    const pvAcBackfill = createPvAcBackfill({
+      getDb: () => ctx.db, pushLog,
+      upstreamDone: () => coverageBackfill.isDone(),
+      onDayUpdated: (fromIso) => telemetryStore?.noteHistoryRangeChanged?.(fromIso),
+    });
+    const runPvAcBackfill = () => {
+      pvAcBackfill.runOnce().catch((error) => pushLog('history_pv_ac_backfill_error', { error: error.message }));
+    };
+    setTimeout(() => {
+      runPvAcBackfill();
+      setInterval(runPvAcBackfill, 5 * 60 * 1000).unref();
+    }, 8 * 60 * 1000).unref();
     // Gestufte Log-Aufbewahrung (services/log-retention.js): 60 Tage voll,
     // dann verdichtet bis 2 Jahre. Nachts um ~03:40 und einmal 15 min nach dem
     // Start; je Lauf höchstens 5 min Arbeit.
     const logRetention = createLogRetention({
       getDb: () => ctx.db, getCfg: ctx.getCfg, pushLog,
+      // S5 c: bei „wenig“/„kritisch“ gilt „Vollständig“ vorübergehend als Standard.
+      getStorageLevel: () => ctx.storageGuard?.status?.()?.level || null,
       // Fehler, die das Installateur-Portal quittiert hat, dürfen lokal früher weg.
       getErrorAckId: () => ctx.installerPortalClient?.errorAckId?.() ?? null,
     });
@@ -2652,17 +2863,66 @@ const telemetryReady = (async () => {
       if (hm === '03:40') runLogRetention();
     };
     setInterval(scheduleNightly, 60 * 1000).unref();
+    // Datenstufen 1 min / 15 min für ALLE Reihen (Christin 23.11.2026, S3 a+c;
+    // services/telemetry-tiers.js): alle 5 min verdichten bis „jetzt − 30 min“,
+    // je Lauf höchstens 60 s — die Rückfüllung alter Rohwerte verteilt sich so
+    // über viele Läufe. ctx.telemetryTiers.aggregatedUntil() sagt der
+    // Aufbewahrung, bis wohin Rohwerte gelöscht werden dürfen.
+    ctx.telemetryTiers = createTelemetryTiers({
+      getDb: () => ctx.db, pushLog,
+      // Bei „kritisch“ ruht die Rückfüllung (sie schriebe den letzten Platz voll);
+      // den nächsten zu löschenden Zeitraum verdichtet die Platz-Wache selbst.
+      isPaused: () => ctx.storageGuard?.status?.()?.level === 'kritisch' || !!ctx.storageGuard?.isCritical?.(),
+    });
+    ctx.telemetryTiers.start();
     // Platz-Wache (kleine eMMC/SD): früher komprimieren, im Notfall älteste
     // Rohwerte entfernen — 15-min-Werte und die letzten 30 Tage bleiben.
+    // Dazu der rote Hinweis „Datenbank ohne Kompression“ (23.11.2026).
     ctx.storageGuard = createStorageGuard({
       getDb: () => ctx.db,
       getDataDir: () => DATA_DIR || '/var/lib/dvhub',
       pushLog,
-      setWarning: (id, message) => {
-        const i = state.systemWarnings.findIndex((w) => w.id === id);
-        if (message == null) { if (i >= 0) state.systemWarnings.splice(i, 1); return; }
-        if (i >= 0) state.systemWarnings[i] = { id, message }; else state.systemWarnings.push({ id, message });
+      setWarning: setSystemWarning,
+      getTuning: () => state.timescaleTuning || null,
+      isContainer: () => process.env.DVHUB_RUNTIME === 'container',
+      // Speicherprofil (Schritt 3): beim Wechsel Blöcke/Kompression und WAL umstellen.
+      initialProfile: storageStartupProfile(DATA_DIR || '/var/lib/dvhub').name,
+      onProfileChange: async (profile) => {
+        const pool = ctx.db;
+        if (pool && typeof pool.query === 'function') {
+          try {
+            const r = await tuneTimescale((q, p) => pool.query(q, p), profile);
+            state.timescaleTuning = { ...r, at: new Date().toISOString() };
+            pushLog('timescale_tuning', r);
+          } catch (e) {
+            state.timescaleTuning = { error: e.message, at: new Date().toISOString() };
+            pushLog('timescale_tuning_error', { error: e.message }, 'warn');
+          }
+        }
+        await tuneDatabase(cfg.telemetry?.database || {}, profile).catch((e) => pushLog('db_tuning_error', { error: e.message }, 'warn'));
       },
+      // Notfall-Pfad: ältesten Zeitraum erst verdichten, dann löschen (E2E kleine Platte S4).
+      aggregateRange: (fromMs, toMs) => ctx.telemetryTiers.aggregateRange(fromMs, toMs),
+      // Profil-Aufbewahrung erst, wenn die Nachrechnungen aus Rohwerten durch sind (T14-Abdeckung, AC-PV,
+      // Speicherweg) — sonst wären ihre Eingaben weg, bevor sie liefen (Codex Integration 24.11.).
+      rawConsumersReady: () => coverageBackfill.isDone() && pvAcBackfill.isDone() && storageEfficiencyDaily.isBackfillDone(),
+      // S11 a: Push ab „wenig“ (Portal über storage_space_error im Audit-Log).
+      notify: (msg) => ctx.notifyDirect(msg),
+      // „wenig“/„kritisch“: Log-Aufbewahrung sofort laufen lassen (S5 c, „Vollständig“ ruht dann).
+      onStageChange: (level) => { if (level === 'wenig' || level === 'kritisch') runLogRetention(); },
+      // Nativ: Platte der PostgreSQL-Daten (sudo -u postgres psql, install.sh-Regel), stündlich neu gefragt.
+      getPgDataDir: (() => {
+        let cached = { at: 0, dir: null };
+        return async () => {
+          if (Date.now() - cached.at < 3600_000) return cached.dir;
+          const db = cfg.telemetry?.database || {};
+          // Nur eine lokale Datenbank liegt auf einer Platte dieser Box.
+          const local = !db.host || ['localhost', '127.0.0.1', '::1'].includes(String(db.host)) || String(db.host).startsWith('/');
+          const dir = local ? await readPgDataDirectory({ database: db }) : null;
+          cached = { at: Date.now(), dir };
+          return dir;
+        };
+      })(),
     });
     ctx.storageGuard.start();
     setInterval(runInverterEfficiencyDaily, 60 * 60 * 1000).unref();
@@ -2853,6 +3113,10 @@ if (IS_RUNTIME_PROCESS) {
   expireLeaseIntervalId = setInterval(() => {
     try { expireLeaseIfNeeded(); }
     catch (err) { pushLog('expire_lease_interval_error', { error: err?.message ?? String(err) }); }
+    // M14b-Feldtest: 1-s-Protokoll aus dem Regeltakt mitschreiben und den Test
+    // bei Lease-Ablauf beenden (selbst-ablaufend, auch ohne weitere Aktion).
+    try { curtailmentTest.sample(); }
+    catch (err) { pushLog('curtailment_test_sample_error', { error: err?.message ?? String(err) }); }
   }, 1000);
   liveTelemetryFlushIntervalId = setInterval(() => {
     try { liveTelemetryBuffer?.flush(); }
@@ -3193,6 +3457,7 @@ async function gracefulShutdown(signal) {
   safeSync('peakShaving.stop', () => ctx.peakShaving?.stop?.());
   safeSync('gridConnection.stop', () => ctx.gridConnection?.stop?.());
   safeSync('multiGx.stop', () => ctx.multiGx?.stop?.());
+  safeSync('sungrowSecond.stop', () => ctx.sungrowSecond?.stop?.());
   safeSync('vehicleEvcc.stop', () => ctx.vehicleEvcc?.stop?.());
   safeSync('vehiclePull.stop', () => ctx.vehiclePull?.stop?.());
   safeSync('tariffProvider.stop', () => ctx.tariffProvider?.stop?.());
@@ -3204,6 +3469,7 @@ async function gracefulShutdown(signal) {
   safeSync('mypvRegulator.stop', () => { mypvRegulator.stop?.().catch?.(() => {}); });
   safeSync('evDepartureTimer.stop', () => clearInterval(evDepartureTimer));
   safeSync('eosFreshSocTimer.stop', () => clearInterval(eosFreshSocTimer));
+  safeSync('priceOutlook.stop', () => ctx.priceOutlook?.stop());
   // C2 (2026-07-02, Realitätscheck der alten Worklist 7.7): evcc/license/
   // monitoring-Heartbeat räumen ihre Timer bereits sauber auf (siehe oben +
   // licenseService.close() unten) — das war stale. Echter Rest-Gap: der
@@ -3214,6 +3480,14 @@ async function gracefulShutdown(signal) {
   // beendet das TICKING (keine neue Sicherung startet mehr) — bricht einen
   // bereits laufenden Dump nicht ab, das wäre ein separater, größerer Fix.
   safeSync('dbBackupScheduler.stop', () => ctx.dbBackupScheduler?.stop?.());
+
+  // Absicherung Forced mode (C, Sungrow Dauer-Forced): Forced mode (13050=2) hat KEINEN geräteeigenen Rückfall —
+  // ohne Freigabe bliebe der Akku beim geordneten Stop (systemctl restart, Update-Neustart = SIGTERM) im letzten
+  // Lade-/Entladebefehl stehen. Darum beide WR hier sicher in Self-consumption (Master Modus 0, beide 0xCC),
+  // SOLANGE der Modbus-Transport noch lebt (vor transport.destroy unten). Sequenziell awaited, best effort; ein
+  // 5-s-Timeout (safeAsync) bricht den Shutdown nie ab. Das externe ExecStopPost-Skript ist der Gürtel-und-
+  // Hosenträger für einen Prozess, der diesen Pfad nicht mehr durchläuft (Crash/SIGKILL).
+  await safeAsync('sungrowEms.release', () => ctx.sungrowEms?.releaseControl?.('shutdown'));
 
   // 2. Parallel async closes — one rejection must NOT block the others.
   //    Order-of-init is preserved only where needed (forecastSnapshots before forecast above).
@@ -3232,6 +3506,7 @@ async function gracefulShutdown(signal) {
     safeAsync('mqttHub.close', () => mqttHub.close()),
     // Close Modbus TCP connections gracefully (FIN, not RST)
     safeAsync('transport.destroy', () => transport.destroy()),
+    safeAsync('sungrowSlaveTransport.destroy', () => ctx.sungrowSlaveTransport?.destroy?.()),
     safeAsync('scanTransport.destroy', () => scanTransport.destroy()),
     safeAsync('vpnManager.close', () => vpnManager.close()),
     // Plan 29-07A: license poller has a 24h setInterval + boot timeout (close() at services/license/index.js).

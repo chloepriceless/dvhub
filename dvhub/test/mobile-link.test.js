@@ -480,7 +480,8 @@ describe('mobile-link relay-core', () => {
     await until(() => d2.state.closed);
     assert.equal(d2.state.closed.reason, 'rate_limited');
     const idle = memClient(relay);
-    await until(() => idle.state.closed, 1000);
+    // Anmeldefrist 50 ms; until() kehrt zurück, sobald getrennt ist. 1 s reichte unter Last (parallele Testläufe) nicht.
+    await until(() => idle.state.closed, 5000);
     assert.equal(idle.state.closed.code, CLOSE.authTimeout);
     relay.close();
   });
@@ -771,6 +772,59 @@ describe('mobile-link Ende zu Ende', () => {
     assert.deepEqual(calls.at(-1), ['POST', '/api/control/stop', JSON.stringify({ reason: 'test' })]);
     assert.ok(ctx.logs.some(([e, d]) => e === 'mobile_link_control' && d.path === '/api/control/stop'));
     s.close();
+  });
+
+  // Sofort laden (14.11.2026): /api/ev/override — POST startet, DELETE beendet.
+  // DELETE gibt es nur für diesen einen Pfad und nur mit Recht control.
+  test('Sofort laden: POST und DELETE auf /api/ev/override gehen durch den Agenten zur Box – nur mit control, DELETE nur dort', async () => {
+    const calls = [];
+    const ctx = await setup({
+      extraCfg: { useRelay: false },
+      loopback: async (m, p, b) => { calls.push([m, p, b]); return { status: 200, body: { ok: true } }; },
+    });
+    const srv = http.createServer();
+    const wss = new WebSocketServer({ noServer: true });
+    srv.on('upgrade', (req, sock, head) => wss.handleUpgrade(req, sock, head, (ws) => ctx.agent.attachLan(ws)));
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    cleanups.push(() => new Promise((r) => { wss.close(); srv.close(() => r()); }));
+    const lanUrl = `ws://127.0.0.1:${srv.address().port}/api/mobile-link/ws`;
+    const pair = async (perms) => {
+      const p = ctx.agent.startPairing();
+      const phone = generateIdentity();
+      const creds = await pairDevice({ qr: p.qr, signer: phone, url: lanUrl, onWait: () => ctx.agent.approvePairing({ perms, approveToken: p.approveToken }) });
+      return connectDevice({ creds, signer: phone, url: lanUrl });
+    };
+
+    const control = await pair(['read', 'control']);
+    const start = await control.request('POST', '/api/ev/override', { powerW: 7400, durationMin: 60 });
+    assert.equal(start.status, 200);
+    assert.deepEqual(calls.at(-1), ['POST', '/api/ev/override', JSON.stringify({ powerW: 7400, durationMin: 60 })]);
+    const end = await control.request('DELETE', '/api/ev/override');
+    assert.equal(end.status, 200);
+    assert.deepEqual(calls.at(-1), ['DELETE', '/api/ev/override', null], 'DELETE geht ohne Körper zur Box');
+    assert.ok(ctx.logs.some(([e, d]) => e === 'mobile_link_control' && d.method === 'DELETE' && d.path === '/api/ev/override' && d.status === 200), 'auch das Beenden steht im Protokoll');
+    assert.ok(ctx.logs.some(([e, d]) => e === 'mobile_link_control' && d.method === 'POST' && d.path === '/api/ev/override'));
+
+    // DELETE auf alles andere erreicht die Box nie — auch nicht auf Pfade, die POST erlauben.
+    const before = calls.length;
+    for (const p of ['/api/ev', '/api/status', '/api/schedule/rules', '/api/control/stop', '/api/config', '/api/mobile-link/devices/remove', '/api/ev/override/x', '/api/ev/../ev/override']) {
+      const r = await control.request('DELETE', p);
+      assert.ok(r.status === 405 || r.status === 400, `${p}: ${r.status}`);
+    }
+    // Auch andere Methoden nicht.
+    for (const m of ['PUT', 'PATCH']) assert.equal((await control.request(m, '/api/ev/override', {})).status, 405, m);
+    assert.equal(calls.length, before, 'keine dieser Anfragen darf bei der Box ankommen');
+    control.close();
+
+    // „Nur anzeigen“: weder starten noch beenden.
+    const viewer = await pair(['read']);
+    for (const m of ['POST', 'DELETE']) {
+      const r = await viewer.request(m, '/api/ev/override', m === 'POST' ? { powerW: 7400 } : undefined);
+      assert.equal(r.status, 403, m);
+      assert.equal(r.body.error, 'control_not_allowed');
+    }
+    assert.equal(calls.length, before);
+    viewer.close();
   });
 
   test('kaputte Handshakes fluten das Protokoll nicht', async () => {

@@ -12,6 +12,14 @@ import { classifyDvRequest } from './dv-profile-check.js';
 // Ersatzport, wenn modbusListenPort nicht zu öffnen ist (siehe start()).
 export const MODBUS_FALLBACK_PORT = 1502;
 
+// Schreibende Funktionscodes nach Modbus-Spezifikation: 5 Write Single Coil,
+// 6 Write Single Register, 15 Write Multiple Coils, 16 Write Multiple Registers,
+// 22 Mask Write Register, 23 Read/Write Multiple Registers.
+export const DV_WRITE_FUNCTION_CODES = Object.freeze([5, 6, 15, 16, 22, 23]);
+const WRITE_FC = new Set(DV_WRITE_FUNCTION_CODES);
+// Modbus-Ausnahme 0x04 „Server Device Failure“.
+const EXCEPTION_DEVICE_FAILURE = 0x04;
+
 export function createModbusServer(ctx) {
   const { state, getCfg, pushLog } = ctx;
 
@@ -19,7 +27,8 @@ export function createModbusServer(ctx) {
 
   // Plan 08-06 Task 2 Step 1: LAN-only gate for Modbus TCP clients.
   // Modbus FC6/FC16 writes to register 0/3 toggle the device-wide forcedOff flag,
-  // which is safety-critical for grid assets. The previous 0.0.0.0 listener
+  // which is safety-critical for grid assets (im Not-Halt abgelehnt, siehe
+  // processModbusFrame). The previous 0.0.0.0 listener
   // accepted writes from anywhere on the network. This gate accepts:
   //   - explicit allowlist when cfg.modbusAllowedClients is non-empty (CIDR-free, exact strings)
   //   - otherwise: loopback + RFC1918 only (10/8, 172.16/12, 192.168/16)
@@ -160,6 +169,20 @@ export function createModbusServer(ctx) {
 
     const req = parseForCheck(frame, fc, len);
     if (req) checkDvRequest(dvInterfaceProfile(getCfg()), req, remote);
+
+    // Not-Halt (Christin 20.11.2026, „mit Fehler antworten – oder gar nicht“):
+    // Schreibbefehle des Direktvermarkters werden nicht mehr mit Erfolg
+    // quittiert, sondern mit Ausnahme 0x04 abgelehnt. Nichts wird übernommen:
+    // kein Register, kein forcedOff, keine LUOX-Vorgabe, kein Watchdog — damit
+    // auch nichts, was Loxone/HA/MQTT weitergeben könnten. Lesen bleibt, wie es
+    // ist. Nach dem Not-Halt gilt wieder das normale Schreiben.
+    if (WRITE_FC.has(fc) && state.ctrl?.discretionaryWritesPaused === true) {
+      pushLog('modbus_write_rejected_nothalt', {
+        remote, fc, addr: req?.addr ?? null, values: req?.values ?? null,
+        profile: dvInterfaceProfile(getCfg()), exception: EXCEPTION_DEVICE_FAILURE,
+      }, 'warn');
+      return buildException(tid, unit, fc, EXCEPTION_DEVICE_FAILURE);
+    }
 
     if (dvInterfaceProfile(getCfg()) === 'luox') return processLuoxFrame(frame, remote, { tid, unit, fc, len });
 

@@ -171,6 +171,55 @@ test('getChartHighlightSets falls back to global when no timestamps provided', (
   assert.deepEqual([...result.low].sort((left, right) => left - right), [2, 3, 6, 8, 10]);
 });
 
+test('collectOptimizerSlotTimestamps marks all 15-min slots across a rule hour (M18)', () => {
+  const helpers = loadDashboardHelpers();
+  assert.equal(typeof helpers.collectOptimizerSlotTimestamps, 'function');
+
+  const slotTs = Date.parse('2026-11-16T15:00:00Z');
+  const q = 15 * 60 * 1000;
+  const slotEndTs = slotTs + 4 * q; // 15:00 … 16:00
+  // Chart slot raster covering the hour plus neighbours before/after.
+  const chartSlots = [
+    slotTs - q,              // 14:45 (outside, must NOT match)
+    slotTs, slotTs + q, slotTs + 2 * q, slotTs + 3 * q, // 15:00/15/30/45
+    slotEndTs                // 16:00 (exclusive end, must NOT match)
+  ];
+  const rules = [{ id: 'opt-1763305200000-1', slotTs, slotEndTs, enabled: true }];
+
+  // Re-collect into a test-context array (the vm sandbox returns an array with
+  // its own Array.prototype, which deepStrictEqual would reject on identity).
+  const result = [...helpers.collectOptimizerSlotTimestamps(rules, chartSlots)].sort((a, b) => a - b);
+  assert.deepEqual(result, [slotTs, slotTs + q, slotTs + 2 * q, slotTs + 3 * q],
+    'should mark exactly the 4 quarter-hour slots inside [slotTs, slotEndTs)');
+});
+
+test('collectOptimizerSlotTimestamps falls back to a single slot without slotEndTs (no regress)', () => {
+  const helpers = loadDashboardHelpers();
+
+  const slotTs = Date.parse('2026-11-16T15:00:00Z');
+  const q = 15 * 60 * 1000;
+  const chartSlots = [slotTs, slotTs + q, slotTs + 2 * q, slotTs + 3 * q];
+  const rules = [{ id: 'opt-old', slotTs, enabled: true }]; // no slotEndTs
+
+  const result = [...helpers.collectOptimizerSlotTimestamps(rules, chartSlots)];
+  assert.deepEqual(result, [slotTs], 'old/incomplete rule keeps just the start slot');
+});
+
+test('collectOptimizerSlotTimestamps ignores non-optimizer rules', () => {
+  const helpers = loadDashboardHelpers();
+
+  const slotTs = Date.parse('2026-11-16T15:00:00Z');
+  const q = 15 * 60 * 1000;
+  const chartSlots = [slotTs, slotTs + q];
+  const rules = [
+    { id: 'sma-1', slotTs, slotEndTs: slotTs + 4 * q, enabled: true }, // small-market automation
+    { id: 'user-manual', start: '15:00', end: '16:00', enabled: true } // manual rule, no slotTs
+  ];
+
+  const result = [...helpers.collectOptimizerSlotTimestamps(rules, chartSlots)];
+  assert.deepEqual(result, [], 'only isOptimizerRule rules contribute optimizer slots');
+});
+
 test('dashboard source formats tooltip market prices with two cent decimals', () => {
   const app = fs.readFileSync(appPath, 'utf8');
 

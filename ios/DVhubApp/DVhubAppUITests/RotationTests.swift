@@ -17,10 +17,13 @@ final class RotationTests: XCTestCase {
 
     func testLiveSurvivesRotation() throws {
         let app = XCUIApplication()
+        // Die Tests suchen deutsche Beschriftungen — unabhängig von der Sprache des Simulators.
+        app.launchArguments += ["-AppleLanguages", "(de)", "-AppleLocale", "de_DE"]
         if let qr = ProcessInfo.processInfo.environment["DVHUB_QR"], !qr.isEmpty {
             app.launchArguments += ["-DVHUB_PAIR", qr]
         }
         XCUIDevice.shared.orientation = .portrait
+        app.launchArguments += Demo.off
         app.launch()
 
         let state = app.descendants(matching: .any)["connectionState"].firstMatch
@@ -29,7 +32,8 @@ final class RotationTests: XCTestCase {
         expectation(for: online, evaluatedWith: state)
         waitForExpectations(timeout: 30)
 
-        let pv = app.staticTexts["loadValue"]
+        // Der Knoten „Haus“ im Energiefluss trägt den Live-Wert in seiner Beschriftung.
+        let pv = app.buttons["flowNode.home"].firstMatch
         XCTAssertTrue(pv.waitForExistence(timeout: 15))
         shot("ui-portrait")
         let before = pv.label

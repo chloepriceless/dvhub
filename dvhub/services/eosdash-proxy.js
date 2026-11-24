@@ -69,6 +69,15 @@ export function withEosdashSecurityHeaders(headers = {}) {
 
 export function createEosdashProxy(ctx, { port = EOSDASH_PORT } = {}) {
   const { pushLog } = ctx;
+  // Fehler-Drosselung: EOSdash (:8504) nicht erreichbar spammt sonst bei jeder Proxy-Anfrage. Gleiche Phase
+  // höchstens einmal je 5 min melden.
+  const lastProxyErrAt = {};
+  const logProxyErrorThrottled = (phase, data) => {
+    const n = Date.now();
+    if (n - (lastProxyErrAt[phase] || 0) < 300_000) return;
+    lastProxyErrAt[phase] = n;
+    pushLog('eosdash_proxy_error', data);
+  };
 
   return function handleEosdashRequest(req, res) {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -121,7 +130,7 @@ export function createEosdashProxy(ctx, { port = EOSDASH_PORT } = {}) {
     });
 
     upstreamReq.on('error', (e) => {
-      pushLog('eosdash_proxy_error', { phase: 'upstream_request', error: e.message, path: upstreamPath });
+      logProxyErrorThrottled('upstream_request', { phase: 'upstream_request', error: e.message, path: upstreamPath });
       if (!res.headersSent) {
         res.writeHead(502, withEosdashSecurityHeaders({ 'content-type': 'text/plain; charset=utf-8' }));
       }
@@ -129,7 +138,7 @@ export function createEosdashProxy(ctx, { port = EOSDASH_PORT } = {}) {
     });
 
     upstreamReq.on('timeout', () => {
-      pushLog('eosdash_proxy_error', { phase: 'timeout', path: upstreamPath });
+      logProxyErrorThrottled('timeout', { phase: 'timeout', path: upstreamPath });
       upstreamReq.destroy(new Error('eosdash_timeout'));
     });
 

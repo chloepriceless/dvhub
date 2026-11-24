@@ -11,6 +11,9 @@ final class PairLinkTests: XCTestCase {
               let qr = try? String(contentsOfFile: file, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
               !qr.isEmpty, let url = URL(string: qr) else { throw XCTSkip("DVHUB_QR_FILE fehlt") }
         let app = XCUIApplication()
+        // Die Tests suchen deutsche Beschriftungen — unabhängig von der Sprache des Simulators.
+        app.launchArguments += ["-AppleLanguages", "(de)", "-AppleLocale", "de_DE"]
+        app.launchArguments += Demo.off
         app.launch()
         app.open(url)
 

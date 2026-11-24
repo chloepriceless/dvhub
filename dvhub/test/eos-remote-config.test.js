@@ -8,19 +8,25 @@ import { fileURLToPath } from 'node:url';
 import { getConfigDefinition, createDefaultConfig, normalizeConfigInput, loadConfigFile, EOS_REMOTE_MODE_MIGRATION_WARNING } from '../config-model.js';
 import { REDACTED_PATHS, redactConfig } from '../config-redaction.js';
 import { isAllowedRemoteEndpoint, readEosPin, DEFAULT_REMOTE_EOS_VERSION, remoteSettings } from '../services/optimizer/eos-remote.js';
+import { resolveEosProxy } from '../services/optimizer/eos-adapter.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Seit 1.0.10 (Christin 11.11.2026): kein Fernbetrieb mehr. Betriebsart und
-// remote.* verschwinden aus der Oberfläche; gespeicherte Werte bleiben, nur
-// 'remote' wird beim Laden zu 'local' (mit Hinweis).
-test('Oberfläche: keine Betriebsart und keine Rechendienst-Felder mehr; Vorgabe lokal', () => {
+// Seit 1.0.10 (Christin 11.11.2026): kein Fernbetrieb mehr. Die remote.*-Felder
+// verschwinden aus der Oberfläche; gespeicherte Werte bleiben, nur 'remote' wird
+// beim Laden zu 'local' (mit Hinweis). Die Betriebsart kommt mit 1.0.11 als
+// Beta-Schalter local/local-native zurück (reiner Rust-Dienst, PLAN §6.2 E2).
+test('Oberfläche: keine Rechendienst-Felder mehr; Betriebsart als local/local-native-Beta; Vorgabe lokal', () => {
   const fields = Object.fromEntries(getConfigDefinition().fields.map((f) => [f.path, f]));
-  for (const p of ['optimizer.eosProxy.mode', 'optimizer.eosProxy.remote.endpoint', 'optimizer.eosProxy.remote.token',
+  for (const p of ['optimizer.eosProxy.remote.endpoint', 'optimizer.eosProxy.remote.token',
     'optimizer.eosProxy.remote.localFallback', 'optimizer.eosProxy.remote.debugBundle', 'optimizer.eosProxy.remote.jobTimeoutMs']) {
     assert.equal(fields[p], undefined, `${p} darf nicht mehr angeboten werden`);
   }
   assert.ok(fields['optimizer.eosProxy.url'], 'Adresse des EOS bleibt');
+  const mode = fields['optimizer.eosProxy.mode'];
+  assert.ok(mode, 'Betriebsart wird wieder angeboten');
+  assert.equal(mode.beta, true, 'nur im Bleeding-Edge-Kanal');
+  assert.deepEqual(mode.options.map((o) => o.value), ['local', 'local-native']);
   const d = createDefaultConfig().optimizer.eosProxy;
   assert.equal(d.enabled, false);
   assert.equal(d.mode, 'local');
@@ -45,6 +51,37 @@ test('lokal oder ohne Betriebsart: kein Hinweis; ungültiger Wert → lokal', ()
     assert.ok(!r.warnings.includes(EOS_REMOTE_MODE_MIGRATION_WARNING));
   }
   assert.equal(normalizeConfigInput({ optimizer: { eosProxy: { mode: 'irgendwas' } } }).persistedConfig.optimizer.eosProxy.mode, 'local');
+});
+
+// local-native (reiner Rust-Dienst, 1.0.11): gültige Betriebsart, bleibt beim
+// Laden erhalten (nicht auf 'local' zurückgesetzt), ohne Migrations-Hinweis.
+test('local-native bleibt erhalten, kein Hinweis', () => {
+  const r = normalizeConfigInput({ optimizer: { eosProxy: { enabled: true, mode: 'local-native' } } });
+  assert.equal(r.persistedConfig.optimizer.eosProxy.mode, 'local-native');
+  assert.ok(!r.warnings.includes(EOS_REMOTE_MODE_MIGRATION_WARNING));
+});
+
+// A14 (21.11.2026): Die Einrichtung des nativen Dienstes gibt es seit 1.0.11
+// (eos-provision.sh/post-update.sh mit root-Freigabe, Docker über die
+// Überlagerung). Der Hilfetext darf nicht mehr „ohne Wirkung“ sagen, muss aber
+// sagen, dass die Auswahl ALLEIN nichts umstellt und was zusätzlich nötig ist.
+test('Hilfetext Betriebsart: wirkt mit Freigabe bzw. Docker-Überlagerung, nicht mehr „ohne Wirkung“', () => {
+  const mode = getConfigDefinition().fields.find((f) => f.path === 'optimizer.eosProxy.mode');
+  assert.doesNotMatch(mode.help, /OHNE WIRKUNG|kommt erst mit/i, 'überholter Hinweis');
+  assert.match(mode.help, /\/etc\/dvhub-release\/eos-native-optin/, 'root-Freigabe der nativen Installation');
+  assert.match(mode.help, /compose\.eos-localnative\.yml/, 'Weg im Docker-Stack');
+  assert.match(mode.help, /Python-EOS/, 'Rückfall/Rückweg genannt');
+});
+
+test('resolveEosProxy reicht die Betriebsart durch (local-native/local), remote → local', () => {
+  assert.equal(resolveEosProxy({ optimizer: { eosProxy: { mode: 'local-native' } } }).mode, 'local-native');
+  assert.equal(resolveEosProxy({ optimizer: { eosProxy: { mode: 'local' } } }).mode, 'local');
+  assert.equal(resolveEosProxy({ optimizer: { eosProxy: {} } }).mode, 'local');
+  assert.equal(resolveEosProxy({ optimizer: { eosProxy: { mode: 'remote' } } }).mode, 'local');
+  // URL/Timeout unverändert; local-native nutzt dieselbe lokale Adresse.
+  const p = resolveEosProxy({ optimizer: { eosProxy: { mode: 'local-native', enabled: true } } });
+  assert.equal(p.url, 'http://127.0.0.1:8503');
+  assert.equal(p.enabled, true);
 });
 
 test('loadConfigFile: gespeichertes remote → Hinweis in den Warnungen (Protokoll [config], Einstellungen)', () => {

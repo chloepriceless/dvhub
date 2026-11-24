@@ -22,13 +22,16 @@ struct PairView: View {
             if onboarding {
                 SwiftUI.Section {
                     VStack(alignment: .leading, spacing: 8) {
-                        Image(systemName: "bolt.horizontal.circle.fill").font(.system(size: 44)).foregroundStyle(.tint)
+                        Image(systemName: "bolt.horizontal.circle.fill").font(.largeTitle).imageScale(.large).foregroundStyle(Brand.auroraLinear)
+                            .accessibilityHidden(true)
                         Text("DVhub koppeln").font(.title2.bold())
                         Text("Öffne in der DVhub-Oberfläche Einstellungen → „Handy-App“ und tippe auf „Handy koppeln“. Scanne dann den QR-Code.")
                             .foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 6)
                 }
+                // Ohne Anlage: die App erst einmal mit der Beispielanlage ansehen.
+                SwiftUI.Section { DemoInvite() }
             }
 
             SwiftUI.Section("QR-Code") {
@@ -78,10 +81,12 @@ struct PairView: View {
 
             SwiftUI.Section { status }
         }
-        .navigationTitle(onboarding ? "Willkommen" : "Anlage koppeln")
+        .navigationTitle(onboarding ? String(localized: "Willkommen") : String(localized: "Anlage koppeln"))
+        .auroraList()
         .toolbar {
             if !onboarding {
-                ToolbarItem(placement: .cancellationAction) { Button("Schließen") { dismiss() } }
+                // Symbol und Titel: So kann das System den Knopf auch in eine senkrechte Leiste legen.
+                ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Label("Schließen", systemImage: "xmark") } }
             }
         }
         .sheet(isPresented: $scanning) {
@@ -151,7 +156,10 @@ struct PairView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Vergleichscode").font(.caption).foregroundStyle(.secondary)
                     Text(Self.grouped(code))
-                        .font(.system(size: 40, weight: .semibold, design: .monospaced))
+                        .font(.system(.largeTitle, design: .monospaced).weight(.semibold))
+                        .lineLimit(1).minimumScaleFactor(0.5)
+                        // Ziffer für Ziffer vorlesen, nicht als Zahl.
+                        .accessibilityLabel(Text(code.map(String.init).joined(separator: " ")))
                         .accessibilityIdentifier("pairCode")
                     Text("Muss in DVhub genauso stehen. Steht dort ein anderer Code: ablehnen.")
                         .font(.footnote).foregroundStyle(.secondary)

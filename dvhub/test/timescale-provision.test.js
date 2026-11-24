@@ -7,7 +7,7 @@
 // Pfade, die packagecloud wirklich anbietet.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -18,7 +18,7 @@ const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'timesc
 // Was packagecloud.io/timescale/timescaledb anbietet (Stand 21.10.2026, per curl geprueft).
 const SERVED = ['debian/ bookworm', 'debian/ trixie', 'ubuntu/ noble', 'ubuntu/ resolute'];
 
-function setup(osRelease, { existingList, transient = false, extHave = '', alterFails = false, apacheInstalled = false, tslInstallFails = false, downloadFails = false, tslPartial = false, apacheReinstallFails = false, offlineAfterDownload = false, staleDeb = false, leftoverApacheDeb = false } = {}) {
+function setup(osRelease, { existingList, transient = false, extHave = '', alterFails = false, apacheInstalled = false, tslInstallFails = false, downloadFails = false, tslPartial = false, apacheReinstallFails = false, offlineAfterDownload = false, staleDeb = false, leftoverApacheDeb = false, pgBuilds = null, extraEnv = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'dvhub-tsp-'));
   const bin = join(dir, 'bin');
   execFileSync('mkdir', ['-p', bin]);
@@ -77,7 +77,7 @@ fi
 # -o Dir::Cache::archives=<ordner> → Paketordner dieses Aufrufs.
 arch=/var/cache/apt/archives; prev=
 for a in "$@"; do [[ "$prev" == -o && "$a" == Dir::Cache::archives=* ]] && arch="\${a#*=}"; prev="$a"; done
-pkgs_of() { local p= a; for a in "$@"; do if [[ "$p" == -o ]]; then p=; continue; fi; p="$a"; case "$a" in install|-y|-qq|-o|--*) ;; *) echo "$a" ;; esac; done; }
+pkgs_of() { local p= a; for a in "$@"; do if [[ "$p" == -o ]]; then p=; continue; fi; p="$a"; case "$a" in install|-y|-qq|-o|--*) ;; *) echo "\${a%%=*}" ;; esac; done; }
 if [[ "$1" == install && " $* " == *" --download-only "* ]]; then
   ls "$arch" 2>/dev/null | grep '[.]deb$' | sed 's/^/vorher-im-ordner /' >> "${log}"
 fi
@@ -85,6 +85,9 @@ if [[ "$1" == install && " $* " == *" --download-only "* && " $* " != *" timesca
   for p in $(pkgs_of "$@"); do : > "$arch/\${p}_2.31.0_arm64.deb"; done
 fi
 if [[ "$1" == install && " $* " == *" timescaledb-2-postgresql-"* ]]; then
+  ${pgBuilds ? (pgBuilds.ok
+    ? `if [[ " $* " != *" timescaledb-2-postgresql-18=${pgBuilds.ok} "* ]]; then echo "E: Unable to satisfy dependencies. Reached two conflicting assignments:"; exit 100; fi`
+    : `if [[ " $* " == *" timescaledb-2-postgresql-18="* ]]; then echo "E: Version nicht erwartet"; exit 100; fi`) : ''}
   if [[ " $* " == *" --download-only "* ]]; then
     ${downloadFails ? 'exit 100' : ''}
     # apt legt alles ab, was es auflöst — auch Abhängigkeiten (timescaledb-tools).
@@ -107,12 +110,38 @@ if [[ "$1" == install && " $* " != *" --download-only "* ]]; then
 fi
 if [[ "$1" == remove ]]; then for a in "$@"; do sed -i.bak "/^$a$/d" "${pkgDb}"; done; fi
 exit 0`);
+  // apt-cache policy im Format von apt 2.6 bis 3.2 (im Container geprüft): Versionszeile
+  // "     <version> <Pin-Priorität>", darunter die Quelle; pins = { version: Priorität }.
   fake('apt-cache', `
 if [[ "$1" == policy && "$2" == timescaledb-2-* && -f "${repoList}" ]]; then
   line="$(cat "${repoList}")"
-  case "$line" in ${served}) echo "  Candidate: 2.31.0~ubuntu26.04" ;; *) echo "  Candidate: (none)" ;; esac
-fi`);
-  fake('dpkg', `[[ "$1" == -s ]] && grep -qx "$2" "${pkgDb}" && exit 0\nexit 1`);
+  inst="Installiert"; kand="Installationskandidat"; tab="Versionstabelle"; keine="(keine)"
+  [[ "$LC_ALL" == C ]] && { inst=Installed; kand=Candidate; tab="Version table"; keine="(none)"; }
+  case "$line" in
+    ${served})
+      echo "$2:"; echo "  $inst: $keine"
+      echo "  $kand: ${pgBuilds ? (pgBuilds.candidate || pgBuilds.versions[0][0]) : '2.31.0~ubuntu26.04'}"
+      ${pgBuilds ? `echo "  $tab:"
+${pgBuilds.versions.map(([v]) => `      echo "     ${v} ${pgBuilds.pins?.[v] ?? 500}"; echo "        500 https://packagecloud.io/timescale/timescaledb/ubuntu resolute/main arm64 Packages"`).join('\n')}` : ':'}
+      ;;
+    *) echo "  $kand: $keine" ;;
+  esac
+fi
+${pgBuilds ? `
+if [[ "$1" == madison ]]; then
+${pgBuilds.versions.map(([v]) => `  echo " $2 | ${v} | https://packagecloud.io/timescale/timescaledb/ubuntu resolute/main arm64 Packages"`).join('\n')}
+fi
+if [[ "$1" == show ]]; then
+  case "$2" in
+${pgBuilds.versions.map(([v, pg]) => `    *=${v}) echo "Package: \${2%%=*}"; echo "Version: ${v}"; if [[ "$2" == timescaledb-2-postgresql-* ]]; then echo "Depends: timescaledb-2-loader-postgresql-18 (>= ${v.split('~')[0]}~), postgresql-18 (>= ${pg}), libc6 (>= 2.38)"; else echo "Depends: postgresql-18 (>= ${pg}), libc6 (>= 2.38)"; fi ;;`).join('\n')}
+  esac
+fi` : ''}`);
+  // Installierte PostgreSQL-Version (dpkg-query) und Versionsvergleich (dpkg --compare-versions).
+  fake('dpkg-query', pgBuilds ? `[[ " $* " == *" postgresql-18 "* ]] && { echo -n "${pgBuilds.pgVersion}"; exit 0; }\nexit 1` : 'exit 1');
+  fake('dpkg', `[[ "$1" == -s ]] && grep -qx "$2" "${pkgDb}" && exit 0
+if [[ "$1" == --compare-versions && "$3" == ge ]]; then [[ "$(printf '%s\\n%s\\n' "$2" "$4" | sort -V | tail -n1)" == "$2" ]] && exit 0; exit 1; fi
+if [[ "$1" == --compare-versions && "$3" == le ]]; then [[ "$(printf '%s\\n%s\\n' "$2" "$4" | sort -V | tail -n1)" == "$4" ]] && exit 0; exit 1; fi
+exit 1`);
   fake('psql');
   // su: Katalog/Lade-Proben beantworten. extHave = Version im Katalog vor dem
   // Lauf ('' = Erweiterung fehlt); CREATE/ALTER setzen sie auf 2.31.0.
@@ -132,12 +161,18 @@ exit 0`);
   fake('systemctl');
   fake('pg_lsclusters', 'echo "18  main    5432 online postgres /var/lib/postgresql/18/main"');
   fake('lsb_release', 'exit 1');
+  const env = () => ({
+      PATH: `${bin}:${process.env.PATH}`, TS_PROVISION_EUID: '0', LANG: 'de_DE.UTF-8',
+      PG_ETC: join(dir, 'postgresql'), TS_DEB_CACHE: join(dir, 'deb-cache'),
+      OS_RELEASE: osFile, REPO_LIST: repoList, KEYRING: keyring,
+      CONFIG_PATH: join(dir, 'config.json'), DATA_DIR: dir, ...extraEnv,
+  });
   const run = () => execFileSync('bash', [SCRIPT], {
     env: {
       PATH: `${bin}:${process.env.PATH}`, TS_PROVISION_EUID: '0', LANG: 'de_DE.UTF-8',
       PG_ETC: join(dir, 'postgresql'), TS_DEB_CACHE: join(dir, 'deb-cache'),
       OS_RELEASE: osFile, REPO_LIST: repoList, KEYRING: keyring,
-      CONFIG_PATH: join(dir, 'config.json'), DATA_DIR: dir,
+      CONFIG_PATH: join(dir, 'config.json'), DATA_DIR: dir, ...extraEnv,
     },
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -146,7 +181,7 @@ exit 0`);
   const sql = () => calls().filter((l) => l.startsWith('su ')).join('\n');
   const pkgs = () => readFileSync(pkgDb, 'utf8').split('\n').filter((l) => l.includes('timescaledb'));
   const runStatus = () => { try { run(); return 0; } catch (e) { return e.status; } };
-  return { run, runStatus, calls, list, keyring, sql, dir, pkgs, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { run, env, runStatus, calls, list, keyring, sql, dir, pkgs, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 const UBUNTU_2604 = 'ID=ubuntu\nID_LIKE=debian\nVERSION_ID="26.04"\nVERSION_CODENAME=resolute\nUBUNTU_CODENAME=resolute\n';
@@ -382,5 +417,177 @@ test('Attrappe: Lizenzprobe sieht die Community-Installation (mit Paketordner-Op
     s.run();
     assert.match(s.sql(), /timescaledb\.license/);
     assert.ok(s.calls().some((l) => /^apt-get install -y -o Dir::Cache::archives=\S+ timescaledb-2/.test(l)));
+  } finally { s.cleanup(); }
+});
+
+// CI rot 19.11.2026: packagecloud liefert je Version einen Bau pro PostgreSQL-Minor. apt nimmt den höchsten
+// (…-1807, verlangt postgresql-18 >= 18.7); Ubuntu 26.04 hatte 18.6 → nicht installierbar → DVhub fiel ohne Not
+// auf Apache zurück. Jetzt wählt das Skript den neuesten Bau, den die installierte PostgreSQL-Version erfüllt.
+const PG_BUILDS = [['2.32.1~ubuntu26.04-1807', '18.7'], ['2.32.1~ubuntu26.04-1806', '18.6'], ['2.31.2~ubuntu26.04-1807', '18.7'], ['2.31.2~ubuntu26.04-1806', '18.6']];
+
+test('PostgreSQL 18.6 installiert: nimmt den Bau für 18.6 (…-1806), kein Apache-Rückfall', () => {
+  const s = setup(UBUNTU_2604, { pgBuilds: { pgVersion: '18.6-0ubuntu0.26.04.1', ok: '2.32.1~ubuntu26.04-1806', versions: PG_BUILDS } });
+  try {
+    const out = s.run();
+    assert.deepEqual(installed(s.calls()), ['apt-get install -y timescaledb-2-loader-postgresql-18=2.32.1~ubuntu26.04-1806 timescaledb-2-postgresql-18=2.32.1~ubuntu26.04-1806']);
+    assert.deepEqual(s.pkgs().sort(), ['timescaledb-2-loader-postgresql-18', 'timescaledb-2-postgresql-18']);
+    assert.match(out, /passend zur installierten PostgreSQL-Version: 2\.32\.1~ubuntu26\.04-1806/);
+  } finally { s.cleanup(); }
+});
+
+test('PostgreSQL 18.7 installiert: der apt-Kandidat (…-1807) passt → Paketname ohne Version, apt wählt wie immer', () => {
+  const s = setup(UBUNTU_2604, { pgBuilds: { pgVersion: '18.7-0ubuntu0.26.04.1', ok: '', versions: PG_BUILDS } });
+  try {
+    s.run();
+    assert.deepEqual(installed(s.calls()), ['apt-get install -y timescaledb-2-loader-postgresql-18 timescaledb-2-postgresql-18']);
+  } finally { s.cleanup(); }
+});
+
+// Codex 684697ca: Hat der Betreiber TimescaleDB per apt auf eine geprüfte Version festgelegt (Pin), ist sie der
+// apt-Kandidat. Eine ausdrückliche neuere Version überginge den Pin — darum nie über den Kandidaten hinaus.
+test('Pin des Betreibers auf 2.31.2 (Kandidat …-1807), PostgreSQL 18.6: nimmt 2.31.2-1806, nie 2.32.1', () => {
+  const s = setup(UBUNTU_2604, { pgBuilds: { pgVersion: '18.6-0ubuntu0.26.04.1', candidate: '2.31.2~ubuntu26.04-1807', ok: '2.31.2~ubuntu26.04-1806', versions: PG_BUILDS } });
+  try {
+    s.run();
+    assert.deepEqual(installed(s.calls()), ['apt-get install -y timescaledb-2-loader-postgresql-18=2.31.2~ubuntu26.04-1806 timescaledb-2-postgresql-18=2.31.2~ubuntu26.04-1806']);
+  } finally { s.cleanup(); }
+});
+
+test('Pin des Betreibers auf 2.31.2-1806, der Kandidat passt → Paketname ohne Version (apt hält den Pin)', () => {
+  const s = setup(UBUNTU_2604, { pgBuilds: { pgVersion: '18.6-0ubuntu0.26.04.1', candidate: '2.31.2~ubuntu26.04-1806', ok: '', versions: PG_BUILDS } });
+  try {
+    s.run();
+    assert.deepEqual(installed(s.calls()), ['apt-get install -y timescaledb-2-loader-postgresql-18 timescaledb-2-postgresql-18']);
+  } finally { s.cleanup(); }
+});
+
+test('Kein Bau passt (PostgreSQL 18.5): wie bisher Paketname ohne Version, danach Apache-Rückfall', () => {
+  const s = setup(UBUNTU_2604, { pgBuilds: { pgVersion: '18.5-0ubuntu0.26.04.1', ok: 'keiner', versions: PG_BUILDS } });
+  try {
+    s.run();
+    assert.deepEqual(installed(s.calls()), ['apt-get install -y postgresql-18-timescaledb']);
+  } finally { s.cleanup(); }
+});
+
+// Codex 711c4e3e: Sperrt der Betreiber einen Bau mit Pin-Priority -1, installiert apt ihn trotzdem, sobald man ihn
+// ausdrücklich verlangt (`paket=version`; im Container mit apt 2.6.1, 2.8.3, 3.0.3 und 3.2.0 geprüft). In
+// `apt-cache policy` steht er mit der negativen Priorität in der Versionstabelle — der Rückfall lässt ihn aus.
+const PIN_1806 = { '2.32.1~ubuntu26.04-1806': -1 };
+
+test('Bau 2.32.1-1806 per Pin-Priority -1 gesperrt, PostgreSQL 18.6: nimmt 2.31.2-1806, nie den gesperrten Bau', () => {
+  const s = setup(UBUNTU_2604, { pgBuilds: { pgVersion: '18.6-0ubuntu0.26.04.1', ok: '2.31.2~ubuntu26.04-1806', versions: PG_BUILDS, pins: PIN_1806 } });
+  try {
+    s.run();
+    assert.deepEqual(installed(s.calls()), ['apt-get install -y timescaledb-2-loader-postgresql-18=2.31.2~ubuntu26.04-1806 timescaledb-2-postgresql-18=2.31.2~ubuntu26.04-1806']);
+  } finally { s.cleanup(); }
+});
+
+// Dieselbe Auswahl steht in pkg-maintain.sh (Wartung ohne Aufsicht) und im CI-Lauf. Die Funktion wird aus jeder
+// Kopie herausgelöst und gegen dieselben Attrappen gefahren; weicht eine Kopie ab, wird ihr Test rot.
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const TS_PKG_SPEC_COPIES = ['timescale-provision.sh', 'pkg-maintain.sh', 'scripts/ci/timescale-native-e2e.sh'];
+const PC_SRC = '        500 https://packagecloud.io/timescale/timescaledb/ubuntu resolute/main arm64 Packages';
+
+function tsPkgSpec(file, policy, pgVersion = '18.6-0ubuntu0.26.04.1') {
+  const lines = readFileSync(join(REPO, file), 'utf8').split('\n');
+  const start = lines.findIndex((l) => /^\s*ts_pkg_spec\(\) \{$/.test(l));
+  assert.ok(start >= 0, `${file}: ts_pkg_spec fehlt`);
+  const indent = lines[start].match(/^\s*/)[0];
+  const end = lines.findIndex((l, i) => i > start && l === `${indent}}`);
+  assert.ok(end > start, `${file}: Ende von ts_pkg_spec nicht gefunden`);
+  const fn = lines.slice(start, end + 1).join('\n');
+  const dir = mkdtempSync(join(tmpdir(), 'dvhub-tsspec-'));
+  try {
+    const bin = join(dir, 'bin');
+    execFileSync('mkdir', ['-p', bin]);
+    const fake = (name, body) => { writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${body}\n`); chmodSync(join(bin, name), 0o755); };
+    writeFileSync(join(dir, 'policy'), policy);
+    fake('apt-cache', `
+case "$1" in
+  policy) cat "${join(dir, 'policy')}" ;;
+  madison)
+${PG_BUILDS.map(([v]) => `    echo " $2 | ${v} | https://packagecloud.io/timescale/timescaledb/ubuntu resolute/main arm64 Packages"`).join('\n')}
+    ;;
+  show)
+    case "$2" in
+${PG_BUILDS.map(([v, pg]) => `      *=${v}) echo "Package: \${2%%=*}"; echo "Version: ${v}"; echo "Depends: postgresql-18 (>= ${pg}), libc6 (>= 2.38)" ;;`).join('\n')}
+    esac ;;
+esac`);
+    fake('dpkg-query', `[[ " $* " == *" postgresql-18 "* ]] && { echo -n "${pgVersion}"; exit 0; }\nexit 1`);
+    fake('dpkg', `[[ "$1" == --compare-versions ]] || exit 1
+hi="$(printf '%s\\n%s\\n' "$2" "$4" | sort -V | tail -n1)"
+case "$3" in ge) [[ "$hi" == "$2" ]] ;; le) [[ "$hi" == "$4" ]] ;; *) exit 1 ;; esac`);
+    return execFileSync('bash', ['-c', `set -euo pipefail\nPG_VER=18\n${fn}\nts_pkg_spec timescaledb-2-postgresql-18`], {
+      env: { PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+const policyOf = ({ installed = '(none)', pins = {}, star = '' } = {}) => [
+  'timescaledb-2-postgresql-18:', `  Installed: ${installed}`, '  Candidate: 2.32.1~ubuntu26.04-1807', '  Version table:',
+  ...PG_BUILDS.flatMap(([v]) => [`${v === star ? ' *** ' : '     '}${v} ${pins[v] ?? 500}`, PC_SRC, ...(v === star ? ['        100 /var/lib/dpkg/status'] : [])]),
+].join('\n');
+
+for (const file of TS_PKG_SPEC_COPIES) {
+  test(`${file}: ts_pkg_spec lässt einen per Pin-Priority -1 gesperrten Bau aus (Codex 711c4e3e)`, () => {
+    assert.equal(tsPkgSpec(file, policyOf()), 'timescaledb-2-postgresql-18=2.32.1~ubuntu26.04-1806');
+    assert.equal(tsPkgSpec(file, policyOf({ pins: PIN_1806 })), 'timescaledb-2-postgresql-18=2.31.2~ubuntu26.04-1806');
+  });
+
+  // Ist der gesperrte Bau schon installiert, ändert ihn auszuwählen nichts; ihn auszulassen hieße, apt ein
+  // Downgrade abzuverlangen, das `apt-get -y` ablehnt — und mit ihm den ganzen Aufruf (Loader, Toolkit).
+  test(`${file}: ts_pkg_spec behält den installierten Bau, auch wenn er gesperrt ist`, () => {
+    const policy = policyOf({ installed: '2.32.1~ubuntu26.04-1806', pins: PIN_1806, star: '2.32.1~ubuntu26.04-1806' });
+    assert.equal(tsPkgSpec(file, policy), 'timescaledb-2-postgresql-18=2.32.1~ubuntu26.04-1806');
+  });
+}
+
+// S12 a1 (23.11.2026, Kundenfall 12-GB-Platte): Der Apache-Rückfall endete mit
+// write_status ok — still. Jetzt steht er mit Grund in timescale-status.json
+// (provision.result 'apache'); DVhub zeigt daraus den roten Hinweis „Datenbank
+// ohne Kompression“. PKG_MAINTAIN_EUID=0 lässt pkg-maintain.sh (Statusdatei) hier laufen.
+const statusOf = (s) => JSON.parse(readFileSync(join(s.dir, 'timescale-status.json'), 'utf8'));
+
+test('Apache-Rückfall (keine Pakete für die Distribution) steht mit Grund in der Statusdatei', () => {
+  const s = setup(DEBIAN_FORKY, { extraEnv: { PKG_MAINTAIN_EUID: '0' } });
+  try {
+    s.run();
+    const st = statusOf(s);
+    assert.equal(st.edition, 'apache');
+    assert.equal(st.provision.result, 'apache');
+    assert.match(st.provision.error, /Community-Edition nicht installiert: packagecloud hat keine TimescaleDB-Pakete fuer debian forky/);
+  } finally { s.cleanup(); }
+});
+
+test('Apache-Rückfall nach gescheitertem Download: Grund „nicht herunterladbar“, Warnung auf stderr', () => {
+  const s = setup(UBUNTU_2604, { apacheInstalled: true, downloadFails: true, extraEnv: { PKG_MAINTAIN_EUID: '0' } });
+  try {
+    const r = spawnSync('bash', [SCRIPT], { env: s.env(), encoding: 'utf8' });
+    assert.equal(r.status, 0);
+    assert.match(r.stderr, /TimescaleDB laeuft in der Apache-Edition \(Community-Paket nicht herunterladbar\)/);
+    assert.equal(statusOf(s).provision.result, 'apache');
+    assert.match(statusOf(s).provision.error, /Community-Paket nicht herunterladbar/);
+  } finally { s.cleanup(); }
+});
+
+test('Community erfolgreich: provision ok, kein Apache-Vermerk', () => {
+  const s = setup(UBUNTU_2604, { extraEnv: { PKG_MAINTAIN_EUID: '0' } });
+  try {
+    s.run();
+    const st = statusOf(s);
+    assert.equal(st.edition, 'timescale');
+    assert.equal(st.provision.result, 'ok');
+  } finally { s.cleanup(); }
+});
+
+test('pkg-maintain: alter Apache-Vermerk verschwindet, sobald Community läuft', () => {
+  const s = setup(UBUNTU_2604, { extraEnv: { PKG_MAINTAIN_EUID: '0' } });
+  try {
+    s.run();
+    const f = join(s.dir, 'timescale-status.json');
+    writeFileSync(f, JSON.stringify({ ...statusOf(s), provision: { at: '2026-11-20T00:00:00Z', result: 'apache', error: 'alt' } }));
+    const r = spawnSync('bash', [join(dirname(SCRIPT), 'pkg-maintain.sh')], { env: { ...s.env(), PKG_MAINTAIN_STATUS_ONLY: '1' }, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(statusOf(s).provision, null);
   } finally { s.cleanup(); }
 });

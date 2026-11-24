@@ -196,13 +196,24 @@ export function demandW({ kind, maxW, currentW, startW = null, available = true 
  * @param {{mode?:'priority'|'proportional', priority?:string[], demand?:boolean}} [opts]
  * @returns {Record<string, number>} Watt je Gerät (abgerundet)
  */
+// Tabellen mit Geräte-IDs als Schlüssel (A13, Christin 21.11.2026): IDs kommen auch von Hand (PUT /api/p14a/devices).
+// `tabelle['__proto__'] = w` ginge an den Prototyp-Setter und verschwände, `tabelle['constructor']` läse eine Funktion.
+// Darum eigene Dateneigenschaften setzen und nur eigene Schlüssel lesen — für gewöhnliche IDs bleibt alles gleich.
+export function setShare(table, id, value) {
+  Object.defineProperty(table, id, { value, writable: true, enumerable: true, configurable: true });
+  return value;
+}
+export function ownShare(table, id) {
+  return table != null && Object.hasOwn(table, id) ? table[id] : undefined;
+}
+
 export function allocateBudget(budget, consumers, { mode = 'priority', priority = DEFAULT_PRIORITY, demand = false } = {}) {
   const list = (consumers || []).filter((c) => c && Number(c.maxW) > 0);
   const out = {};
   const total = list.reduce((s, c) => s + Number(c.maxW), 0);
   if (!list.length || !(budget >= 0)) return out;
   if (total <= budget) {
-    for (const c of list) out[c.id] = Math.floor(Number(c.maxW));
+    for (const c of list) setShare(out, c.id, Math.floor(Number(c.maxW)));
     return out;
   }
   const prio = priority || DEFAULT_PRIORITY;
@@ -242,6 +253,6 @@ export function allocateBudget(budget, consumers, { mode = 'priority', priority 
     fill(ordered.filter((c) => c.atCap === true), maxOf);
   }
   fill(ordered, maxOf);
-  for (const c of list) out[c.id] = Math.max(0, Math.floor(got[c.id]));
+  for (const c of list) setShare(out, c.id, Math.max(0, Math.floor(got[c.id])));
   return out;
 }

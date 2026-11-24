@@ -129,7 +129,7 @@ Spalte **Zugang** in den Tabellen:
 
 | Methode | Pfad | Zugang | Beschreibung |
 |---|---|---|---|
-| GET | `/api/history/summary` | LAN·history, *Pro* für Woche/Monat/Jahr | Zusammenfassung (`?view=day&date=YYYY-MM-DD`). 15-min-Daten (`slots`, `series`) nur in der Tagesansicht; für Woche/Monat mit `&slots=1` |
+| GET | `/api/history/summary` | LAN·history, *Pro* für Woche/Monat/Jahr | Zusammenfassung (`?view=day&date=YYYY-MM-DD`). 15-min-Daten (`slots`, `series`) nur in der Tagesansicht; für Woche/Monat mit `&slots=1`. `&lean=1` (Handy-App): ohne `slots`/`series`, in der Tagesansicht auch ohne `rows` – Kennzahlen und `charts` bleiben |
 | GET | `/api/history/mispel` | LAN·history | MiSpeL-Übersicht eines Jahres (`?year=YYYY`): Pauschaloption je (Rumpf-)Jahr (P1–P15 aus den Messwerten), bei Abgrenzungsoption zusätzlich Formelsatz A1 je Monat. Leer, solange keine Option gewählt ist |
 | GET | `/api/history/export` | Token, *Pro* für Mehrperioden | Aggregierter Export |
 | GET | `/api/history/viz/<karte>` | LAN·history, *Pro* für Mehrperioden | Analyse-Karten: `sankey`, `heatmap`, `ledger`, `day-profile`, `stack`, `autarky-calendar`, `ring`, `duration`, `pheat`, `neg-price`, `spaghetti`, `cycles`, `top10`, `cal-year`, `scatter`, `inverter-efficiency` (`?view=&date=&granularity=`) |
@@ -170,6 +170,7 @@ Spalte **Zugang** in den Tabellen:
 | Methode | Pfad | Zugang | Beschreibung |
 |---|---|---|---|
 | GET | `/api/forecast` | LAN·forecast | Kombinierte Prognose: PV, Last, Preis, Sicherheit |
+| GET | `/api/price/outlook` | LAN·forecast | Preisprognose hinter den festen Börsenpreisen (Residuallast-Prognose dvhub.online, nur DE-LU): Stunden mit P10/P50/P90 in ct/kWh, Zustand `live`/`cached`/`unavailable`/`off`, Stand, „nicht verfügbar seit“, EOS-Preisschwanz des letzten Pushs (1.0.11); `importSlots`: Bezugspreis-Prognose je Viertelstunde `{ts, p50, p10, p90}` in ct/kWh brutto, mit dem Tarif wie für EOS gerechnet (`null`, wenn kein Bezugspreis auflösbar) |
 | POST | `/api/forecast/refresh` | Token | Prognose neu rechnen |
 | GET | `/api/forecast/nowcast-track` | LAN·forecast | pvnode-Nowcast vs. Day-Ahead vs. Ist |
 | GET | `/api/forecast/ghi-coverage` | LAN·forecast | Abdeckung gemessener Einstrahlung |
@@ -206,11 +207,11 @@ Spalte **Zugang** in den Tabellen:
 | Methode | Pfad | Zugang | Beschreibung |
 |---|---|---|---|
 | GET | `/api/schedule` | LAN·integrations | Zeitplan, Regeln, aktive Werte |
-| POST | `/api/schedule/rules` | Token | Regeln setzen |
+| POST | `/api/schedule/rules` | Token | Manuelle Regeln setzen: `{ rules, replaceDcFeedRules? }`; automatische Regeln bleiben. DC-Einspeise-Regeln (`feedExcessDcPv`) bleiben stehen, wenn keine mitkommt — mit `replaceDcFeedRules: true` ist `rules` auch für sie die vollständige Liste (leer = löschen) |
 | POST | `/api/schedule/rules/toggle` | Token | Regeln per ID ein-/ausschalten |
 | POST | `/api/schedule/config` | Token | Standardwerte setzen |
-| GET | `/api/schedule/automation/config` | LAN·integrations | Kleine Börsenautomatik lesen |
-| POST | `/api/schedule/automation/config` | Token | Kleine Börsenautomatik setzen |
+| GET | `/api/schedule/automation/config` | LAN·integrations | Kleine Börsenautomatik lesen. Für die Handy-App (Kennung `x-dvhub-client: mobile-link`) nur benannte Felder (`enabled`, `searchWindowStart`, `searchWindowEnd`, `targetSlotCount`, `maxDischargeW`, `minSocPct`) – ohne Standort und Stufen; `maxDischargeW` ist der wirksame Wert, `maxDischargeFromPlant: true`, wenn „Meine Anlage“ ihn vorgibt |
+| POST | `/api/schedule/automation/config` | Token | Kleine Börsenautomatik setzen. Von der Handy-App nur dieselben benannten Felder, geprüft; anderes → 400 `field_not_allowed:<Feld>`; `maxDischargeW` bei Vorgabe aus „Meine Anlage“ → 409 `managed_by_plant` |
 | POST | `/api/schedule/automation/replan` | Token | Sofort neu planen |
 | POST | `/api/control/write` | Token | Manueller Sollwert: `{ target, value, persist?, clear? }`, `target` ∈ `gridSetpointW`, `chargeCurrentA`, `minSocPct`, `maxDischargeW`, `feedExcessDcPv`; `clear: true` hebt den Override auf |
 | POST | `/api/control/stop` | Token | **Not-Halt** „als ob DVhub aus ist“: DVhubs eigene Vorgaben einmal zurücknehmen, danach keine Schreibvorgänge mehr — auch nicht §51, Direktvermarkter-Abregelung, §14a, SoC-Boden-Schutz (seit 1.0.10); den Netz-Sollwert schreibt er nicht (Antwort `neutralize.reason: "setpoint_unchanged"`); `/api/status.emergencyStop.suspended` nennt alles Ausgesetzte |
@@ -390,6 +391,7 @@ Siehe [EEBUS.md](EEBUS.md).
 | GET | `/api/battery/grid-share/protocol.csv` | LAN·`history` | Protokoll (Sperrwechsel, Tageszeilen, Zurücksetzen) als CSV |
 | POST | `/api/battery/grid-share/reset` | Token | Zähler auf 0 (`{ "reason": "…" }`), nur mit Header `x-confirm-legal-gate: true`; wird protokolliert. Im getrennten Betrieb führt der Runtime-Worker aus: 503 = Worker startet noch, 504 = keine Antwort oder Worker beendet (Ergebnis unbekannt, Stand neu laden) |
 | GET | `/api/mobile-link/status` | LAN·`integrations` | Handy-App: Zustand, gekoppelte Geräte, liefert `uiToken` |
+| GET | `/api/mobile-link/integrations` | Token | Handy-App: Übersicht der Integrationen wie `/api/integrations/status`, aber per Positivliste neu aufgebaut — nur Wahrheitswerte, Zähler, Modell und Firmware; keine Adressen im Heimnetz, Benutzernamen, Kennungen, Fehlertexte |
 | POST | `/api/mobile-link/settings` | Token+Nonce | Handy-App ein/aus, Relay, Name (Ausschalten geht ohne Nonce) |
 | POST | `/api/mobile-link/pair/start`, `/pair/approve` | Token+Nonce | Kopplung per QR-Code starten bzw. bestätigen |
 | POST | `/api/mobile-link/pair/cancel`, `/devices/remove` | Token | Kopplung abbrechen bzw. Gerät entkoppeln |
@@ -403,7 +405,7 @@ Siehe [EEBUS.md](EEBUS.md).
 | POST | `/api/victron/devices/scan` | Token+Nonce | Geräte am GX neu suchen |
 | GET | `/api/storage/status` | LAN·`status` | Speicherplatz des Datenträgers: frei/belegt, Stufe, DB-Größe, letzte Maßnahmen |
 | GET | `/api/inverter-efficiency/curve` | LAN·`status` | Selbst kalibrierte Wirkungsgradkurve des Wechselrichters; `applied` sagt, ob EOS sie bekommt |
-| GET | `/api/eos/plan` | LAN·`status`, *Pro* | EOS-Plan für Leitstand („Laut EOS-Plan“), mit Preisgrundlage |
+| GET | `/api/eos/plan` | LAN·`status`, *Pro* | EOS-Plan für Leitstand („Laut EOS-Plan“), mit Preisgrundlage; seit 1.0.11 `priceTail` (Quelle und Stand des Preisschwanzes, Vorausschau, „nicht verfügbar seit“) und je Zeile `priceSource: 'residual_load'` ab dem ersten Prognose-Slot |
 | POST | `/api/eos/solution-ready` | nur Box selbst | Fertig-Meldung des EOS-Laufs (vom EOS-Dienst) |
 
 ### 3.23 Installateurs-Portal

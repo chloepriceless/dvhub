@@ -20,6 +20,7 @@ import { execFileSync } from 'node:child_process';
 import pg from 'pg';
 import { ensurePgSchema, runPendingMigrations, createTelemetryStorePg } from '../telemetry-store-pg.js';
 import { tuneTimescale } from '../services/db-tuning.js';
+import { createTelemetryTiers, ensureTierStorage, aggregatedUntil, pruneOneMinuteTier, floorQuarterMs } from '../services/telemetry-tiers.js';
 
 const IMAGE = process.env.DVHUB_TS_IMAGE || '';
 const PASSWORD = 'dvhub-ci';
@@ -99,6 +100,32 @@ function samples(days, value) {
   }
   return rows;
 }
+
+// Datenstufen (23.11.2026): Feinwerte über mehrere Tagesblöcke.
+const TIER_BASE = floorQuarterMs(Date.now()) - 3 * 86400_000;
+function tierSamples(fromMs, toMs) {
+  const rows = [];
+  for (let t = fromMs; t < toMs; t += 5000) {
+    const i = (t - TIER_BASE) / 5000;
+    rows.push({ seriesKey: 'grid_l1_w', scope: 'live', source: 'local_poll', quality: 'raw', ts: new Date(t).toISOString(), resolutionSeconds: 5, value: i % 120, unit: 'W' });
+    rows.push({ seriesKey: 'battery_soc_pct', scope: 'live', source: 'local_poll', quality: 'raw', ts: new Date(t).toISOString(), resolutionSeconds: 5, value: 50 + (i % 10), unit: '%' });
+  }
+  return rows;
+}
+async function writeInParts(store, fromMs, toMs, stepMs = 6 * 3600_000) {
+  for (let t = fromMs; t < toMs; t += stepMs) await store.writeSamples(tierSamples(t, Math.min(toMs, t + stepMs)));
+}
+async function runTiersToEnd(pool) {
+  const tiers = createTelemetryTiers({ getDb: () => pool });
+  for (let i = 0; i < 400; i++) {
+    const r = await tiers.runOnce({ budget: 60_000 });
+    assert.equal(r.error, undefined, r.error);
+    if (r.done) return r;
+  }
+  throw new Error('Stufen nicht fertig');
+}
+const tierInfo = async (pool, table) => one(pool,
+  'SELECT compression_enabled AS c FROM timescaledb_information.hypertables WHERE hypertable_name = $1', [table]);
 
 describe('TimescaleDB echt (Docker)', { skip: !IMAGE && 'DVHUB_TS_IMAGE nicht gesetzt' }, () => {
   it('Apache → Community auf demselben Volume: tuneTimescale schaltet die Kompression nach, Daten bleiben', { timeout: 300_000 }, () => onFreshVolume('retrofit', async () => {
@@ -209,6 +236,96 @@ describe('TimescaleDB echt (Docker)', { skip: !IMAGE && 'DVHUB_TS_IMAGE nicht ge
     assert.equal(again.find((r) => r.source === 'lichtblick').value, 40);
     const fp1 = (await store.historySectionFingerprints({ boundaries: bounds }))[0].fp;
     assert.notEqual(fp1, fp0, 'Anbieterpreise gehen in den Prüfwert der Historien-Ablage ein');
+    await stopServer(srv);
+  }));
+
+  it('Datenstufen unter Community: Hypertables, immer komprimiert, Lesen und Nachzügler in komprimierten Blöcken, drop_chunks', { timeout: 600_000 }, () => onFreshVolume('tiers', async () => {
+    const srv = await startServer({});
+    await migrate(srv.pool);
+    await tuneTimescale((q, p) => srv.pool.query(q, p));
+    const store = createTelemetryStorePg(srv.pool);
+    await writeInParts(store, TIER_BASE, TIER_BASE + 2 * 86400_000);
+    const span = { start: new Date(TIER_BASE).toISOString(), end: new Date(TIER_BASE + 2 * 86400_000).toISOString() };
+    // date_bin (neu) liefert dieselben Eimer wie time_bucket (bisher)
+    const legacy = await srv.pool.query(`SELECT series_key, time_bucket('1 hour', ts_utc) AS b, SUM(value_num * resolution_seconds) / 3600 AS e, AVG(value_num) AS m
+      FROM timeseries_samples WHERE series_key IN ('grid_l1_w', 'battery_soc_pct') AND ts_utc >= $1 AND ts_utc < $2 AND resolution_seconds < 900
+      GROUP BY 1, 2 ORDER BY 2, 1`, [span.start, span.end]);
+    const vizBefore = await store.queryBucketedSeries({ seriesKeys: ['grid_l1_w', 'battery_soc_pct'], ...span, bucketInterval: '1 hour' });
+    assert.deepEqual(vizBefore.map((r) => [r.key, r.ts, r.value, r.value_avg]),
+      legacy.rows.map((r) => [r.series_key, r.b.toISOString(), Number(r.e), Number(r.m)]));
+
+    await runTiersToEnd(srv.pool);
+    for (const t of ['timeseries_samples_1m', 'timeseries_samples_15m']) {
+      const h = await tierInfo(srv.pool, t);
+      assert.ok(h, `${t} ist Hypertable`);
+      assert.equal(h.c, true, `${t} komprimiert (Community)`);
+      const job = await one(srv.pool, "SELECT config->>'compress_after' AS a FROM timescaledb_information.jobs WHERE proc_name = 'policy_compression' AND hypertable_name = $1", [t]);
+      assert.ok(job?.a, `${t} hat eine Kompressions-Regel`);
+    }
+    const again = await ensureTierStorage(srv.pool);
+    assert.deepEqual(Object.values(again.tables).map((x) => x.changed), [[], []], 'zweiter Lauf ändert nichts');
+
+    // Alles komprimieren (Rohwerte und Stufen), dann Rohwerte des ersten Tages weg
+    await srv.pool.query("SELECT count(compress_chunk(c, if_not_compressed => true)) FROM show_chunks('timeseries_samples_1m') c");
+    await srv.pool.query("SELECT count(compress_chunk(c, if_not_compressed => true)) FROM show_chunks('timeseries_samples_15m') c");
+    const nComp = Number((await one(srv.pool, "SELECT count(*) AS n FROM timescaledb_information.chunks WHERE hypertable_name = 'timeseries_samples_1m' AND is_compressed")).n);
+    assert.ok(nComp >= 2, `1-min-Blöcke komprimiert (${nComp})`);
+    const cut = TIER_BASE + 86400_000;
+    await srv.pool.query("DELETE FROM timeseries_samples WHERE scope = 'live' AND ts_utc < $1", [new Date(cut).toISOString()]);
+    const viz = await store.queryBucketedSeries({ seriesKeys: ['grid_l1_w', 'battery_soc_pct'], ...span, bucketInterval: '1 hour' });
+    assert.equal(viz.length, vizBefore.length, 'erster Tag aus der 15-min-Stufe');
+    for (const [i, r] of viz.entries()) {
+      assert.equal(r.ts, vizBefore[i].ts);
+      assert.ok(Math.abs(r.value - vizBefore[i].value) < 1e-6, `Energie ${r.key} ${r.ts}`);
+      assert.ok(Math.abs(r.value_avg - vizBefore[i].value_avg) < 1e-6, `Mittel ${r.key} ${r.ts}`);
+    }
+    const flat = await store.querySeries({ seriesKeys: ['grid_l1_w'], ...span, maxResolution: 900, bucketSec: 900 });
+    assert.equal(flat.filter((r) => r.tier === '15m').length, 96, 'erster Tag: 96 Viertelstunden aus komprimierten Blöcken');
+
+    // Nachzügler in einen komprimierten Stufen-Block
+    await store.writeSamples([{ seriesKey: 'spaete_reihe_w', scope: 'live', source: 'local_poll', quality: 'raw', ts: new Date(TIER_BASE + 3000).toISOString(), resolutionSeconds: 5, value: 5, unit: 'W' }]);
+    await runTiersToEnd(srv.pool);
+    const late = await one(srv.pool, "SELECT n, value_avg FROM timeseries_samples_15m WHERE series_key = 'spaete_reihe_w'");
+    assert.deepEqual([late.n, late.value_avg], [1, 5]);
+
+    // Minutenwerte des ersten Tages per drop_chunks
+    const until = await aggregatedUntil(srv.pool);
+    assert.ok(Date.parse(until) >= TIER_BASE + 2 * 86400_000);
+    const p = await pruneOneMinuteTier(srv.pool, { olderThan: new Date(cut + 86400_000).toISOString() });
+    assert.ok(p.droppedChunks >= 1, `Blöcke entfernt (${JSON.stringify(p)})`);
+    assert.equal(Number((await one(srv.pool, "SELECT count(*) AS n FROM timeseries_samples_15m WHERE bucket_ts < $1", [new Date(cut).toISOString()])).n) > 0, true, '15-min-Werte bleiben');
+    await stopServer(srv);
+  }));
+
+  it('Datenstufen unter Apache und nach Nachrüstung: Hypertable ohne Kompression, alte normale Tabellen werden umgezogen', { timeout: 600_000 }, () => onFreshVolume('tiers-apache', async () => {
+    const srv = await startServer({ license: 'apache' });
+    // Erst ohne TimescaleDB (wie eine Box, deren Einrichtung scheiterte): normale Tabellen
+    await ensurePgSchema(srv.pool);
+    const m0 = await runPendingMigrations(srv.pool, {});
+    assert.deepEqual(m0.failed, []);
+    await srv.pool.query('DROP EXTENSION IF EXISTS timescaledb');
+    const store = createTelemetryStorePg(srv.pool);
+    await writeInParts(store, TIER_BASE, TIER_BASE + 6 * 3600_000);
+    await runTiersToEnd(srv.pool);
+    assert.equal((await ensureTierStorage(srv.pool)).mode, 'plain');
+    const before = (await srv.pool.query('SELECT * FROM timeseries_samples_15m ORDER BY series_key, bucket_ts')).rows;
+    assert.ok(before.length > 0);
+    // Nachrüstung: TimescaleDB (Apache) kommt dazu → 014 macht die Rohwerte zur Hypertable
+    const m1 = await migrate(srv.pool);
+    assert.deepEqual(m1.failed, []);
+    const st = await ensureTierStorage(srv.pool);
+    assert.equal(st.mode, 'apache');
+    for (const t of ['timeseries_samples_1m', 'timeseries_samples_15m']) {
+      const h = await tierInfo(srv.pool, t);
+      assert.ok(h, `${t} ist jetzt Hypertable`);
+      assert.equal(h.c, false, 'Apache: keine Kompression');
+    }
+    assert.deepEqual((await srv.pool.query('SELECT * FROM timeseries_samples_15m ORDER BY series_key, bucket_ts')).rows, before, 'Daten umgezogen');
+    // Weiter verdichten und Minutenwerte per drop_chunks löschen geht auch unter Apache
+    await writeInParts(store, TIER_BASE + 6 * 3600_000, TIER_BASE + 30 * 3600_000);
+    await runTiersToEnd(srv.pool);
+    const p = await pruneOneMinuteTier(srv.pool, { olderThan: new Date(TIER_BASE + 26 * 3600_000).toISOString() });
+    assert.ok(p.droppedChunks >= 1, JSON.stringify(p));
     await stopServer(srv);
   }));
 });

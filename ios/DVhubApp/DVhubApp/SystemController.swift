@@ -4,10 +4,57 @@
 // Abbruch automatisch neu verbinden. Die Verbindung lebt hier und nicht in den
 // Ansichten — Auf-/Zuklappen des iPhone Duo, Drehen oder Größenwechsel bauen
 // nur die Oberfläche neu, nicht die Verbindung.
+//
+// Der Controller kennt nur `PlantConnection` (Paket DVhubLink). Woher die
+// Verbindung kommt, entscheidet sein `PlantDialer`: `LinkDialer` verbindet mit
+// einer gekoppelten Anlage, `DemoDialer` mit der eingebauten Beispielanlage —
+// dort gibt es keine Wege ins Netz. Alles darüber (Ansichten, Karten, Bedienen)
+// ist für beide derselbe Code.
 
 import Foundation
 import Observation
 import DVhubLink
+
+/// Wie der Controller zu einer Verbindung kommt.
+protocol PlantDialer {
+    /// Wege zur Anlage in der Reihenfolge, in der sie versucht werden.
+    func routes(for credentials: LinkCredentials) -> [LinkRoute]
+    /// Prüft, was zum Verbinden da sein muss (Geräteschlüssel), und liefert die
+    /// Funktion, die über einen Weg verbindet.
+    func prepare(_ credentials: LinkCredentials) throws -> (LinkRoute) async throws -> any PlantConnection
+    /// Änderungen an der Anlage bestätigt man am Gerät (Touch ID, Face ID, Gerätecode).
+    var confirmsOnDevice: Bool { get }
+}
+
+/// Gekoppelte Anlage: Heimnetz zuerst (2,5 s), dann das Relay (8 s) — Ende zu Ende verschlüsselt.
+struct LinkDialer: PlantDialer {
+    let confirmsOnDevice = true
+
+    func routes(for credentials: LinkCredentials) -> [LinkRoute] { credentials.routes }
+
+    func prepare(_ credentials: LinkCredentials) throws -> (LinkRoute) async throws -> any PlantConnection {
+        guard let ref = credentials.keyRef else { throw LinkError.keychain(-25300) }
+        let signer = try KeyStore.loadSigner(ref)
+        return { route in
+            try await DeviceConnection.connect(credentials: credentials, signer: signer, route: route,
+                                               connectTimeout: route.kind == .lan ? 2.5 : 8)
+        }
+    }
+}
+
+/// Die eingebaute Beispielanlage: rechnet im Gerät, öffnet keine Netzverbindung.
+/// In der Demo wird nichts geschaltet — die Bestätigung am Gerät entfällt.
+struct DemoDialer: PlantDialer {
+    let box: DemoBox
+    let confirmsOnDevice = false
+
+    func routes(for credentials: LinkCredentials) -> [LinkRoute] { [LinkRoute(url: URL(string: "demo://anlage")!, kind: .demo)] }
+
+    func prepare(_ credentials: LinkCredentials) throws -> (LinkRoute) async throws -> any PlantConnection {
+        let box = box, name = credentials.boxName
+        return { _ in DemoConnection(box: box, name: name) }
+    }
+}
 
 @MainActor
 @Observable
@@ -34,16 +81,43 @@ final class SystemController {
     var perms: [String] { credentials.perms }
 
     var onCredentialsChanged: ((LinkCredentials) -> Void)?
+    /// Neuer Stand (live oder Briefkasten) — für die Widgets.
+    var onStatus: ((LiveStatus, Date) -> Void)?
 
-    private var connection: DeviceConnection?
+    // Zusatzdaten für Detailansichten und Verlaufslinien. Sie leben hier und
+    // nicht in den Ansichten: Auf-/Zuklappen baut nur die Oberfläche neu.
+    /// Voller Status (/api/status) für Detailwerte: Phasen, Flüsse, Zähler.
+    private(set) var detail: StatusDetail?
+    private(set) var detailAt: Date?
+    /// Rohantwort von /api/status — Ansichten lesen daraus nur benannte Felder.
+    private(set) var statusRaw: JSONValue?
+    private var detailLoading = false
+    /// Heutiger Verlauf (5-Minuten-Mittel) für die Linien in den Karten.
+    private(set) var today: [SeriesPoint] = []
+    private(set) var todayAt: Date?
+    private var todayLoading = false
+
+    private let dialer: any PlantDialer
+    private var connection: (any PlantConnection)?
     private var loop: Task<Void, Never>?
     /// Fertige Heimnetz-Verbindung, die die Relay-Verbindung ablösen soll.
-    private var pendingUpgrade: DeviceConnection?
+    private var pendingUpgrade: (any PlantConnection)?
     static let lanProbeSeconds: UInt64 = 30
 
-    init(credentials: LinkCredentials) {
+    init(credentials: LinkCredentials, dialer: any PlantDialer = LinkDialer()) {
         self.credentials = credentials
+        self.dialer = dialer
         self.mailbox = Self.loadMailboxState(credentials.id)
+    }
+
+    /// Die eingebaute Beispielanlage — keine gekoppelte Anlage.
+    var isDemo: Bool { credentials.isDemo }
+
+    /// Bestätigung am Gerät vor einer Änderung (`reason`: z. B. „Zeitplan ändern“).
+    /// In der Demo entfällt sie: Dort wird nichts geschaltet.
+    func authorize(_ reason: String) async -> Result<Void, Error> {
+        guard dialer.confirmsOnDevice else { return .success(()) }
+        return await DeviceAuth.confirm(String(localized: "\(reason) an \(credentials.boxName)", comment: "Grund für Touch ID: z. B. Zeitplan ändern an Meine Anlage"))
     }
 
     private static func mailboxKey(_ boxId: String) -> String { "mailbox.\(boxId)" }
@@ -95,30 +169,22 @@ final class SystemController {
         if case .online = state { state = .idle }
     }
 
-    private func signer() throws -> LinkSigner {
-        guard let ref = credentials.keyRef else { throw LinkError.keychain(-25300) }
-        return try KeyStore.loadSigner(ref)
-    }
-
     private func run() async {
         var backoff = ReconnectBackoff()
         while !Task.isCancelled {
             state = .connecting
-            var conn: DeviceConnection?
-            var lastError = "Keine Verbindung"
+            var conn: (any PlantConnection)?
+            var lastError = String(localized: "Keine Verbindung")
             do {
-                let s = try signer()
+                let connect = try dialer.prepare(credentials)
                 if let up = pendingUpgrade {
                     pendingUpgrade = nil
                     conn = up
                 }
-                for route in credentials.routes where conn == nil {
+                for route in dialer.routes(for: credentials) where conn == nil {
                     if Task.isCancelled { return }
                     do {
-                        conn = try await DeviceConnection.connect(
-                            credentials: credentials, signer: s, route: route,
-                            connectTimeout: route.kind == .lan ? 2.5 : 8
-                        )
+                        conn = try await connect(route)
                         break
                     } catch {
                         lastError = userMessage(for: error)
@@ -157,7 +223,7 @@ final class SystemController {
         }
     }
 
-    private func serve(_ conn: DeviceConnection) async {
+    private func serve(_ conn: any PlantConnection) async {
         let kind = conn.route.kind
         // Steht die Sitzung schon, liegt das Ereignis `.connected` im Puffer
         // und richtet sie unten ein.
@@ -183,6 +249,7 @@ final class SystemController {
                 if let s = LiveStatus.from(status) {
                     live = s
                     liveAt = parseISODate(ts) ?? Date()
+                    onStatus?(s, liveAt ?? Date())
                 }
             case .boxOffline:
                 state = .boxOffline(kind)
@@ -204,15 +271,15 @@ final class SystemController {
         }
     }
 
-    private func probeLan(replacing current: DeviceConnection) async {
-        let lanRoutes = credentials.routes.filter { $0.kind == .lan }
+    private func probeLan(replacing current: any PlantConnection) async {
+        let lanRoutes = dialer.routes(for: credentials).filter { $0.kind == .lan }
         guard !lanRoutes.isEmpty else { return }
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: Self.lanProbeSeconds * 1_000_000_000)
             if Task.isCancelled { return }
-            guard let s = try? signer() else { return }
+            guard let connect = try? dialer.prepare(credentials) else { return }
             for route in lanRoutes {
-                guard let c = try? await DeviceConnection.connect(credentials: credentials, signer: s, route: route, connectTimeout: 2.5) else { continue }
+                guard let c = try? await connect(route) else { continue }
                 if Task.isCancelled { await c.close(); return }
                 if await c.isSessionReady {
                     pendingUpgrade = c
@@ -224,13 +291,13 @@ final class SystemController {
         }
     }
 
-    private func sessionReady(_ conn: DeviceConnection, kind: LinkRoute.Kind) async {
+    private func sessionReady(_ conn: any PlantConnection, kind: LinkRoute.Kind) async {
         state = .online(kind)
         try? await conn.subscribe(live: true, intervalMs: 2000)
         await loadMailbox(conn)
     }
 
-    private func loadMailbox(_ conn: DeviceConnection) async {
+    private func loadMailbox(_ conn: any PlantConnection) async {
         guard let items = try? await conn.fetchMailbox() else { return }
         var next = mailbox
         let ack = next.merge(items)
@@ -239,6 +306,7 @@ final class SystemController {
         // Jeden geänderten Stand speichern — auch einen reinen `latest` ohne
         // Ereignisse, damit er einen Neustart ohne Verbindung übersteht (Codex R4).
         let saved = changed ? saveMailboxState() : true
+        if changed, !preferLive, let s = mailboxStatus, let at = mailboxAt { onStatus?(s, at) }
         // Erst quittieren, wenn übernommen und gespeichert ist.
         guard !ack.isEmpty, saved else { return }
         try? await conn.ackMailbox(ack)
@@ -249,4 +317,38 @@ final class SystemController {
         guard let connection, isOnline else { throw LinkError.boxOffline }
         return try await connection.request(method, path, body: body)
     }
+
+    // MARK: Zusatzdaten
+
+    /// Vollen Status holen, wenn der letzte älter als `maxAge` Sekunden ist.
+    func refreshDetail(maxAge: TimeInterval = 4) async {
+        guard isOnline, !detailLoading else { return }
+        if let detailAt, Date().timeIntervalSince(detailAt) < maxAge { return }
+        detailLoading = true
+        defer { detailLoading = false }
+        guard let r = try? await request("GET", "/api/status"), r.status == 200,
+              let d = StatusDetail.from(status: r.body) else { return }
+        detail = d
+        statusRaw = r.body
+        detailAt = Date()
+    }
+
+    /// Heutigen Verlauf holen (höchstens alle `maxAge` Sekunden).
+    func refreshToday(maxAge: TimeInterval = 600) async {
+        guard isOnline, !todayLoading else { return }
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: Date())
+        // Über Mitternacht: alte Linien nicht als „heute“ stehen lassen.
+        if let todayAt, !cal.isDate(todayAt, inSameDayAs: Date()) { today = []; self.todayAt = nil }
+        if let todayAt, Date().timeIntervalSince(todayAt) < maxAge { return }
+        todayLoading = true
+        defer { todayLoading = false }
+        let end = cal.date(byAdding: .day, value: 1, to: start) ?? start
+        if case .success(let pts) = await BoxData.series(self, keys: BoxData.dayKeys, start: start, end: end) {
+            today = pts
+            todayAt = Date()
+        }
+    }
+
+    func todayValues(_ key: String) -> [SeriesPoint] { today.filter { $0.key == key } }
 }

@@ -168,12 +168,80 @@ test('GET /api/eos/plan — mittlere Laufdauer und Hinweis bei langen Läufen', 
   const ctx = mockCtx({ eosMonitor: monitorStub({ plan: { data: solution, at: Date.UTC(2026, 9, 3, 9, 14), current: true } }) });
   ctx.state.optimizer = { eosRun: { avgDurationS: 900, recentRuns: 6, lastDurationS: 880 } };
   let body = JSON.parse((await dispatch(ctx, makeReq('/api/eos/plan', { token: null, ip: LAN_IP }))).body);
-  assert.deepEqual(body.run, { avgDurationS: 900, recentRuns: 6, lastDurationS: 880 });
+  assert.deepEqual(body.run, { avgDurationS: 900, recentRuns: 6, lastDurationS: 880, secPerControlHour: null, avgControlHours: null });
   assert.match(body.runHint.text, /im Mittel 15 min/);
   assert.deepEqual(body.runHint.suggest, { generations: 100, controlHorizon: 'auto' });
   ctx.state.optimizer.eosRun.avgDurationS = 200;
   body = JSON.parse((await dispatch(ctx, makeReq('/api/eos/plan', { token: null, ip: LAN_IP }))).body);
   assert.equal(body.runHint, null);
+});
+
+// 1.0.11 (Christin 12.11.2026): Mit der Preisprognose bis zu ~5 Tage
+// vorausplanen — Hinweis mit Laufzeit-Schätzung aus den gemessenen Läufen,
+// am EOS-Fahrplan und für die Einstellungen (/api/price/outlook).
+test('GET /api/eos/plan und /api/price/outlook — Hinweis „Tage im Voraus“ mit Laufzeit für dieses Gerät', async () => {
+  const ctx = mockCtx({ eosMonitor: monitorStub({ plan: { data: solution, at: Date.UTC(2026, 9, 3, 9, 14), current: true } }) });
+  Object.assign(ctx.getCfg().epex, { enabled: true, bzn: 'DE-LU', priceSource: 'dvhub' });
+  ctx.getCfg().optimizer.eosProxy = { enabled: true };
+  const now = Date.now();
+  const hour0 = now - (now % 3_600_000);
+  const hours = Array.from({ length: 140 }, (_, i) => ({ ms: hour0 + i * 3_600_000, p10: 50, p50: 80, p90: 120, leadDays: 1 }));
+  const outlook = { issuedAt: new Date(now).toISOString(), issuedMs: now, biddingZone: 'DE-LU', hours };
+  ctx.priceOutlook = { current: () => ({ status: 'live', reason: null, outlook, issuedAt: outlook.issuedAt, fetchedAt: outlook.issuedAt, unavailableSince: null }) };
+  // Feste Preise bis zur vollen Stunde + 34 h.
+  ctx.state.epex.data = Array.from({ length: 34 * 4 }, (_, i) => ({ ts: hour0 + i * 900_000, ct_kwh: 10 }));
+  ctx.state.optimizer = {
+    eosRun: { avgDurationS: 8.5, recentRuns: 8, lastDurationS: 8, secPerControlHour: 0.25, avgControlHours: 34 },
+    eosPriceTail: { used: true, lookahead: { pvUntil: new Date(now + 70 * 3_600_000).toISOString() } },
+  };
+  let body = JSON.parse((await dispatch(ctx, makeReq('/api/eos/plan', { token: null, ip: LAN_IP }))).body);
+  assert.equal(body.run.secPerControlHour, 0.25);
+  assert.ok(body.horizonHint, 'Hinweis am EOS-Fahrplan');
+  assert.ok(body.horizonHint.targetHours >= 69 && body.horizonHint.targetHours <= 70, String(body.horizonHint.targetHours));
+  assert.equal(body.horizonHint.limitedByPv, true);
+  assert.match(body.horizonHint.text, /geschätzt 1[78] s statt 8,5 s/);
+  body = JSON.parse((await dispatch(ctx, makeReq('/api/price/outlook', { token: null, ip: LAN_IP }))).body);
+  assert.equal(body.horizonHint.targetHours >= 69, true, 'auch für die Einstellungen');
+  assert.ok(Array.isArray(body.hours));
+  // Codex b1afb66c (P2): Lücke in der Prognose bei +60 h → Ziel endet davor, nicht bei 120 h.
+  ctx.state.optimizer.eosPriceTail = null;
+  outlook.hours = hours.filter((h) => h.ms !== hour0 + 60 * 3_600_000);
+  body = JSON.parse((await dispatch(ctx, makeReq('/api/eos/plan', { token: null, ip: LAN_IP }))).body);
+  assert.ok(body.horizonHint.targetHours >= 59 && body.horizonHint.targetHours <= 60, String(body.horizonHint.targetHours));
+  // Feste Preise reichen nicht über jetzt + 1 h 15 min: kein Schwanz, kein Hinweis.
+  ctx.state.epex.data = ctx.state.epex.data.slice(0, 2);
+  body = JSON.parse((await dispatch(ctx, makeReq('/api/eos/plan', { token: null, ip: LAN_IP }))).body);
+  assert.equal(body.horizonHint, null);
+  // Prognose aus: kein Hinweis.
+  ctx.getCfg().epex.priceOutlook = 'off';
+  body = JSON.parse((await dispatch(ctx, makeReq('/api/eos/plan', { token: null, ip: LAN_IP }))).body);
+  assert.equal(body.horizonHint, null);
+});
+
+// Bezugspreis-Prognose (Christin 19.11.2026): /api/price/outlook rechnet mit der
+// wirksamen Preis-Konfiguration und der Zeitzone wie EOS (optimizer.timezone).
+test('GET /api/price/outlook — Bezugspreis-Prognose je Viertelstunde aus der wirksamen Preis-Konfiguration', async () => {
+  const ctx = mockCtx();
+  Object.assign(ctx.getCfg().epex, { enabled: true, bzn: 'DE-LU', priceSource: 'dvhub' });
+  ctx.getCfg().optimizer.timezone = 'Europe/Berlin';
+  ctx.getCfg().userEnergyPricing = {
+    mode: 'dynamic',
+    dynamicComponents: { energyMarkupCtKwh: 2, gridChargesCtKwh: 10, leviesAndFeesCtKwh: 3, vatPct: 19 },
+  };
+  const now = Date.now();
+  const hour0 = now - (now % 3_600_000);
+  const realEnd = hour0 + 34 * 3_600_000;
+  const hours = Array.from({ length: 60 }, (_, i) => ({ ms: hour0 + i * 3_600_000, p10: 50, p50: 80, p90: 120, leadDays: 1 }));
+  const outlook = { issuedAt: new Date(now).toISOString(), issuedMs: now, biddingZone: 'DE-LU', hours };
+  ctx.priceOutlook = { current: () => ({ status: 'live', reason: null, outlook, issuedAt: outlook.issuedAt, fetchedAt: outlook.issuedAt, unavailableSince: null }) };
+  ctx.state.epex.data = Array.from({ length: 34 * 4 }, (_, i) => ({ ts: hour0 + i * 900_000, ct_kwh: 10 }));
+  const body = JSON.parse((await dispatch(ctx, makeReq('/api/price/outlook', { token: null, ip: LAN_IP }))).body);
+  assert.equal(body.hours[0].ts, realEnd);
+  assert.equal(body.importSlots.length, body.hours.length * 4);
+  assert.equal(body.importSlots[0].ts, realEnd);
+  assert.equal(body.importSlots[1].ts, realEnd + 900_000);
+  // (8 + 15) × 1,19 = 27,37; (5 + 15) × 1,19 = 23,8; (12 + 15) × 1,19 = 32,13
+  assert.deepEqual(body.importSlots[0], { ts: realEnd, p50: 27.37, p10: 23.8, p90: 32.13 });
 });
 
 // E-Auto-Frist (1.0.10): Der Plan reicht bis zur Abfahrt in geschätzte Preise —

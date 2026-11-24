@@ -172,3 +172,20 @@ test('Zeitraum „Vom Stromanbieter“: Bestandteile freiwillig, leere Felder fa
   assert.equal(result.valid, true, result.messages.join('; '));
   assert.equal(result.periods[0].dynamicComponents, undefined);
 });
+
+// Codex 0e8cff4c P2 (23.11.2026): die Grundgebühr eines Zeitraums ging beim
+// Speichern verloren, weil der Serializer den Zeitraum neu aufbaut.
+test('Zeitraum-Grundgebühr übersteht das Speichern; leer fällt weg', () => {
+  const [kept] = JSON.parse(JSON.stringify(serializePricingPeriods([{
+    id: 'p1', label: 'Stadtwerke', startDate: '2025-01-01', endDate: '2026-03-14', mode: 'fixed',
+    fixedGrossImportCtKwh: '30', baseFeeEurMonth: '11.5'
+  }])));
+  assert.equal(kept.baseFeeEurMonth, 11.5);
+  const [dyn] = serializePricingPeriods([{
+    id: 'p2', startDate: '2026-03-15', endDate: '2026-12-31', mode: 'dynamic',
+    dynamicComponents: { energyMarkupCtKwh: 1, gridChargesCtKwh: 10, leviesAndFeesCtKwh: 3, vatPct: 19 }, baseFeeEurMonth: 0
+  }]);
+  assert.equal(dyn.baseFeeEurMonth, 0);
+  const [empty] = serializePricingPeriods([{ id: 'p3', startDate: '2026-01-01', endDate: '2026-01-31', mode: 'fixed', fixedGrossImportCtKwh: 30, baseFeeEurMonth: '' }]);
+  assert.equal('baseFeeEurMonth' in empty, false);
+});

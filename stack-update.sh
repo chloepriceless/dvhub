@@ -76,7 +76,7 @@ fi
 NODE_CHANGED=0
 PG_CHANGED=0
 if command -v apt-get >/dev/null 2>&1 && command -v dpkg-query >/dev/null 2>&1; then
-  CANDIDATES="nodejs openvpn strongswan autossh openssh-client libjemalloc2 wireguard-tools"
+  CANDIDATES="nodejs openvpn strongswan autossh openssh-client openssh-server libjemalloc2 wireguard-tools"
   [[ -n "$PG_VER" ]] && CANDIDATES="$CANDIDATES postgresql-$PG_VER postgresql-client-$PG_VER"
   INSTALLED=""
   for p in $CANDIDATES; do

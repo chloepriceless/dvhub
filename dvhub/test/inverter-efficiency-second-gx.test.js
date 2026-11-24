@@ -54,7 +54,7 @@ async function runDay(windows) {
   const client = new pg.Client({ connectionString: URL });
   await client.connect();
   try {
-    await client.query('CREATE TEMP TABLE timeseries_samples (series_key text, scope text, ts_utc timestamptz, value_num double precision)');
+    await client.query('CREATE TEMP TABLE timeseries_samples (series_key text, scope text, ts_utc timestamptz, value_num double precision, meta_json text)');
     for (const w of windows) await seedWindow(client, w.start, w);
     const { rows } = await client.query(DAILY_EFFICIENCY_SQL, ['2026-10-20', 'Europe/Berlin', EFFICIENCY_SERIES_KEYS, 10000, EFFICIENCY_BIN_EDGES]);
     return rows;

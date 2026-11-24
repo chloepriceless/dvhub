@@ -255,6 +255,29 @@ test('createBundesnetzagenturApplicableValueService persists fetched reference d
   assert.deepEqual(persisted.applicableValueTiersByMonth['2023-09'][0], { upToKwp: 10, ctKwh: 8.2 });
 });
 
+test('getApplicableValueSummary: ein Jahr ohne Werte (Historie 2021) löst keinen Abruf aus — vorher bei jedem Aufruf alle BNetzA-Dateien', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-applicable-values-'));
+  const cachePath = path.join(tempDir, 'applicable-values.json');
+  fs.writeFileSync(cachePath, JSON.stringify({
+    source: 'bundesnetzagentur',
+    updatedAt: '2026-11-18T08:00:00.000Z',
+    publications: ['https://example.invalid/values.xlsx'],
+    applicableValueTiersByMonth: { '2024-02': [{ upToKwp: 10, ctKwh: 8.51 }] }
+  }));
+  let fetches = 0;
+  const service = createBundesnetzagenturApplicableValueService({
+    cachePath,
+    nowIso: () => '2026-11-19T12:00:00.000Z',
+    fetchReferenceData: async () => { fetches += 1; return { applicableValueTiersByMonth: { '2024-02': [{ upToKwp: 10, ctKwh: 8.51 }] } }; }
+  });
+  for (const year of [2021, 2020, 2019]) {
+    const summary = service.getApplicableValueSummary({ year, pvPlants: [{ kwp: 5, commissionedAt: '2024-02-01' }] });
+    assert.equal(summary.getApplicableValueCtKwh({ commissionedAt: '2024-02-01', kwp: 5 }), 8.51);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(fetches, 0);
+});
+
 // ── isRoundedFullFeedLabel ──────────────────────────────────────────────────
 
 test('isRoundedFullFeedLabel returns true for "Volleinspeisung ... gerundet"', () => {

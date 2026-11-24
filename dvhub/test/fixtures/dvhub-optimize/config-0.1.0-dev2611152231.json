@@ -1,0 +1,86 @@
+{
+ "_capture": {
+  "tool": "dvhub-optimize serve 0.1.0-dev2611152231 (aarch64-musl, sha256 e8fcf447b797)",
+  "captured": "2026-11-21",
+  "how": "GET /v1/config nach PUT devices/batteries {battery1}, devices/inverters {inverter1}, devices/electric_vehicles {ev11} (Kurztest A14)"
+ },
+ "general": {
+  "timezone_override": null
+ },
+ "optimization": {
+  "algorithm": "GENETIC",
+  "algorithms": [
+   "GENETIC",
+   "GENETIC0"
+  ],
+  "self_consumption_interpolator": "scipy",
+  "genetic": {
+   "interval_sec": 3600,
+   "horizon_hours": 24,
+   "individuals": 300,
+   "generations": 400,
+   "measurement_max_age_seconds": 300,
+   "tail_horizon_hours": 48,
+   "fitness_cache_max_entries": null
+  }
+ },
+ "devices": {
+  "max_batteries": null,
+  "max_inverters": null,
+  "max_electric_vehicles": null,
+  "max_home_appliances": null,
+  "batteries": {
+   "battery1": {
+    "device_id": "battery1",
+    "capacity_wh": 10000,
+    "charging_efficiency": null,
+    "discharging_efficiency": null,
+    "max_charge_power_w": null,
+    "min_soc_percentage": 0,
+    "max_soc_percentage": 100,
+    "charge_start_datetime": null
+   }
+  },
+  "inverters": {
+   "inverter1": {
+    "device_id": "inverter1",
+    "max_power_w": 5000,
+    "battery_id": "battery1",
+    "ac_to_dc_efficiency": 1.0,
+    "dc_to_ac_efficiency": 1.0,
+    "dc_to_ac_efficiency_curve": null,
+    "dc_to_ac_efficiency_reference_load_fraction": 1.0,
+    "max_ac_charge_power_w": null,
+    "max_grid_import_power_w": null
+   }
+  },
+  "electric_vehicles": {
+   "ev11": {
+    "device_id": "ev11",
+    "capacity_wh": 50000,
+    "min_soc_percentage": 0,
+    "max_soc_percentage": 100,
+    "min_soc_deadline_datetime": null,
+    "charge_start_datetime": null
+   }
+  },
+  "home_appliances": {}
+ },
+ "ems": {
+  "mode": null,
+  "interval": null
+ },
+ "pvforecast": {
+  "provider": null
+ },
+ "load": {
+  "provider": null
+ },
+ "elecprice": {
+  "provider": null
+ },
+ "feedintariff": {
+  "provider": null,
+  "direct_marketing_enabled": false
+ }
+}

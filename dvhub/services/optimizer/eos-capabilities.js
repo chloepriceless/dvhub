@@ -15,6 +15,10 @@
 //
 // Erkannt wird aus der Konfiguration selbst (GET /v1/config), nicht aus der
 // Versionsnummer — die ist bei Entwicklungsständen nicht aussagekräftig.
+// Auch nicht aus der Betriebsart (optimizer.eosProxy.mode): Python-DVhub-EOS
+// und der native Dienst dvhub-optimize (local-native) sprechen dieselbe
+// Schnittstelle; was der laufende Kern meldet, schickt DVhub (A14, 21.11.2026:
+// dvhub-optimize ab 0.2.0 meldet D und E, 0.1.x meldete sie nicht).
 // Die Fassungsnamen bleiben als Bezeichnung für Log und Status erhalten.
 
 export const EOS_FLAVOR = Object.freeze({
@@ -35,10 +39,10 @@ export const EOS_EV_CHARGE_START_FIELD = 'charge_start_datetime';
 
 // Wert der Energie über dem Mindestziel am Fahrzeug, Stufen
 // [[soc_percentage, amount_per_kwh], …] (EOS-Erweiterung „Max-Ladestand wenn
-// günstig“, Prototyp feat/ev-min-max-value; Upstream-PR offen). Vanilla
-// v0.4.0rc3 kennt das Feld nicht — dann bleibt es beim Mindestziel
-// (ev-targets.js). Der Name steht NUR hier: ändert er sich im Upstream-PR,
-// genügt diese eine Zeile.
+// günstig“, unser E, Upstream-PR #1532). DVhub-EOS und dvhub-optimize ab 0.2.0
+// kennen es; Vanilla v0.4.0rc3 und dvhub-optimize 0.1.x nicht — dann bleibt es
+// beim Mindestziel (ev-targets.js). Der Name steht NUR hier: ändert er sich im
+// Upstream-PR, genügt diese eine Zeile.
 export const EOS_EV_SOC_VALUE_FIELD = 'soc_value_steps';
 
 /**
@@ -71,8 +75,9 @@ export function validSocValueSteps(steps, { capacityWh = 50000 } = {}) {
 // aus DVhub (services/grid-connection). Gibt es nur in unserem EOS.
 export const EOS_GRID_IMPORT_LIMIT_FIELD = 'max_grid_import_power_w';
 
-// Schwellen-Peak-Shaving (unser EOS, PR D auf der Netzbezugs-Grenze; nicht in
-// Vanilla v0.4.0rc3): optionales Feld an JEDER Akku-Instruktion des Plans
+// Schwellen-Peak-Shaving (unser EOS, PR D #1531 auf der Netzbezugs-Grenze, auch
+// dvhub-optimize ab 0.2.0; nicht in Vanilla v0.4.0rc3 und dvhub-optimize 0.1.x):
+// optionales Feld an JEDER Akku-Instruktion des Plans
 // (GET /v1/energy-management/plan, FRBCInstruction). W, null = aus. In Slots,
 // in denen der Plan den Akku hält, deckt der Akku den Netzbezug über der
 // Schwelle trotzdem. EOS schreibt dort `max_grid_import_power_w` hinein.

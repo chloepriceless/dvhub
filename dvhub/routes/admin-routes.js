@@ -70,8 +70,8 @@ export const RELEASE_HELPER = '/usr/local/libexec/dvhub-release';
 const RELEASE_VERSION = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 // Bleeding Edge für Paket-Boxen (Christin, 05.11.2026; 1.0.9 ließ nur stable
 // zu): erlaubt, sobald ein signierter dev-Index erreichbar ist
-// (channels/index-dev.json + .sig, Namensraum dvhub-release-index — der Helfer
-// lädt und prüft beides bei `check dev`). Gibt es keinen, lehnt der
+// (seit dem dev-Schlüssel channels/index-dev-v2.json + .sig, Namensraum
+// dvhub-release-index-dev — der Helfer lädt und prüft beides bei `check dev`). Gibt es keinen, lehnt der
 // Kanalwechsel mit dieser Meldung ab, und eine Box mit dev in der Config
 // (Altbestand, Import) prüft und installiert wie in 1.0.9 stable.
 export const PACKAGE_DEV_NOTICE = 'Für Paket-Installationen ist derzeit kein Bleeding-Edge-Paket veröffentlicht. Die Box bleibt auf Stabil.';
@@ -146,6 +146,9 @@ export function createAdminRoutes(deps) {
     if (onStarted) {
       try { more = onStarted(out) || {}; } catch (e) { more = { warning: String(e?.message || e) }; pushLog(`${event}_after_start_error`, { error: more.warning }); }
     }
+    // Task G4 (Support-Tunnel): Zeitstempel des Update-Starts, damit der Support-Tunnel während eines laufenden
+    // Updates nicht automatisch schließt (der Support arbeitet womöglich gerade daran).
+    try { ctx.lastUpdateStartedAt = Date.now(); } catch { /* best effort */ }
     pushLog(event, { args: args.join(' '), ...extra });
     return json(res, 200, { ok: true, mode: 'package', job: args[0], started: out.started !== false, ...extra, ...more,
       message: 'Auftrag gestartet — Fortschritt unter /api/admin/update/status' });
@@ -206,7 +209,7 @@ export function createAdminRoutes(deps) {
   };
 
   // ── Kanal einer Paket-Box ──
-  // Ist ein signierter dev-Index erreichbar? Der Helfer lädt index-dev.json
+  // Ist ein signierter dev-Index erreichbar? Der Helfer lädt index-dev-v2.json
   // samt .sig und prüft Signatur und Inhalt; ohne verwertbare Version gilt er
   // als nicht veröffentlicht. target: 'latest' oder eine gezielte Version —
   // für die muss es ein Paket dieser Architektur geben (Codex 19fd8ea5, P2).
@@ -839,11 +842,28 @@ export function createAdminRoutes(deps) {
         // Dieselbe Rückschritt-Sperre wie beim Kanalwechsel (Gegenprüfung 1d4ca47d,
         // P2): nach Kanalwechsel + Rückweg meldet check sonst ein „Update“, das
         // zurückstuft.
+        // Versions-Check einmal holen (dev liefert ihn via resolvePackageChannel,
+        // stable nicht → dort nachfragen). Dient Rückschritt- UND noop-Prüfung.
+        let apChk = chk;
+        if (!apChk) {
+          try { apChk = await releaseHelper(['check', channel], 60000); } catch (e) { return releaseError(res, e, 'update_apply_check_error'); }
+        }
         let blocked;
-        try { blocked = await packageDowngrade(channel, target, body?.allowDowngrade === true, chk); } catch (e) { return releaseError(res, e, 'update_apply_check_error'); }
+        try { blocked = await packageDowngrade(channel, target, body?.allowDowngrade === true, apChk); } catch (e) { return releaseError(res, e, 'update_apply_check_error'); }
         if (blocked) {
           pushLog('update_apply_rejected', { reason: 'downgrade_blocked', current: blocked.current, requested: blocked.target, mode: 'package' });
           return json(res, 400, blocked);
+        }
+        // Schon auf der Zielversion? Dann KEINEN Job starten — der Helfer täte
+        // nichts, der Job endete nach ~1 s und die GUI zeigte nichts Klares
+        // (Tester-Fund 1.0.10). Stattdessen eine eigene, klare noop-Antwort.
+        // packageDowngrade lässt gleiche Versionen durch (dort kein Rückschritt),
+        // darum hier gesondert prüfen.
+        const curVer = apChk?.current?.version || null;
+        const toVer = target === 'latest' ? (apChk?.latest?.version || null) : target;
+        if (curVer && toVer && curVer === toVer) {
+          pushLog('update_apply_noop', { current: curVer, target: toVer, channel });
+          return json(res, 200, { ok: true, mode: 'package', noop: true, current: curVer, target: toVer, message: 'Bereits auf der neuesten Version' });
         }
         return startReleaseJob(res, ['install', target, channel], 'update_package_started', { channel, target, ...(notice ? { notice } : {}) });
       }

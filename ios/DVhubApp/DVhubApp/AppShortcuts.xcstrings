@@ -1,0 +1,200 @@
+{
+  "sourceLanguage" : "de",
+  "strings" : {
+    "Not-Halt mit ${applicationName} aufheben" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Not-Halt mit ${applicationName} aufheben",
+              "${applicationName} Not-Halt aufheben"
+            ]
+          }
+        },
+        "en" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Release emergency stop with ${applicationName}",
+              "${applicationName} release emergency stop"
+            ]
+          }
+        }
+      }
+    },
+    "Not-Halt mit ${applicationName} auslösen" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Not-Halt mit ${applicationName} auslösen",
+              "${applicationName} Not-Halt auslösen"
+            ]
+          }
+        },
+        "en" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Trigger emergency stop with ${applicationName}",
+              "${applicationName} trigger emergency stop"
+            ]
+          }
+        }
+      }
+    },
+    "Speist ${applicationName} gerade ein?" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Speist ${applicationName} gerade ein?",
+              "${applicationName} Netz",
+              "Wie viel Strom beziehe ich laut ${applicationName}?"
+            ]
+          }
+        },
+        "en" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Is ${applicationName} feeding in right now?",
+              "${applicationName} grid",
+              "How much power am I drawing according to ${applicationName}?"
+            ]
+          }
+        }
+      }
+    },
+    "Was hat ${applicationName} heute verdient?" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Was hat ${applicationName} heute verdient?",
+              "${applicationName} Tagesverdienst",
+              "Tagesverdienst mit ${applicationName}"
+            ]
+          }
+        },
+        "en" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "What did ${applicationName} earn today?",
+              "${applicationName} earnings today",
+              "Today's earnings with ${applicationName}"
+            ]
+          }
+        }
+      }
+    },
+    "Wie läuft ${applicationName}?" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Wie läuft ${applicationName}?",
+              "${applicationName} Überblick",
+              "Überblick mit ${applicationName}"
+            ]
+          }
+        },
+        "en" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "How is ${applicationName} doing?",
+              "${applicationName} overview",
+              "Overview with ${applicationName}"
+            ]
+          }
+        }
+      }
+    },
+    "Wie viel erzeugt ${applicationName}?" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Wie viel erzeugt ${applicationName}?",
+              "${applicationName} Erzeugung",
+              "Was macht die Sonne in ${applicationName}?"
+            ]
+          }
+        },
+        "en" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "How much is ${applicationName} producing?",
+              "${applicationName} production",
+              "How is the sun doing in ${applicationName}?"
+            ]
+          }
+        }
+      }
+    },
+    "Wie viel verbraucht das Haus laut ${applicationName}?" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Wie viel verbraucht das Haus laut ${applicationName}?",
+              "${applicationName} Verbrauch"
+            ]
+          }
+        },
+        "en" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "How much is the house using according to ${applicationName}?",
+              "${applicationName} consumption"
+            ]
+          }
+        }
+      }
+    },
+    "Wie voll ist der Akku in ${applicationName}?" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Wie voll ist der Akku in ${applicationName}?",
+              "${applicationName} Akkustand",
+              "Akkustand mit ${applicationName}"
+            ]
+          }
+        },
+        "en" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "How full is the battery in ${applicationName}?",
+              "${applicationName} battery level",
+              "Battery level with ${applicationName}"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

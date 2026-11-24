@@ -754,7 +754,8 @@ export function createMobileLink(ctx = {}, deps = {}) {
         inflightByDev.set(dev.id, (inflightByDev.get(dev.id) || 0) + 1);
         loopback(method, chk.path + chk.search, bodyText, { devId: dev.id })
           .then((r) => {
-            if (method === 'POST') pushLog('mobile_link_control', { dev: dev.id, name: dev.name, path: chk.path, status: r.status });
+            // Jede Schaltung (POST, DELETE) steht mit dem Handy im Protokoll.
+            if (method !== 'GET') pushLog('mobile_link_control', { dev: dev.id, name: dev.name, method, path: chk.path, status: r.status });
             const size = typeof r.body === 'string' ? r.body.length : JSON.stringify(r.body ?? null).length;
             if (size > MAX_RESPONSE_CHARS) return reply(413, { error: 'response_too_large' });
             reply(r.status, r.body);

@@ -72,45 +72,91 @@
   .topbar-nav a.is-active::after { display:none; }
 }
 
-/* ─── 3-col leit-grid ─── */
+/* ─── leit-grid: schmale Seitenspalten (300/320 px) + breite Mitte ───
+   M5b (Feld 16.11.): Spalten 300px/1fr/320px (Mitte breit). Der Energiefluss hat eine FESTE Höhe
+   (clamp, wächst NICHT mit den Spalten); die Wechselrichter-Kachel (zwei Sungrow-WR) stapelt sich in der
+   MITTELSPALTE direkt UNTER dem Energiefluss (keine eigene volle Reihe — die ließe neben den Seitenspalten
+   Leerraum). Die Seitenspalten spannen beide Zeilen (align-self:start), damit ihre Kacheln die Höhe neben
+   Energiefluss UND WR-Kachel füllen. Danach der Börsenchart über die volle Breite. */
 .leit-grid {
   display:grid;
   gap:var(--gap-3);
   grid-template-columns:300px 1fr 320px;
-  /* Boersenchart unter linker Spalte + Energiefluss, rechte Spalte ueber beide
-     Zeilen: so bestimmt die linke Spalte die Hoehe des Energieflusses, nicht
-     die (mit der E-Auto-Kachel hoehere) rechte. */
   grid-template-areas:
     "left pf   right"
-    "epex epex right";
-  grid-template-rows:auto 1fr;
+    "left wr   right"
+    "epex epex epex";
+  /* M5c (Feld 16.11.): Zeile 2 = 1fr fängt die ÜBERSCHÜSSIGE Höhe der (über beide Zeilen spannenden) Seitenspalten
+     auf — sonst verteilt der Browser sie auf Zeile 1 und drückt die WR-Kachel mit ~300 px Lücke unter den
+     Energiefluss. Die WR-Kachel bleibt oben (align-self:start), also direkt unter dem Energiefluss. */
+  grid-template-rows:auto 1fr auto;
+  align-items:start;
 }
-.leit-grid > .rail:first-child { grid-area:left; }
-.leit-grid > .pf-shell { grid-area:pf; }
-.leit-grid > .rail:last-of-type { grid-area:right; }
+.leit-grid > .rail:first-child { grid-area:left; align-self:start; }
+.leit-grid > .pf-shell { grid-area:pf; align-self:start; }
+.leit-grid > .rail:last-of-type { grid-area:right; align-self:start; }
+.leit-grid > .leit-wr { grid-area:wr; align-self:start; margin:0; }
 .leit-grid > .leit-epex { grid-area:epex; margin-top:0; align-self:start; }
+/* Energiefluss: feste Höhe (≈ Bildschirmhöhe − Kopf). Darf NICHT mit den Spalten
+   wachsen; so bleibt der Chart darunter im sichtbaren Bereich (Ziel ≤ ~1000 px). */
+.leit-grid > .pf-shell { height:clamp(560px, 72vh, 780px); }
+.leit-grid > .pf-shell .dvhub-powerflow { height:100%; }
 @media (max-width:1280px) {
-  .leit-grid { grid-template-columns:1fr; grid-template-areas:none; grid-template-rows:none; }
-  .leit-grid > .rail:first-child, .leit-grid > .pf-shell, .leit-grid > .rail:last-of-type, .leit-grid > .leit-epex { grid-area:auto; }
+  .leit-grid { grid-template-columns:1fr; grid-template-areas:none; grid-template-rows:none; align-items:stretch; }
+  .leit-grid > .rail:first-child, .leit-grid > .pf-shell, .leit-grid > .rail:last-of-type, .leit-grid > .leit-wr, .leit-grid > .leit-epex { grid-area:auto; }
   /* Mobile / narrow: Powerflow is the most actionable info — surface it
      first so the user doesn't have to scroll past the rails on a phone. */
-  .leit-grid > .pf-shell { order:-1; }
+  .leit-grid > .pf-shell { order:-1; height:auto; }
 }
 
 .rail { display:flex; flex-direction:column; gap:10px; }
 
+/* M9: Akku-Kachel Sungrow — gemeldeter SoC klein unter dem großen echten; Skala-Marken; je-WR-Zeilen (gekürzt). */
+.soc-reported { font-size:12px; color:var(--text-2); margin:-2px 0 4px; }
+.soc-marks { font-size:11px; color:var(--text-2); margin:2px 0 2px; }
+.sungrow-bat-wr .v { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
+
+/* M5b: Wechselrichter-Kachel kompakt in der Mittelspalte — zwei Spalten Master | Slave (keine eigene
+   Summe-Spalte; Summe einzeilig im Kopf). Lange Werte werden gekürzt (Ellipsis), nicht umgebrochen. */
+.leit-wr .wr-cols { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:var(--gap-3); align-items:start; }
+.leit-wr .wr-col { display:flex; flex-direction:column; gap:4px; min-width:0; }
+/* Kopf: Titel · Modus · Freigeben-Knopf; Summe darunter einzeilig. */
+.leit-wr .rail-card-head { flex-wrap:wrap; gap:6px 10px; align-items:baseline; }
+.leit-wr .wr-head-mode { font-family:var(--f-mono); font-size:11px; color:var(--text-2); }
+.leit-wr .wr-head-spacer { flex:1 1 auto; }
+.leit-wr .wr-sum { font-size:12px; color:var(--text-2); margin:0 0 6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+/* Kompakte Zeilen wie andere Kacheln; lange Werte kürzen statt umbrechen. */
+.leit-wr .wr-line, .leit-wr .rail-row { min-height:0; }
+.leit-wr .wr-line .wr-v, .leit-wr .rail-row .v { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
+.leit-wr .wr-grid-3 .v { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+@media (max-width:900px) { .leit-wr .wr-cols { grid-template-columns:1fr; } }
+
 /* ─── Rail cards ─── */
 .rail-card { padding:14px; display:flex; flex-direction:column; gap:6px; }
+/* M19 (Feld 19.11.2026): bei 300 px Kachelbreite schob der einzeilige Titel
+   „Netzanschluss · Bezugsgrenze“ (nowrap, min-width:auto) das Badge „Bereit“ 23 px
+   über den Rand, „Peak Shaving · Bezugsgrenze“ ebenso. Jetzt darf der Titel
+   schrumpfen und umbrechen; das Badge schrumpft nie und bleibt in der Kachel. */
 .rail-card-head {
   display:flex; align-items:center; justify-content:space-between;
+  gap:8px;
   margin-bottom:4px;
 }
 .rail-card-head .ttl {
   font-family:var(--f-mono); font-size:10.5px; letter-spacing:.18em;
   text-transform:uppercase; color:var(--text-2);
   display:inline-flex; align-items:center; gap:8px;
+  min-width:0;
+  white-space:normal;
 }
-.rail-card-head .ttl .dot { width:6px; height:6px; border-radius:50%; box-shadow:0 0 6px currentColor; }
+.rail-card-head > .chip { flex:0 0 auto; white-space:nowrap; }
+/* Kann-3: Untertitel der Akku-Kachel (z. B. „Master + Slave") — klein, gedämpft, unter dem Kopf. */
+.rail-card-sub {
+  font-family:var(--f-mono); font-size:10px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--text-2); opacity:.8;
+  margin:-2px 0 6px 14px;
+}
+.rail-card-head .ttl .dot { flex:0 0 auto; width:6px; height:6px; border-radius:50%; box-shadow:0 0 6px currentColor; }
 .rail-card-head .dot-pv { background:var(--yellow); color:var(--yellow); }
 .rail-card-head .dot-bat { background:var(--green); color:var(--green); }
 .rail-card-head .dot-dv { background:var(--cyan); color:var(--cyan); }
@@ -147,6 +193,34 @@
   font-size:11.5px;
 }
 .rail-row:last-child { border-bottom:0; }
+/* F1a Wechselrichter-Kachel (zwei Sungrow-WR): SoC|Akku|PV je Gruppe (Master/Slave/Summe) UNTER dem Label in
+   einem festen 3-Spalten-Grid; Befehl und Grenzen darunter als ganze Zeile (Label links, Wert rechts). Werte
+   dürfen umbrechen, aber NIE mit „…" abschneiden (Feld 15.11., Handy ~375 px). Dezimalkomma kommt aus der View. */
+.wr-mode { font-family:var(--f-mono); font-size:11px; color:var(--text-dim); padding:0 0 5px; }
+.wr-role { border-bottom:0; padding:5px 0 0; }
+/* Hinweis-Abzeichen je WR (Notladung / Slave-Anteil am Master). */
+.wr-badges { font-family:var(--f-mono); font-size:10px; letter-spacing:.04em; color:var(--warn, #e0a33e); padding:2px 0 3px; overflow-wrap:anywhere; }
+.wr-grid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:4px 10px; padding:4px 0 6px; border-bottom:1px solid var(--hairline); }
+.wr-grid.wr-grid-3 { grid-template-columns:repeat(3, minmax(0,1fr)); }
+.wr-grid .wr-cell { display:flex; flex-direction:column; min-width:0; }
+.wr-grid .wr-cell .cap {
+  font-family:var(--f-mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-dim);
+}
+.wr-grid .wr-cell .v {
+  font-family:var(--f-mono); font-variant-numeric:tabular-nums; color:var(--text); font-weight:500;
+  font-size:11.5px; white-space:normal; overflow-wrap:anywhere; word-break:break-word;
+}
+/* Befehl/Grenzen/Countdown: ganze Zeile, Label links, Wert rechts — der Wert darf umbrechen, nie kürzen. */
+.wr-line { display:flex; justify-content:space-between; align-items:baseline; gap:10px; padding:3px 0; border-bottom:1px solid var(--hairline); }
+.wr-line .wr-l {
+  font-family:var(--f-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-dim);
+  flex:0 0 auto; white-space:nowrap;
+}
+.wr-line .wr-v {
+  font-family:var(--f-mono); font-variant-numeric:tabular-nums; color:var(--text); font-weight:500; font-size:11.5px;
+  text-align:right; white-space:normal; overflow-wrap:anywhere; word-break:break-word; min-width:0;
+}
+.wr-status { font-family:var(--f-mono); font-size:11px; color:var(--text-dim); padding:4px 0 6px; border-bottom:1px solid var(--hairline); }
 .rail-row .l {
   font-family:var(--f-mono); font-size:10.5px; letter-spacing:.1em;
   text-transform:uppercase; color:var(--text-dim);
@@ -403,6 +477,9 @@
 .eos-plan-summary-day strong { font-size:11px; color:var(--text); font-weight:600; }
 .eos-plan-summary-day span { font-family:var(--f-mono); font-size:11px; color:var(--text-dim); overflow-wrap:anywhere; }
 .eos-plan-summary-day .eos-plan-summary-peak { color:var(--yellow); }
+/* M17: Terminal-Wert — womit EOS die Rest-Ladung am Planende bewertet. */
+.eos-plan-summary-terminal { font-family:var(--f-mono); font-size:11px; color:var(--text); overflow-wrap:anywhere; }
+.eos-plan-summary-terminal[title]:not([title='']) { cursor:help; }
 .eos-plan-summary [hidden] { display:none; }
 
 /* ─── Schedule editor ─── */
@@ -950,6 +1027,10 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
 }
 /* Hinweis bei langen EOS-Läufen (leitstand-charts.js renderEosRunHint) */
 .eos-plan-hint { margin:6px 0 0; font-family:var(--f-mono); font-size:10px; color:var(--warn); }
+.eos-price-tail { margin:4px 0 0; font-family:var(--f-mono); font-size:10px; color:var(--text-2); }
+.eos-price-tail.is-warn { color:var(--warn); }
+.eos-horizon-hint { margin:2px 0 0; font-family:var(--f-mono); font-size:10px; color:var(--text-3); }
+.eos-horizon-hint.is-warn { color:var(--warn); }
 /* EOS-Rechendienst (Fernbetrieb) unter dem EOS-Fahrplan */
 .eos-remote-info {
   margin-top:8px; padding-top:6px; border-top:1px solid var(--hairline);
@@ -1202,6 +1283,11 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
   border-bottom:1px solid #f59e0b;
   box-shadow:0 2px 8px rgba(0,0,0,.4);
 }
+/* Aufgabe 10: vor Ablauf warnen — ≤ 5 min Restzeit, deutlicher roter Banner. */
+.support-tunnel-banner.support-tunnel-banner-soon {
+  background:linear-gradient(90deg, #7f1d1d, #b91c1c);
+  border-bottom-color:#ef4444;
+}
 
 /* T-0099 NOT-HALT — button in the Steuerung card + sticky banner while active
    (rendered by app.js renderEmergencyStop from /api/status.emergencyStop) */
@@ -1282,6 +1368,11 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
 .fp-peak { font-size:13px; font-weight:700; color:var(--yellow); }
 .fp-energy { font-size:13px; font-weight:700; color:var(--cyan); }
 .fp-age  { font-size:11px; color:var(--text-dim); min-width:78px; text-align:right; }
+/* Stand je Dienst (19.11.2026): „im Ensemble · Gewicht 31 %“ bzw. warum nicht — zweite Zeile unter dem Namen. */
+.fp-note { display:block; font-size:11px; font-weight:400; color:var(--text-dim); line-height:1.3; margin-top:1px; }
+.fp-row.is-out .fp-name { color:var(--text-dim); }
+.fp-row.is-out .fp-peak,
+.fp-row.is-out .fp-energy { color:var(--text-dim); font-weight:600; }
 /* Spalten-Kopf (Provider · Tages-Peak · Energie · aktualisiert) — klein/dimm/uppercase. */
 .fp-row.fp-head { padding-top:0; padding-bottom:4px; }
 .fp-row.fp-head .fp-name,

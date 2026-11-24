@@ -50,7 +50,19 @@ const VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const CHANNELS = ['stable', 'dev'];
 const NS_PACKAGE = 'dvhub-release';
 const NS_INDEX = 'dvhub-release-index';
+// Eigene Namensräume für den dev-Schlüssel (Christin 24.11.2026: dev-Pakete
+// signiert der Mac-Worker mit einem eigenen Schlüssel ohne 1Password). In
+// release-keys/allowed_signers steht der dev-Schlüssel nur mit diesen beiden
+// Namensräumen; ssh-keygen lehnt ihn damit für dvhub-release/-index ab, und
+// stable prüft ausschließlich die alten — ein dev-Schlüssel kann nie ein
+// stable-Paket oder einen stable-Index signieren.
+const NS_PACKAGE_DEV = 'dvhub-release-dev';
+const NS_INDEX_DEV = 'dvhub-release-index-dev';
 const PRINCIPAL = 'dvhub-release';
+// dev nimmt zuerst die dev-Namensräume, dann — Übergang und Rückweg — die alten
+// (die nur der Release-Schlüssel hat). Alles andere: nur die alten.
+const packageNamespaces = (channel) => (channel === 'dev' ? [NS_PACKAGE_DEV, NS_PACKAGE] : [NS_PACKAGE]);
+const indexNamespaces = (channel) => (channel === 'dev' ? [NS_INDEX_DEV, NS_INDEX] : [NS_INDEX]);
 const MANIFEST = '.dvhub-release.json';
 // Entpackt ~90 MB je Release (node_modules, EEBUS-Binary). Vorgabe: aktuelles
 // und voriges (Rückweg ohne Download); release.conf keep_releases=2…5.
@@ -354,13 +366,20 @@ function trustedKeyCount(file) {
   return text.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#') && /\bssh-ed25519\b|\bssh-rsa\b|\becdsa-sha2-/.test(l)).length;
 }
 
-function verifySignature(s, file, sigFile, namespace) {
+// namespaces: einer oder eine Liste; gültig, wenn die Signatur in EINEM davon
+// passt (ssh-keygen prüft je Namensraum auch die namespaces= der Schlüsselzeile).
+function verifySignature(s, file, sigFile, namespaces) {
   if (!trustedKeyCount(s.allowedSigners)) throw new Exit(3, `kein Release-Schlüssel in ${s.allowedSigners} — Pakete werden nicht angenommen`);
-  const fd = fs.openSync(file, 'r');
-  try {
-    const r = run(s.sshKeygen, ['-Y', 'verify', '-f', s.allowedSigners, '-I', PRINCIPAL, '-n', namespace, '-s', sigFile], { stdio: [fd, 'pipe', 'pipe'], timeout: 120000 });
-    if (r.status !== 0) throw new Error(`Signatur ungültig (${path.basename(file)}): ${(r.stderr || r.stdout || '').trim().split('\n').pop()}`);
-  } finally { fs.closeSync(fd); }
+  let last = '';
+  for (const namespace of [].concat(namespaces)) {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const r = run(s.sshKeygen, ['-Y', 'verify', '-f', s.allowedSigners, '-I', PRINCIPAL, '-n', namespace, '-s', sigFile], { stdio: [fd, 'pipe', 'pipe'], timeout: 120000 });
+      if (r.status === 0) return namespace;
+      last = (r.stderr || r.stdout || '').trim().split('\n').pop();
+    } finally { fs.closeSync(fd); }
+  }
+  throw new Error(`Signatur ungültig (${path.basename(file)}): ${last}`);
 }
 
 // ── Download ────────────────────────────────────────────────────────────────
@@ -412,8 +431,13 @@ async function download(url, dest, { maxBytes, expectSize = null, job = null, at
 
 // ── Index ───────────────────────────────────────────────────────────────────
 
+// dev liest seit dem dev-Schlüssel (24.11.2026) index-dev-v2.json: die alte
+// index-dev.json ist eingefroren und zeigt für Boxen mit älterem Helfer nur
+// noch auf das Brücken-Paket (mit dem Release-Schlüssel signiert, bringt
+// diesen Helfer mit). stable bleibt index-stable.json.
+const INDEX_FILE = { stable: 'index-stable.json', dev: 'index-dev-v2.json' };
 function indexUrl(s, channel) {
-  return `${s.baseUrl}/channels/index-${channel}.json`;
+  return `${s.baseUrl}/channels/${INDEX_FILE[channel] || `index-${channel}.json`}`;
 }
 
 function stagingDir(s) {
@@ -447,7 +471,7 @@ async function fetchIndex(s, channel) {
   try {
     await download(url, file, { maxBytes: MAX_INDEX_BYTES, attempts: 2 });
     await download(`${url}.sig`, sig, { maxBytes: 64 * 1024, attempts: 2 });
-    verifySignature(s, file, sig, NS_INDEX);
+    verifySignature(s, file, sig, indexNamespaces(channel));
     const idx = validateIndex(readJson(file), channel);
     return { idx, url };
   } finally {
@@ -586,7 +610,7 @@ async function fetchAndUnpack(s, job, { channel, version, index = null }) {
       fs.rmSync(file, { force: true });
       throw new Error('Prüfsumme des Pakets stimmt nicht');
     }
-    verifySignature(s, file, sig, NS_PACKAGE);
+    verifySignature(s, file, sig, packageNamespaces(channel));
     job.phase('unpack', `nach releases/${rel.version} entpacken`);
     const manifest = unpack(s, file, rel.version, { channel, job });
     return { manifest, release: rel };
@@ -1481,6 +1505,7 @@ module.exports = {
   parseArgs, compareVersions, parseVersion, satisfiesEngine, versionFromLabel, debArch, readConf, settings,
   validateIndex, verifyTree, symlinkEscapes, reconcileLinks, dropinContent, switchCurrent, currentVersion, rewriteUnit, migrationCheck,
   OFFICIAL_REPO_RE, VERSION_RE, main, Exit, trustedKeyCount, verifySignature, download, unpack, readStatus, actionCheck,
+  packageNamespaces, indexNamespaces, INDEX_FILE,
 };
 
 if (require.main === module) {

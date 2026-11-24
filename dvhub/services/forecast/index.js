@@ -23,6 +23,7 @@ import { createVrmForecast } from './vrm-forecast.js';
 import { createOpenMeteoSolar } from './open-meteo-solar.js';
 import { createPvnodeClient } from './pvnode-client.js';
 import { createPvForecast } from './pv-forecast.js';
+import { planPvProviders } from './pv-provider-setup.js';
 import { createLoadForecast } from './load-forecast.js';
 import { createAccuracyTracker } from './accuracy-tracker.js';
 import { createPythonBridge, pythonEnvStatus, readProvisionStatus } from '../python-bridge/index.js';
@@ -373,10 +374,14 @@ export function createForecastService(ctx) {
         // the Ist line (past) and the Prognose lines (future) are time-disjoint
         // and the user sees no real overlap.
         try {
-          const historicRows = await store.getLatestPvForecast({
+          // N2 (Feld 19.11.): Der Prognose-Speicher bekommt seinen Pool erst in forecast.start() (ensureSchema,
+          // server.js nach telemetryReady). ctx.telemetryStore steht da schon — eine Anfrage in diesem Fenster
+          // las sonst über den leeren Pool („Cannot read properties of null (reading 'query')"). Bis dahin die
+          // historische Prognose auslassen (pastForecast leer wie im Fehlerfall); die nächste Anfrage liefert sie.
+          const historicRows = store.isReady() ? await store.getLatestPvForecast({
             start: start.toISOString(),
             end: end.toISOString()
-          });
+          }) : null;
           if (Array.isArray(historicRows)) {
             // ONE consistent model for the whole line — no per-timestamp mixing.
             // History: the 2026-05-22 fix ("non-zero rows always win, tie-break
@@ -531,6 +536,9 @@ export function createForecastService(ctx) {
     // T-CURTAIL: manual trigger + diagnostics for the observed-GHI backfill.
     runGhiBackfill: runOpportunisticGhiBackfill,
     buildForecastResponse,
+    // Christin 19.11.2026: welche PV-Prognosedienste eingerichtet sind und abgerufen werden —
+    // dieselbe Regel wie im Prognose-Lauf, für die Anzeige (inspector.js getPvProviders).
+    pvProviderPlan: () => planPvProviders(getCfg(), { pvlibAvailable: Boolean(pythonBridge) }),
     loadForecast,
     get forecastVersion() { return forecastVersion; }
   };

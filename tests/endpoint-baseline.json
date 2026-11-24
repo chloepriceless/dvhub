@@ -45,6 +45,7 @@
     "/api/history/summary?view=",
     "/api/history/summary?view=day&date=",
     "/api/history/summary?view=year&date=",
+    "/api/history/tariff-scatter?view=",
     "/api/history/viz/autarky-calendar",
     "/api/history/viz/cal-year",
     "/api/history/viz/cycles",

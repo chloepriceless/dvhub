@@ -1,0 +1,15 @@
+# scripts/ci/kleine-platte/compose.plainpg.yml — Szenario „reines PostgreSQL“:
+# Ersteinrichtung ohne TimescaleDB (wie eine native Box, deren
+# timescale-provision.sh gescheitert ist). DVhub läuft mit timescaledb=false.
+configs:
+  dvhub-db-init:
+    content: |
+      #!/bin/sh
+      set -eu
+      psql -v ON_ERROR_STOP=1 --username postgres --dbname postgres -v pw="$$DVHUB_DB_PASSWORD" <<'SQL'
+      SELECT format('CREATE ROLE dvhub LOGIN PASSWORD %L', :'pw')
+      WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dvhub') \gexec
+      SELECT 'CREATE DATABASE dvhub OWNER dvhub'
+      WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'dvhub') \gexec
+      SQL
+      echo "[db-init] Rolle dvhub und DB dvhub angelegt (ohne TimescaleDB)"

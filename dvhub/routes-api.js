@@ -23,16 +23,18 @@ import { parseBody, fmtTs, resolveLogLimit, s16, roundCtKwh, gridDirection, MAX_
 import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, configuredModule3Windows } from './user-energy-pricing.js';
 import { isSmallMarketAutomationRule, VICTRON_MIN_SOC_FALLBACK_PCT, resolvePlantBattery } from './market-automation-builder.js';
 import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.js';
+import { adoptWasActiveMarkers } from './schedule-runtime.js';
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { resolveEosMinSocPct } from './services/optimizer/eos-config-sync.js';
-import { eosPlanFeedInBasis } from './services/optimizer/eos-forecast-bridge.js';
+import { eosPlanFeedInBasis, controlHorizonMode } from './services/optimizer/eos-forecast-bridge.js';
 import { eosSlowRunHint } from './services/optimizer/eos-run-hint.js';
+import { eosHorizonHint } from './services/optimizer/eos-horizon-hint.js';
 import { planControlFor } from './services/optimizer/eos-run-trigger.js';
 import { requestEosReplanAfterSave } from './services/optimizer/eos-replan-after-save.js';
 import { runtimeInfo } from './runtime-info.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
-import { buildControlSnapshot, controlSnapshotFlat, buildGridLimitSnapshot, gridLimitSnapshotFlat } from './services/control-snapshot.js';
+import { createPickupSink } from './services/gate/pickup.js';
 import { buildDataflow } from './services/dataflow.js';
 import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch, controlFailureStatus } from './services/control-commands.js';
 import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
@@ -66,7 +68,9 @@ import { resolveEvArrival } from './services/optimizer/ev-arrival.js';
 import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter } from './services/wallbox/adapters.js';
 import { WALLBOX_TYPES } from './services/wallbox/types.js';
 import { loadCatalog as loadEvccVehicleCatalog, maskVehicleSettings, mergeVehicleSettings, validateVehicleSettings } from './services/vehicle-evcc/index.js';
-import { resolvePvStringSources, resolvePvStringGroups, buildPvnodeCsv, normalizeFroniusHost } from './services/pv-strings/index.js';
+import { mobileIntegrationsView } from './services/mobile-link/integrations-view.js';
+import { mobileAutomationConfigView, parseMobileAutomationPatch } from './services/mobile-link/automation-view.js';
+import { resolvePvStringSources, resolvePvStringGroups, buildPvnodeCsv, normalizeFroniusHost, buildMpptPvnodeCsv, isMpptModule } from './services/pv-strings/index.js';
 
 // Redigierte Sicht auf config.mqtt für die Integrationsseite (2026-09-14):
 // alles, was der Verbindung-/Einstellungen-Tab anzeigen darf. Passwort nie —
@@ -101,8 +105,8 @@ import { createConfigRoutes } from './routes/config-routes.js';
 import { createAdminRoutes } from './routes/admin-routes.js';
 import { createNotificationRoutes } from './routes/notification-routes.js';
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
-import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp, collectChangedPaths } from './config-model.js';
-import { PVNODE_PLANS, DEFAULT_PVNODE_PLAN } from './services/forecast/pvnode-plans.js';
+import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp, collectChangedPaths, isManufacturerId } from './config-model.js';
+import { PVNODE_PLANS, DEFAULT_PVNODE_PLAN, pvnodePlanFor } from './services/forecast/pvnode-plans.js';
 import { normalizeRelayUrl, DEFAULT_RELAY_URL as DEFAULT_MOBILE_RELAY_URL } from './services/mobile-link/agent.js';
 import { isSupportTunnelConsentAction, isSupportTunnelWrite, bodyKeyNames, supportTunnelActionKind, SUPPORT_TUNNEL_KIND_LABELS } from './services/support-tunnel-policy.js';
 import { SETUP_STEP_LABELS as DATENSPENDE_SETUP_STEP_LABELS, SOURCE_GROUPS as DATENSPENDE_SOURCE_GROUPS, redactSecrets as redactDatenspendeSecrets } from './services/datenspende/index.js';
@@ -131,6 +135,8 @@ import Cursor from 'pg-cursor';
 // (b) buffering full result sets and shipping CSV/JSON instead — both worse.
 import parquet from '@dsnp/parquetjs';
 import { notHaltSuspendedLabels } from './services/emergency-stop/policy.js';
+import { peakBillingReport } from './services/peak-shaving/index.js';
+import { buildPriceOutlookPayload, publicPriceTail, outlookContiguousEndMs, realPriceCoverage, MIN_REAL_AHEAD_MS } from './services/optimizer/price-outlook.js';
 
 // Plan 09.2-08 (D-13/D-24 revised): single module-scope schema instance for the
 // streaming Parquet export. Schema is locked to four columns: ts_utc UTF8,
@@ -846,7 +852,9 @@ export function listManufacturerProfiles(ctx) {
       .filter((f) => !f.startsWith('.') && f.toLowerCase().endsWith('.json'))
       .map((f) => {
         const id = f.replace(/\.json$/i, '');
-        if (!id) return null;
+        // E1: nur IDs, die loadConfigFile auch lädt (a-z, 0-9, - und _) — sonst böte das Feld eine Datei an, die
+        // nach dem Speichern im Zustand „Profil fehlt" endet.
+        if (!isManufacturerId(id)) return null;
         let label = id.charAt(0).toUpperCase() + id.slice(1);
         let beta = false;
         try {
@@ -884,9 +892,15 @@ export function actorContext(req) {
 
 // Einstellungen, die in den EOS-Plan eingehen. Reine Anzeige-, Takt- und
 // Diagnosewerte lösen keinen Sofort-Lauf aus.
-const EOS_REPLAN_PREFIXES = ['optimizer.', 'userEnergyPricing.', 'wallbox.', 'forecast.pv.', 'forecast.location.', 'paragraph14a.'];
+// epex.priceOutlook (1.0.11): Preisprognose an/aus ändert Schwanz und Wertgrundlage des E-Autos.
+// peakShaving.: EOS plant mit der kleineren Bezugsgrenze und setzt sie als Schwelle in die Regeln (P2) — nach einer
+// Änderung neu planen, sonst gilt die alte Schwelle weiter (Codex 0d080d53 P2). Nur die Preise sind reine Anzeige.
+const EOS_REPLAN_PREFIXES = ['optimizer.', 'userEnergyPricing.', 'wallbox.', 'forecast.pv.', 'forecast.location.', 'paragraph14a.', 'epex.priceOutlook', 'peakShaving.'];
 const EOS_REPLAN_IGNORE = ['optimizer.eosEmsIntervalSec', 'optimizer.eosGeneticGenerations', 'optimizer.eosFitnessCacheMaxEntries',
-  'optimizer.eosStartAfterPreviousRun', 'optimizer.ruleHorizonHours', 'optimizer.eosProxy.timeoutMs', 'optimizer.eosFallbackSma'];
+  'optimizer.eosStartAfterPreviousRun', 'optimizer.ruleHorizonHours', 'optimizer.eosProxy.timeoutMs', 'optimizer.eosFallbackSma',
+  'peakShaving.tariff.lpLowEurPerKwYear', 'peakShaving.tariff.apLowCtPerKwh', 'peakShaving.tariff.lpHighEurPerKwYear',
+  'peakShaving.tariff.apHighCtPerKwh', 'peakShaving.tariff.lpMonthEurPerKwMonth', 'peakShaving.tariff.apMonthCtPerKwh',
+  'peakShaving.releaseHysteresisW', 'peakShaving.minSocPct'];
 export function configChangeNeedsEosReplan(changedPaths) {
   if (!Array.isArray(changedPaths)) return false;
   return changedPaths.some((p) => typeof p === 'string'
@@ -908,7 +922,37 @@ const supportAuditStorage = new AsyncLocalStorage();
 function eosRunStats(run) {
   const num = (v) => (Number.isFinite(Number(v)) && v !== null && v !== undefined ? Number(v) : null);
   if (!run || num(run.lastDurationS) === null) return null;
-  return { avgDurationS: num(run.avgDurationS), recentRuns: num(run.recentRuns), lastDurationS: num(run.lastDurationS) };
+  return {
+    avgDurationS: num(run.avgDurationS), recentRuns: num(run.recentRuns), lastDurationS: num(run.lastDurationS),
+    secPerControlHour: num(run.secPerControlHour), avgControlHours: num(run.avgControlHours),
+  };
+}
+
+/**
+ * Hinweis „mit der Preisprognose bis zu ~5 Tage vorausplanen“ samt
+ * Laufzeit-Schätzung für dieses Gerät (eos-horizon-hint.js, 1.0.11). Ende der
+ * Preisprognose aus dem Dienst, Ende der PV-Prognose aus dem letzten Push.
+ */
+function horizonHintFor({ state, cfg, priceOutlook, nowMs = Date.now() }) {
+  // Wie der Schwanz: ab dem Ende der festen Preise, lückenlos, und nur, wenn
+  // die festen Preise mindestens jetzt + 1 h 15 min decken (Codex b1afb66c).
+  let outlookEndMs = null;
+  try {
+    const rows = Array.isArray(state?.epex?.data) ? state.epex.data : [];
+    const realEnd = realPriceCoverage(rows
+      .filter((r) => Number.isFinite(Number(r?.ts)) && Number.isFinite(Number(r?.ct_kwh)))
+      .map((r) => ({ start: new Date(Number(r.ts)).toISOString(), ctKwh: Number(r.ct_kwh) }))).end;
+    const outlook = priceOutlook?.current?.(nowMs)?.outlook;
+    if (outlook && Number.isFinite(realEnd) && realEnd >= nowMs + MIN_REAL_AHEAD_MS) outlookEndMs = outlookContiguousEndMs(outlook, realEnd);
+  } catch { outlookEndMs = null; }
+  const pvUntilMs = Date.parse(state?.optimizer?.eosPriceTail?.lookahead?.pvUntil || '');
+  try {
+    return eosHorizonHint({
+      cfg, run: state?.optimizer?.eosRun || null, outlookEndMs,
+      pvUntilMs: Number.isFinite(pvUntilMs) ? pvUntilMs : null,
+      controlMode: controlHorizonMode(cfg), controlHours: state?.optimizer?.eosControlHorizonH ?? null, nowMs,
+    });
+  } catch { return null; }
 }
 
 export function createApiRoutes(ctx) {
@@ -991,6 +1035,9 @@ export function createApiRoutes(ctx) {
     configDir: path.dirname(ctx.getConfigPath?.() || '/etc/dvhub/config.json'),
   });
   const { state, getCfg, pushLog, telemetrySafeWrite, licenseService } = ctx;
+  // Abholpuffer hinter dem Schreibtor (VCL-Vertrag v6 D.1 R-T3, services/gate/pickup.js): die Steuerfelder für
+  // Loxone/HA gibt das Tor des Prozesses (ctx.gate) bei jeder Abfrage frei — oder liefert „keine Vorgabe“.
+  const pickup = createPickupSink({ state, getCfg, getGate: () => ctx.gate });
 
   // §51a lifetime extension (T-0004): the since-commissioning price scan is
   // a full-history query — cache it; negative-price slots only accrue every
@@ -1559,6 +1606,9 @@ export function createApiRoutes(ctx) {
     '/api/log/dv-signals',
     '/api/telemetry/series',
     '/api/forecast',
+    // Preisprognose (Residuallast dvhub.online, 1.0.11): reine Lese-Antwort,
+    // öffentliche Daten, keine Geheimnisse — wie /api/forecast.
+    '/api/price/outlook',
     '/api/family/status',      // DASH-02 — family dashboard polls every 5s from LAN
     '/api/family/presence',    // DASH-03 — screensaver wake poll (GET only; POST still requires auth)
     '/api/family/tile-history', // Plan 11-03 D-14 — token-less kiosk detail-panel chart fetch; GET-only LAN bypass, Bearer for external. The POST /api/family/mqtt-tiles write path stays OUT.
@@ -1568,6 +1618,8 @@ export function createApiRoutes(ctx) {
     '/api/schedule',
     '/api/history/import/status',
     '/api/history/summary',
+    // Streudiagramm dynamischer Tarif (23.11.2026) — gleiche Haltung wie summary.
+    '/api/history/tariff-scatter',
     // MiSpeL-Übersicht der Historie (2026-10-18) — gleiche Haltung wie summary.
     '/api/history/mispel',
     // Netzstrom im Akku (grid-share.js, 02.11.2026): Zählerstand + Nachweis-Protokoll, nur lesend.
@@ -1663,6 +1715,7 @@ export function createApiRoutes(ctx) {
     ['/api/family/tile-history', 'dashboard'], ['/api/family/tesla-history', 'dashboard'],
     // history — telemetry/history reads + exports + DB backup
     ['/api/history/import/status', 'history'], ['/api/history/summary', 'history'],
+    ['/api/history/tariff-scatter', 'history'],
     ['/api/history/mispel', 'history'],
     ['/api/battery/grid-share', 'history'], ['/api/battery/grid-share/protocol.csv', 'history'],
     ['/api/eeg/extension', 'history'],
@@ -1672,7 +1725,7 @@ export function createApiRoutes(ctx) {
     ['/api/db/timescale/status', 'history'],
     ['/api/curtailment/preview', 'history'],
     // forecast — forecast reads + inspector
-    ['/api/forecast', 'forecast'],
+    ['/api/forecast', 'forecast'], ['/api/price/outlook', 'forecast'],
     ['/api/forecast/inspector/pv-providers', 'forecast'], ['/api/forecast/inspector/load', 'forecast'],
     ['/api/forecast/inspector/eos', 'forecast'],
     ['/api/forecast/inspector/optimizer-cold', 'forecast'],
@@ -1959,7 +2012,14 @@ export function createApiRoutes(ctx) {
   // released for the same reason (Christin 2026-10-13): customers never see or
   // store the token (onboarding generates it), so no button in the LAN UI may
   // depend on it. Restore keeps its explicit confirmation in the UI.
-  const BEARER_REQUIRED_ENDPOINTS = new Set();
+  // T-MPPT-TELEMETRY: Der pvnode-Export je MPPT liefert die Erzeugungsreihe
+  // eines einzelnen Strings als Trainings-/Kalibrierdaten fuer einen EXTERNEN
+  // Dienst (pvnode). Das ist ein programmgesteuerter Datenabzug (kein LAN-
+  // Browser-Knopf) — deshalb Bearer-pflichtig aus jeder Quelle, auch im LAN
+  // (wie /api/history/raw/export.csv), statt des blossen LAN-Freibriefs.
+  const BEARER_REQUIRED_ENDPOINTS = new Set([
+    '/api/pv-strings/mppt-export.csv',
+  ]);
 
   // Im Container sinnlos bzw. gefährlich (git/apt/systemd/Host) → 409 mit Hinweis.
   const CONTAINER_REFUSED_ENDPOINTS = new Set([
@@ -2309,31 +2369,9 @@ export function createApiRoutes(ctx) {
   }
 
   async function integrationState() {
-    const cfg = getCfg();
-
-    // === EXISTING FIELDS — DO NOT MODIFY (backward compat for HA/Loxone consumers) ===
-    const base = {
-      timestamp: Date.now(),
-      dvControlValue: ctx.controlValue(),
-      forcedOff: state.ctrl.forcedOff,
-      gridTotalW: state.meter.grid_total_w,
-      gridDirection: gridDirection(state.meter.grid_total_w, cfg.gridPositiveMeans).mode,
-      gridSetpointW: state.victron.gridSetpointW,
-      minSocPct: state.victron.minSocPct,
-      soc: state.victron.soc,
-      batteryPowerW: state.victron.batteryPowerW,
-      pvTotalW: state.victron.pvTotalW,
-      scheduleActive: state.schedule.active,
-      costs: costSummary(),
-      userEnergyPricing: userEnergyPricingSummary()
-    };
-    // 2026-09-14: Steuerbefehle als FLACHE Felder (dvhub_control_*) — Loxone
-    // Virtual HTTP Input parst key=value je Zeile, der scheduleActive-JSON-Blob
-    // oben ist dort unbrauchbar. Gleiche Quelle wie <prefix>/control/* per MQTT.
-    Object.assign(base, controlSnapshotFlat(buildControlSnapshot(state)));
-    Object.assign(base, gridLimitSnapshotFlat(buildGridLimitSnapshot(state)));
-
-    // === NEW FIELDS — namespaced under dvhub_* to avoid collision (D-18) ===
+    // Erst warten, dann zusammenstellen (Codex 36f71297 P1): das Tor urteilt über die Steuerfelder NACH dem letzten
+    // await — sonst ginge ein vor einem Not-Halt gelesener Sollwert noch hinaus, wenn der Not-Halt kommt, während die
+    // Antwort auf die Prognose wartet. Ab hier läuft alles ohne Warten bis zur Rückgabe.
     // Per-section error isolation (Plan 08-07 Task 2): one section failing must
     // NOT 500 the whole integration endpoint. Failures attach to base.dvhub_errors[].
     const sectionErrors = [];
@@ -2344,6 +2382,38 @@ export function createApiRoutes(ctx) {
       sectionErrors.push({ section: 'forecast', error: err?.message ?? String(err) });
       pushLog('integration_state_forecast_error', { error: err?.message ?? String(err) });
     }
+
+    const cfg = getCfg();
+    // Steuerfelder (dvhub_control_*, scheduleActive) über das Tor: ein Urteil je Gerät für die ganze Antwort (R-T3).
+    const handOut = pickup.handOut();
+    // Direktvermarkter-Signal aus demselben Urteil: im Not-Halt und Lese-Modus null (Christin 19.11.2026), bei
+    // ungültiger Konfiguration weiter (DVhub kann dann selbst nicht abregeln) — services/gate/pickup.js.
+    const dv = pickup.dvSignal(handOut, () => ctx.controlValue());
+
+    // === EXISTING FIELDS — DO NOT MODIFY (backward compat for HA/Loxone consumers) ===
+    const base = {
+      timestamp: Date.now(),
+      dvControlValue: dv.dvControlValue,
+      forcedOff: dv.forcedOff,
+      gridTotalW: state.meter.grid_total_w,
+      gridDirection: gridDirection(state.meter.grid_total_w, cfg.gridPositiveMeans).mode,
+      gridSetpointW: state.victron.gridSetpointW,
+      minSocPct: state.victron.minSocPct,
+      soc: state.victron.soc,
+      batteryPowerW: state.victron.batteryPowerW,
+      pvTotalW: state.victron.pvTotalW,
+      scheduleActive: pickup.scheduleActive(handOut),
+      costs: costSummary(),
+      userEnergyPricing: userEnergyPricingSummary()
+    };
+    // 2026-09-14: Steuerbefehle als FLACHE Felder (dvhub_control_*) — Loxone
+    // Virtual HTTP Input parst key=value je Zeile, der scheduleActive-JSON-Blob
+    // oben ist dort unbrauchbar. Gleiche Quelle wie <prefix>/control/* per MQTT.
+    // Bei geschlossenem Tor (Not-Halt, Lese-Modus, ungültige Konfiguration)
+    // „keine Vorgabe“ plus dvhub_control_suspended; Messwerte oben unverändert.
+    Object.assign(base, pickup.flat(handOut));
+
+    // === NEW FIELDS — namespaced under dvhub_* to avoid collision (D-18) ===
     if (forecastResp) {
       // Duration-aware energy calculation (review concern: "summing powerW/1000 ignores slot duration")
       const pvSlots = forecastResp.pv?.slots || [];
@@ -2553,8 +2623,15 @@ export function createApiRoutes(ctx) {
       meta: configMetaPayload(),
       config: redactConfig(ctx.getRawCfg()),
       effectiveConfig: redactConfig(cfg),
-      definition: definitionWithManufacturerOptions()
+      definition: definitionWithManufacturerOptions(),
+      // Quelle und Stand der anzulegenden Werte (Einstellungen → Strompreise →
+      // Marktprämie). Öffentliche Daten, keine Geheimnisse.
+      referenceData: { applicableValues: applicableValueStatusPayload() }
     };
+  }
+
+  function applicableValueStatusPayload() {
+    try { return ctx.getApplicableValueStatus?.() ?? null; } catch { return null; }
   }
 
   // ── First-run onboarding (Aurora setup wizard) ───────────────────────
@@ -2695,6 +2772,17 @@ export function createApiRoutes(ctx) {
     // Zweite GX-Anlage am selben Anschluss (services/multi-gx), nur In-Memory.
     // Im Runtime-Worker-Betrieb steht der Zustand im Worker → hier null.
     payload.multiGx = state.multiGx ?? null;
+    // Zweiter Sungrow-WR (Master/Slave-Parallelbetrieb): die sanitierte Slave-Zusammenfassung (ohne LAN-IP) und
+    // die System-Summen reisen im Victron-Snapshot (runtime-state Whitelist) zuverlässig auch im Split-Prozess.
+    // Zusätzlich als Top-Level, damit die App sie ohne Umweg findet.
+    payload.sungrowSecond = payload.victron?.sungrowSecond ?? null;
+    // Sungrow-EMS-Zustand (Master und — bei Split-Steuerung — Slave) für die Wechselrichter-Kachel: EMS-Modus,
+    // Befehl/Leistung, Besitz, Herzschlag (Soll/erkannte FC). Nur In-Memory; im Runtime-Worker-Betrieb hier null.
+    payload.sungrowEms = state.ctrl?.sungrowEms ?? null;
+    payload.sungrowEmsSlave = state.ctrl?.sungrowEmsSlave ?? null;
+    // M14b: Tagesbudget des dvControl-Einspeise-Sequenzpfads (13074/13087/13088/
+    // 31222) — getrennt vom 13050-EMS-Budget. Für die WR-Kachel neben „Writes heute".
+    payload.dvSeqBudget = state.ctrl?.dvSeqBudget ?? null;
     // Victron device alarms (read-only display). Source is payload.victron.alarms,
     // which the POLLER (possibly a separate runtime-worker process) writes and
     // which reaches here through the runtime IPC snapshot — NOT web-process-local
@@ -2716,8 +2804,17 @@ export function createApiRoutes(ctx) {
     // Systemhinweise (Einspeisegrenze, unbekannter DV-Befehl, Speicherplatz …):
     // Leitstand zeigt sie als Hinweisleiste (app.js renderSystemWarnings).
     payload.systemWarnings = Array.isArray(state.systemWarnings)
-      ? state.systemWarnings.map((w) => ({ id: String(w.id || ''), message: String(w.message || '') }))
+      ? state.systemWarnings.map((w) => ({
+        id: String(w.id || ''), message: String(w.message || ''),
+        ...(w.severity === 'error' ? { severity: 'error' } : {}),
+      }))
       : [];
+    // Kennungsprobe des Herstellerprofils (E10): Ergebnis aus dem POLLER-Snapshot (wie telemetryFreeze), und jedes
+    // Ergebnis außer „bestanden“ als Hinweis in der Leiste — dort steht, was ausgeblendet bzw. ungeprüft ist.
+    payload.identityProbe = payload.victron?.identityProbe || null;
+    if (payload.identityProbe && payload.identityProbe.status !== 'ok' && payload.identityProbe.text) {
+      payload.systemWarnings.push({ id: 'identity_probe', message: String(payload.identityProbe.text) });
+    }
     // T-CROSSCHECK (2026-07-25): Widerspruch der beiden Datenwege — gleiche
     // Snapshot-Quelle wie oben (Poller-Prozess), nicht das Web-state.
     payload.telemetrySourceMismatch = payload.victron?.sourceMismatch || null;
@@ -4219,6 +4316,28 @@ export function createApiRoutes(ctx) {
       });
     }
 
+    // POST /api/sungrow/release — Sungrow manuell freigeben (Modus 0, beide 0xCC), M2 (Feld 16.11.). Nimmt den
+    // Forced/External-EMS-Betrieb am Master UNABHÄNGIG vom Besitz-Merker zurück — der Weg ohne Shell, wenn DVhub den
+    // Master nach einem Lesefehler/Neustart im eigenen Modus 2 „hängen" ließ. Erfordert body.confirm === true.
+    if (url.pathname === '/api/sungrow/release' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); } catch { return json(res, 400, { ok: false, error: 'invalid_json' }); }
+      if (body?.confirm !== true) return json(res, 400, { ok: false, error: 'confirm_required' });
+      if (typeof ctx.sungrowEms?.forceRelease !== 'function') return json(res, 409, { ok: false, error: 'sungrow_not_active' });
+      let result;
+      try { result = await ctx.sungrowEms.forceRelease('manual_release'); }
+      catch (e) { pushLog('sungrow_manual_release_error', { error: e?.message || String(e) }, 'warn'); return json(res, 500, { ok: false, error: 'release_failed' }); }
+      const notSent = result?.sent === false;
+      pushLog('sungrow_manual_release', { ok: result?.ok === true, pending: result?.pending === true, ...(notSent ? { sent: false, error: result?.error || null } : {}), device: result?.device || null }, actorContext(req));
+      // Option A (Christin 19.11.2026): pending = Freigabe gescheitert, DVhub wiederholt sie bis zur Bestätigung.
+      // requestedAt bindet die Antwort an diese Anfrage (die Kachel lässt einen älteren Status nicht darüber, P2).
+      const out = { ok: result?.ok === true, pending: result?.pending === true, retryAt: result?.retryAt ?? null, device: result?.device || null, error: result?.error || null, requestedAt: result?.requestedAt ?? null };
+      // Restpunkt 1: kein Schreibweg (Herstellerprofil ungültig, kein Sungrow-EMS) — nichts gesendet. Vorher 200 ok:true.
+      if (notSent) return json(res, 409, { ...out, ok: false, sent: false });
+      return json(res, 200, out);
+    }
+
     // POST: ein planbares Gerät anlegen/aktualisieren (Upsert nach id).
     if (url.pathname === '/api/devices/schedulable' && req.method === 'POST') {
       if (!checkAuth(req, res)) return;
@@ -4531,7 +4650,13 @@ export function createApiRoutes(ctx) {
     }
 
     // GET /api/integrations/status — integration status overview (D-08)
-    if (url.pathname === '/api/integrations/status' && req.method === 'GET') {
+    // GET /api/mobile-link/integrations — dieselbe Übersicht für die Handy-App,
+    // aber neu aufgebaut per Positivliste (services/mobile-link/integrations-view.js):
+    // ohne Adressen im Heimnetz, Benutzernamen, Kennungen und Fehlertexte. Nur
+    // dieser Weg ist für die App freigegeben (permissions.js), nie /status selbst.
+    const mobileIntegrations = url.pathname === '/api/mobile-link/integrations' && req.method === 'GET';
+    // (Die Bedingung beginnt bewusst mit dem /status-Vergleich: Daran finden die Quelltext-Tests den Block.)
+    if (url.pathname === '/api/integrations/status' && req.method === 'GET' || mobileIntegrations) {
       const mqttCfg = getCfg().mqtt || {};
       const payload = {
         timestamp: Date.now(),
@@ -4591,11 +4716,19 @@ export function createApiRoutes(ctx) {
           const opt = getCfg().optimizer || {};
           const primarySource = opt.primarySource || 'internal';
           const enabled = resolveEosProxy(getCfg()).enabled;
+          // Preisprognose für den EOS-Schwanz (1.0.11, price-outlook.js):
+          // live / gespeichert / nicht verfügbar seit … / aus (Zone, Quelle).
+          let priceOutlook = null;
+          try {
+            const cur = ctx.priceOutlook?.current?.();
+            if (cur) priceOutlook = { status: cur.status, reason: cur.reason ?? null, issuedAt: cur.issuedAt ?? null, unavailableSince: cur.unavailableSince ?? null };
+          } catch { priceOutlook = null; }
           return {
             enabled,
             primarySource,
             active: enabled && (primarySource === 'eos' || primarySource === 'best'),
-            url: (opt.eosProxy && opt.eosProxy.url) || ''
+            url: (opt.eosProxy && opt.eosProxy.url) || '',
+            priceOutlook
           };
         })(),
         luox: {
@@ -4650,7 +4783,7 @@ export function createApiRoutes(ctx) {
             // pvnode v2: Nowcast ist keine eigene Option mehr, sondern in den
             // bezahlten Plänen enthalten → aus dem Plan abgeleitet, nicht aus
             // dem (toten) Legacy-Flag forecast.pvnode.nowcastEnabled.
-            nowcastEnabled: !!(PVNODE_PLANS[getCfg().forecast?.pvnode?.plan] || PVNODE_PLANS[DEFAULT_PVNODE_PLAN]).nowcast
+            nowcastEnabled: !!pvnodePlanFor(getCfg().forecast?.pvnode?.plan).nowcast
           }
         },
         // EVCC wallbox (#23, 2026-06-13). Card consumes this via
@@ -4747,6 +4880,7 @@ export function createApiRoutes(ctx) {
           };
         })()
       };
+      if (mobileIntegrations) return json(res, 200, mobileIntegrationsView(payload));
       return json(res, 200, payload);
     }
 
@@ -4811,6 +4945,24 @@ export function createApiRoutes(ctx) {
         if (cleaned.length !== body.groups.length) return json(res, 400, { ok: false, error: 'invalid group (id a-z0-9_-, not a string id, >= 2 existing members)' });
         ps.groups = cleaned;
       }
+      // T-MPPT-TELEMETRY: Anzeige-Metadaten je MPPT-Modulnummer (Beschriftung,
+      // kWp). Nur bekannte Modulnummern 1..999; Labels auf 80 Zeichen gekappt.
+      if ('mppt' in body) {
+        const m = (body.mppt && typeof body.mppt === 'object') ? body.mppt : {};
+        const labels = {};
+        const kwp = {};
+        for (const [k, v] of Object.entries(m.labels && typeof m.labels === 'object' ? m.labels : {})) {
+          if (!isMpptModule(Number(k))) continue;
+          const label = String(v == null ? '' : v).trim().slice(0, 80);
+          if (label) labels[Number(k)] = label;
+        }
+        for (const [k, v] of Object.entries(m.kwp && typeof m.kwp === 'object' ? m.kwp : {})) {
+          if (!isMpptModule(Number(k))) continue;
+          const val = Number(v);
+          if (Number.isFinite(val) && val > 0) kwp[Number(k)] = val;
+        }
+        ps.mppt = { labels, kwp };
+      }
       next.pvStrings = ps;
       try { ctx.saveAndApplyConfig(next); } catch { return json(res, 500, { ok: false, error: 'save failed' }); }
       pushLog('pv_strings_config_saved', { enabled: ps.enabled === true, sources: (ps.sources || []).length, groups: (ps.groups || []).length }, actorContext(req));
@@ -4842,6 +4994,60 @@ export function createApiRoutes(ctx) {
         res.writeHead(200, {
           'content-type': 'text/csv; charset=utf-8',
           'content-disposition': `attachment; filename="pvnode-${r.source.id}.csv"`,
+          'cache-control': 'no-store'
+        });
+        res.end(csv);
+        return;
+      } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
+    // --- T-MPPT-TELEMETRY: SunSpec-M160-Per-MPPT-Strings (Leitstand + pvnode) ---
+    // Uebersicht je MPPT-String aus energy_slots_15m (Abdeckung, Tagesertraege),
+    // ergaenzt um die aktuell vom Poller gelesenen Module (state.victron.mppt =
+    // Live-Leistung je String). Nur Tracking/Anzeige → checkAuth (LAN-ok).
+    if (url.pathname === '/api/pv-strings/mppt' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.pvStrings) return json(res, 503, { ok: false, error: 'pv strings not available' });
+      try {
+        // Getrennter Betrieb (Runtime-Worker): der Poller läuft im Runtime-Prozess, die Live-Werte stehen im
+        // Status-Schnappschuss (runtime-state.js VICTRON_FIELDS) — sonst wie bisher state.victron.
+        const workerMppt = ctx.getCachedRuntimeStatusPayload?.()?.victron?.mppt;
+        const liveSrc = Array.isArray(workerMppt) ? workerMppt : state?.victron?.mppt;
+        const live = Array.isArray(liveSrc) ? liveSrc : [];
+        const activeModules = live.map((m) => Number(m?.n)).filter((n) => isMpptModule(n));
+        const liveByN = new Map(live.map((m) => [Number(m?.n), m]));
+        const overview = await ctx.pvStrings.mpptOverview(activeModules);
+        const sources = overview.map((s) => {
+          const lv = liveByN.get(s.n);
+          return { ...s, liveW: lv && Number.isFinite(Number(lv.w)) ? Number(lv.w) : null,
+            liveV: lv && lv.v != null ? Number(lv.v) : null };
+        });
+        return json(res, 200, { ok: true, enabled: activeModules.length > 0, sources });
+      } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+    // pvnode-Export EINER MPPT-Reihe (Erzeugung in W je 15-min-Slot). Bearer-
+    // pflichtig (BEARER_REQUIRED_ENDPOINTS) — externer Datenabzug.
+    if (url.pathname === '/api/pv-strings/mppt-export.csv' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.pvStrings) return json(res, 503, { ok: false, error: 'pv strings not available' });
+      const n = Number(url.searchParams.get('n'));
+      if (!isMpptModule(n)) return json(res, 400, { ok: false, error: 'n: MPPT-Modulnummer 1..999' });
+      const startRaw = parseIsoOrNull(url.searchParams.get('start'));
+      const endRaw = parseIsoOrNull(url.searchParams.get('end'));
+      if (startRaw === false || endRaw === false) return json(res, 400, { ok: false, error: 'invalid_timestamp' });
+      const end = endRaw || new Date().toISOString();
+      const start = startRaw || new Date(Date.parse(end) - 730 * 86400000).toISOString();
+      try {
+        const r = await ctx.pvStrings.readMpptSeries(n, { start, end });
+        if (!r) return json(res, 400, { ok: false, error: 'n: MPPT-Modulnummer 1..999' });
+        const csv = buildMpptPvnodeCsv(r.rows, { timeZone: getCfg().schedule?.timezone || 'Europe/Berlin' });
+        res.writeHead(200, {
+          'content-type': 'text/csv; charset=utf-8',
+          'content-disposition': `attachment; filename="pvnode-mppt-${n}.csv"`,
           'cache-control': 'no-store'
         });
         res.end(csv);
@@ -5210,12 +5416,16 @@ export function createApiRoutes(ctx) {
           redirect: ctx.vpnManager?.getStatus?.()?.modbusRedirect || null,
         },
       ];
+      // „Raus — Sollwerte“ zeigt, was wirklich hinausgeht: dieselbe Abholsenke wie Loxone/MQTT (R-T3).
+      const out = pickup.handOut();
+      const dv = pickup.dvSignal(out, () => (typeof ctx.controlValue === 'function' ? ctx.controlValue() : null));
       return json(res, 200, buildDataflow({
         cfg, state, transport: ctx.transport,
-        controlSnapshot: buildControlSnapshot(state),
-        gridLimit: buildGridLimitSnapshot(state),
+        controlSnapshot: out.control,
+        gridLimit: out.gridLimit,
         channels,
-        dvControlValue: typeof ctx.controlValue === 'function' ? ctx.controlValue() : null,
+        dvControlValue: dv.dvControlValue,
+        dvSignalSuspended: dv.suspended ?? null,
         now: Date.now(),
       }));
     }
@@ -5684,7 +5894,35 @@ export function createApiRoutes(ctx) {
     // Speicherplatz (storage-guard.js): frei/belegt, Stufe, letzte Maßnahmen.
     if (url.pathname === '/api/storage/status' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;
-      return json(res, 200, { ok: true, ...(ctx.storageGuard?.status?.() || { level: 'unbekannt' }) });
+      // compression: Prüfung der Wache (auch vor dem ersten Lauf); timescaleTuning: Ergebnis beim Start.
+      // Im getrennten Betrieb läuft die Wache im Runtime-Prozess → Stand aus dem Schnappschuss.
+      const rs = ctx.storageGuard ? null : (state.storageRuntime || null);
+      return json(res, 200, {
+        ok: true,
+        ...((ctx.storageGuard ? ctx.storageGuard.status?.() : rs?.status) || { level: 'unbekannt' }),
+        compression: (ctx.storageGuard ? ctx.storageGuard.compressionStatus?.() : rs?.compression) ?? null,
+        timescaleTuning: state.timescaleTuning ?? rs?.timescaleTuning ?? null,
+        // Für die Karte „Speicher“: Docker-Hinweis (S9 a) und „Vollständig“-Hinweis (S5 a).
+        container: process.env.DVHUB_RUNTIME === 'container',
+        logMode: getCfg()?.telemetry?.logRetention?.mode === 'full' ? 'full' : 'standard',
+      });
+    }
+
+    // Speicherprofil per Klick (Einstellungen → Speicher, S2 a): 'auto' = nach
+    // Plattengröße, sonst fest gross/mittel/klein/winzig. Läuft im Runtime-Prozess.
+    if (url.pathname === '/api/storage/profile' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      const choice = String(body?.choice || '');
+      if (!['auto', 'gross', 'mittel', 'klein', 'winzig'].includes(choice)) {
+        return json(res, 400, { ok: false, error: 'choice must be auto, gross, mittel, klein or winzig' });
+      }
+      if (typeof ctx.chooseStorageProfile !== 'function') return json(res, 503, { ok: false, error: 'storage guard not available' });
+      const r = await ctx.chooseStorageProfile(choice);
+      pushLog('storage_profile_request', { choice, ok: !!r.ok, error: r.error || null }, actorContext(req));
+      if (r.error === 'runtime_worker_unavailable' || r.error === 'storage_guard_unavailable') return json(res, 503, r);
+      return json(res, r.ok ? 200 : 409, r);
     }
 
     // Zentraler EOS-Zustand (eos-monitor.js): up/busy/down, PID, Version,
@@ -5773,8 +6011,12 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/eos/status' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;
       const restart = ctx.eosRestarter?.status?.() || null;
-      if (!ctx.eosMonitor) return json(res, 200, { ok: true, status: 'disabled', enabled: false, restart });
-      return json(res, 200, { ok: true, ...ctx.eosMonitor.status(), restart });
+      // DVhub-EOS-Bauidentität: der rohe `version`-String von EOS ist nur Upstreams
+      // Paketnummer (z. B. 0.3.0.dev…) und hinkt den Tags hinterher. `dvhubEos` zeigt,
+      // was tatsächlich läuft (unser Build-Tag + Rust-Kern), für eine klare Anzeige.
+      const dvhubEos = ctx.eosBuildInfo || null;
+      if (!ctx.eosMonitor) return json(res, 200, { ok: true, status: 'disabled', enabled: false, restart, dvhubEos });
+      return json(res, 200, { ok: true, ...ctx.eosMonitor.status(), restart, dvhubEos });
     }
 
     // EOS neu starten (Knopf in der Oberfläche). Antwortet sofort; der Neustart
@@ -6612,7 +6854,9 @@ export function createApiRoutes(ctx) {
         ? (prev.apiKey || '')
         : clip(body.apiKey, 256);
       // body.enabled === undefined → preserve previous; otherwise coerce to bool.
-      next.forecast.solcast.enabled = (body.enabled === undefined) ? !!prev.enabled : !!body.enabled;
+      // 19.11.2026: ein fehlender Wert heißt „an“ (das Fenster hat keinen Schalter) — vorher schrieb
+      // `!!prev.enabled` beim ersten Speichern still false, seit der Schalter wirkt hieße das „Solcast aus“.
+      next.forecast.solcast.enabled = (body.enabled === undefined) ? (prev.enabled !== false) : !!body.enabled;
       next.forecast.solcast.siteId = clip(body.siteId, 64);
       if (apiKey) {
         next.forecast.solcast.apiKey = apiKey;
@@ -6678,7 +6922,7 @@ export function createApiRoutes(ctx) {
         forecastDays: (p.forecastDays != null ? p.forecastDays : ''), // V2 horizon (1..7; '' = default 2)
         // pvnode v2: Nowcast ist im bezahlten Plan enthalten (kein Schalter mehr,
         // Christin 2026-07-18) → plan-abgeleitet; das alte config-Flag ist tot.
-        nowcastEnabled: !!(PVNODE_PLANS[p.plan] || PVNODE_PLANS[DEFAULT_PVNODE_PLAN]).nowcast
+        nowcastEnabled: !!pvnodePlanFor(p.plan).nowcast
       });
     }
 
@@ -7005,7 +7249,9 @@ export function createApiRoutes(ctx) {
       // extendForEvDeadline) — die Kennzeichnung je Zeile (priceEstimated).
       const control = planControlFor(state.optimizer?.eosRun?.lastPlanControl, Date.parse(plan.data?.generatedAt));
       const estimatedFromMs = Date.parse(control?.estimatedFrom || '');
-      const shown = rows.slice(0, maxRows).map((r) => (Number.isFinite(estimatedFromMs) && Date.parse(r?.ts_utc) >= estimatedFromMs ? { ...r, priceEstimated: true } : r));
+      // Quelle des Preises je Zeile (1.0.11): ab estimatedFrom die Residuallast-
+      // Prognose von dvhub.online, davor feste Day-Ahead-Preise.
+      const shown = rows.slice(0, maxRows).map((r) => (Number.isFinite(estimatedFromMs) && Date.parse(r?.ts_utc) >= estimatedFromMs ? { ...r, priceEstimated: true, priceSource: 'residual_load' } : r));
       const output = { ...plan.data, rows: shown, truncated: rows.length > maxRows, totalCount: rows.length };
       return json(res, 200, {
         ok: true,
@@ -7023,8 +7269,15 @@ export function createApiRoutes(ctx) {
         // über 10 min — ein Vorschlag (100 Generationen, Steuerzeitraum
         // „automatisch“; eos-run-hint.js). Nur ein Hinweis, nichts wird umgestellt.
         control,
+        // Preisschwanz des letzten Pushs (1.0.11, eos-forecast-bridge
+        // eosPriceTail): Quelle, Stand der Prognose, Vorausschau und — ohne
+        // Prognose — seit wann sie fehlt.
+        priceTail: publicPriceTail(state.optimizer?.eosPriceTail),
         run: eosRunStats(state.optimizer?.eosRun),
         runHint: eosSlowRunHint(state.optimizer?.eosRun, getCfg()),
+        // Mit der Preisprognose Tage im Voraus planen (1.0.11): nur Hinweis
+        // mit Laufzeit-Schätzung, nichts wird umgestellt.
+        horizonHint: horizonHintFor({ state, cfg: getCfg(), priceOutlook: ctx.priceOutlook }),
         eos: { status: status.status, push: status.push },
         remote: eosRemoteSummary(),
       });
@@ -7293,7 +7546,10 @@ export function createApiRoutes(ctx) {
           detail: 'Sicherheits-Token fehlt oder abgelaufen — Status neu laden und erneut öffnen.'
         });
       }
-      const ttlRaw = Number(body?.ttlMin);
+      // M6 (Feld 16.11.): die im Portal gewählte Dauer wurde im Feld nicht übernommen (Tunnel kam mit 60 min). Die
+      // Box akzeptiert die Dauer robust unter mehreren Feldnamen (ttlMin/durationMin/minutes/ttl), damit ein
+      // abweichender Portal-Feldname sie nicht verliert; welcher Wert ankam, protokolliert support_tunnel_opened.
+      const ttlRaw = Number(body?.ttlMin ?? body?.durationMin ?? body?.minutes ?? body?.ttl);
       const r = await ctx.supportTunnel.open({ ttlMin: Number.isFinite(ttlRaw) ? ttlRaw : undefined }, actor);
       // not_provisioned / misconfigured / spawn_failed -> 409 (caller can't open yet)
       return json(res, r.ok ? 200 : 409, r);
@@ -7965,6 +8221,22 @@ export function createApiRoutes(ctx) {
       return;
     }
 
+    // --- Preisprognose hinter den Day-Ahead-Preisen (1.0.11) ---
+    // Residuallast-Prognose von dvhub.online (price-outlook.js): Stunden ab dem
+    // Ende der echten Preise mit P10/P50/P90 in ct/kWh, Zustand (live,
+    // gespeichert, nicht verfügbar seit …) und — falls EOS läuft — der
+    // Preisschwanz des letzten Pushs. Für Leitstand-Preiskurve und EOS-Karte.
+    if (url.pathname === '/api/price/outlook' && req.method === 'GET') {
+      const cfgNow = getCfg();
+      const nowMs = Date.now();
+      return json(res, 200, {
+        ...buildPriceOutlookPayload({ state, cfg: cfgNow, priceOutlook: ctx.priceOutlook, nowMs }),
+        // Für die Einstellungen (Steuerzeitraum/Prognosehorizont): Hinweis mit
+        // Laufzeit-Schätzung für dieses Gerät (1.0.11).
+        horizonHint: horizonHintFor({ state, cfg: cfgNow, priceOutlook: ctx.priceOutlook, nowMs }),
+      });
+    }
+
     // --- Combined Forecast API (PV + Load + Price + Confidence per D-01) ---
     if (url.pathname === '/api/forecast' && req.method === 'GET') {
       if (!ctx.forecastService) return json(res, 503, { ok: false, error: 'forecast service not available' });
@@ -8380,9 +8652,48 @@ export function createApiRoutes(ctx) {
       const result = await historyQueue.run({ key: url.pathname + url.search, req, res }, () => ctx.historyApi.getSummary({
         view: url.searchParams.get('view'),
         date: url.searchParams.get('date'),
-        slots: url.searchParams.get('slots')
+        slots: url.searchParams.get('slots'),
+        estimated: url.searchParams.get('estimated'),
+        lean: url.searchParams.get('lean')
       }));
       if (result === HEAVY_SKIPPED) return;   // Browser hat schon weitergeklickt
+      return json(res, result.status, result.body);
+    }
+
+    // Streudiagramm Endpreis gegen Börse (dynamischer Tarif, 23.11.2026).
+    // Gleiche Haltung wie /api/history/summary: Woche/Monat/Jahr/Alle sind Pro,
+    // gleiche Warteschlange (rechnet über getSummary und die Ablage).
+    if (url.pathname === '/api/history/tariff-scatter' && req.method === 'GET') {
+      // Ohne view rechnet der Handler den Monat — auch das ist Pro.
+      if (!requirePro(req, res, 'history-multiperiod')) return;
+      if (!ctx.historyApi || typeof ctx.historyApi.getTariffScatter !== 'function') {
+        return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+      }
+      const result = await historyQueue.run({ key: url.pathname + url.search, req, res }, () => ctx.historyApi.getTariffScatter({
+        view: url.searchParams.get('view'),
+        date: url.searchParams.get('date'),
+        estimated: url.searchParams.get('estimated')
+      }));
+      if (result === HEAVY_SKIPPED) return;
+      return json(res, result.status, result.body);
+    }
+
+    // Peak Shaving P4 (Christin 24.11.2026): Leistungsentgelt in € für Monat
+    // bzw. Jahr der Historie (services/peak-shaving peakBillingReport). Monat
+    // und Jahr sind Pro wie /api/history/summary.
+    if (url.pathname === '/api/history/peak-billing' && req.method === 'GET') {
+      if (!requirePro(req, res, 'history-multiperiod')) return;
+      const result = await historyQueue.run({ key: url.pathname + url.search, req, res }, async () => {
+        try {
+          return await peakBillingReport(ctx.telemetryStore, getCfg() || {}, {
+            view: url.searchParams.get('view'),
+            date: url.searchParams.get('date')
+          });
+        } catch {
+          return { status: 500, body: { ok: false, error: 'peak billing query failed' } };
+        }
+      });
+      if (result === HEAVY_SKIPPED) return;
       return json(res, result.status, result.body);
     }
 
@@ -8680,20 +8991,39 @@ export function createApiRoutes(ctx) {
         return true;
       });
       if (validRules.length !== body.rules.length) return json(res, 400, { ok: false, error: 'invalid rule structure' });
+      if (body.replaceDcFeedRules !== undefined && typeof body.replaceDcFeedRules !== 'boolean') {
+        return json(res, 400, { ok: false, error: 'replaceDcFeedRules must be boolean' });
+      }
       // 2026-06-12: optimizer rules are server-managed like SMA rules. Before
       // this, a manual save round-tripped them through the frontend table and
       // re-imported them WITHOUT slotTs/slotEndTs/closedLoopExport — they then
       // matched daily (no date binding) and lost the closed-loop semantics
       // until the next replan. Keep both automation families server-side.
       const isAutomationRule = (r) => isSmallMarketAutomationRule(r) || isForecastOptimizerRule(r);
-      const incomingManualRules = validRules.filter((r) => !isAutomationRule(r));
+      // _wasActive bestimmt nur der Server: unverändert → behalten, geändert → neu (Codex c49d6e82 P2).
+      const incomingManualRules = adoptWasActiveMarkers(state.schedule.rules, validRules.filter((r) => !isAutomationRule(r)));
       const existingAutomationRules = state.schedule.rules.filter((r) => isAutomationRule(r));
       const existingDcFeedRules = state.schedule.rules.filter((r) => r.target === 'feedExcessDcPv' && !isAutomationRule(r));
       const incomingDcFeedRules = incomingManualRules.filter((r) => r.target === 'feedExcessDcPv');
       const incomingOtherRules = incomingManualRules.filter((r) => r.target !== 'feedExcessDcPv');
-      const dcFeedRules = incomingDcFeedRules.length ? incomingDcFeedRules : existingDcFeedRules;
+      // DC-Einspeise-Regeln (feedExcessDcPv): seit 5a5f458e (März 2026) behält der
+      // Server sie, wenn keine mitkommt — der Leitstand verwaltete sie damals nicht
+      // und hätte sie sonst bei jedem Speichern gelöscht. Damit ließ sich die letzte
+      // aber nie löschen (M20, Feld 19.11.2026: „abregel-sperre“ blieb stehen).
+      // replaceDcFeedRules: true heißt „rules ist die vollständige DC-Liste“ (auch
+      // leer) — Leitstand und JSON-Editor schicken es. Ohne das Kennzeichen bleibt
+      // das alte Verhalten: andere Aufrufer (Skripte, ältere Oberflächen) verlieren
+      // DC-Regeln nicht versehentlich.
+      const replaceDcFeedRules = body.replaceDcFeedRules === true;
+      const dcFeedRules = (replaceDcFeedRules || incomingDcFeedRules.length) ? incomingDcFeedRules : existingDcFeedRules;
       state.schedule.rules = [...incomingOtherRules, ...dcFeedRules, ...existingAutomationRules];
-      pushLog('schedule_rules_updated', { manual: incomingOtherRules.length, dcFeed: dcFeedRules.length, automation: existingAutomationRules.length });
+      pushLog('schedule_rules_updated', {
+        manual: incomingOtherRules.length,
+        dcFeed: dcFeedRules.length,
+        dcFeedRemoved: existingDcFeedRules.filter((r) => !dcFeedRules.includes(r) && !dcFeedRules.some((d) => d.id != null && d.id === r.id)).length,
+        replaceDcFeedRules,
+        automation: existingAutomationRules.length,
+      });
       // Phase 19.1-03: tag this snapshot as operator_manual so Stage-2 Backtest
       // can distinguish operator-initiated rule edits from automation writes.
       ctx.persistConfig('operator_manual');
@@ -8752,6 +9082,20 @@ export function createApiRoutes(ctx) {
 
     // --- Schedule Automation Config GET ---
     if (url.pathname === '/api/schedule/automation/config' && req.method === 'GET') {
+      const globalMinSocPct = Number.isFinite(Number(state?.victron?.minSocPct)) && state?.victron?.minSocPct != null
+        ? Number(state.victron.minSocPct) : VICTRON_MIN_SOC_FALLBACK_PCT;
+      // Handy-App (Kennung setzt der Agent, mobile-link/agent.js): nur benannte
+      // Felder — die Config trägt sonst auch den Standort der Anlage
+      // (location.latitude/longitude). Die Kennung gibt nur WENIGER heraus,
+      // sie zu fälschen bringt also nichts.
+      if (req.headers['x-dvhub-client'] === 'mobile-link') {
+        return json(res, 200, {
+          ok: true,
+          config: mobileAutomationConfigView(getCfg().schedule?.smallMarketAutomation, resolvePlantBattery(getCfg())),
+          optimizerEnabled: getCfg().optimizer?.enabled === true,
+          globalMinSocPct
+        });
+      }
       // optimizerEnabled / globalMinSocPct: die Karte im Leitstand erklärt damit,
       // ob die Automatik überhaupt gebraucht wird und wohin die Reserve sinkt.
       return json(res, 200, {
@@ -8771,6 +9115,20 @@ export function createApiRoutes(ctx) {
       if (body === null) return;
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
         return json(res, 400, { ok: false, error: 'invalid body' });
+      }
+      // Handy-App: nur die Felder, die sie auch zeigt, und nur geprüfte Werte —
+      // nie location, stages oder engine (automation-view.js). Die Antwort
+      // trägt dieselbe schmale Sicht.
+      if (req.headers['x-dvhub-client'] === 'mobile-link') {
+        const parsed = parseMobileAutomationPatch(body, resolvePlantBattery(getCfg()));
+        if (!parsed.ok) return json(res, parsed.status || 400, { ok: false, error: parsed.error });
+        const current = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+        current.schedule = current.schedule || {};
+        current.schedule.smallMarketAutomation = { ...current.schedule.smallMarketAutomation, ...parsed.patch };
+        ctx.saveAndApplyConfig(current);
+        pushLog('sma_config_updated', { keys: Object.keys(parsed.patch) }, actorContext(req));
+        ctx.regenerateSmallMarketAutomationRules().catch(e => pushLog('sma_regen_error', { error: e.message }));
+        return json(res, 200, { ok: true, config: mobileAutomationConfigView(getCfg().schedule?.smallMarketAutomation, resolvePlantBattery(getCfg())) });
       }
       const allowedKeys = new Set([
         'enabled', 'searchWindowStart', 'searchWindowEnd', 'targetSlotCount',
@@ -8851,6 +9209,34 @@ export function createApiRoutes(ctx) {
 
     if (url.pathname === '/api/control/resume' && req.method === 'POST') {
       const { status, ...payload } = await setEmergencyStop(ctx, { on: false, actor: actorContext(req) });
+      return json(res, status, payload);
+    }
+
+    // --- M14b Feldtest: Abregelung testen (X min) ------------------------
+    // „Negativpreis-" bzw. „Direktvermarkter-Abregelung testen" über GENAU den
+    // echten Ernstfallpfad (priceNegative / setForcedOff) mit selbst-ablaufendem
+    // Lease. Kernlogik in services/curtailment-test.js. GET liefert Status +
+    // 1-s-Protokoll; der STOP-Endpunkt bricht früher ab (das Lease liefe sonst ab).
+    if (url.pathname === '/api/control/curtailment-test' && req.method === 'GET') {
+      if (!ctx.curtailmentTest) return json(res, 503, { ok: false, error: 'curtailment test not available' });
+      const { status, ...payload } = ctx.curtailmentTest.getStatus();
+      return json(res, status, payload);
+    }
+    if (url.pathname === '/api/control/curtailment-test' && req.method === 'POST') {
+      if (!ctx.curtailmentTest) return json(res, 503, { ok: false, error: 'curtailment test not available' });
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      const { status, ...payload } = ctx.curtailmentTest.start({
+        mode: String(body.mode || ''),
+        minutes: Number(body.minutes),
+        blockCharge: body.blockCharge === true,
+        actor: actorContext(req),
+      });
+      return json(res, status, payload);
+    }
+    if (url.pathname === '/api/control/curtailment-test/stop' && req.method === 'POST') {
+      if (!ctx.curtailmentTest) return json(res, 503, { ok: false, error: 'curtailment test not available' });
+      const { status, ...payload } = ctx.curtailmentTest.stop({ actor: actorContext(req) });
       return json(res, status, payload);
     }
 

@@ -23,6 +23,7 @@ import { createMypvClient } from './mypv.js';
 import { loadSchedulableDevices } from './schedulable.js';
 import { localDate } from '../../tz-fast.js';
 import { isReadOnlyMode } from '../../read-only-guard.js';
+import { pickMonoNow, monoStampAge } from '../mono-clock.js';
 
 export const MYPV_DEFAULTS = Object.freeze({
   exportReserveW: 1000,
@@ -124,8 +125,12 @@ export function carStateFromCharger(st) {
  * @param {(id:string)=>number|null} [deps.getCapW]  Netzanschluss-Grenze je Gerät (W), null = frei
  * @param {(endpoint:object)=>object} [deps.createClient]
  * @param {()=>number} [deps.now]
+ * @param {()=>number} [deps.monoNow]  monotone Uhr für Takt, Wartezeiten, Energie-dt und Messwert-Alter (A26)
  */
-export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getCharger = () => null, getCapW = () => null, createClient = createMypvClient, now = () => Date.now() }) {
+export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getCharger = () => null, getCapW = () => null, createClient = createMypvClient, now: nowArg = null, monoNow: monoNowArg = null }) {
+  const now = nowArg || (() => Date.now());
+  // A26: Abstände monoton (eingespielte Uhr in Tests misst sie wie bisher); lastTickMs bleibt Systemzeit für die Anzeige.
+  const mono = pickMonoNow(monoNowArg, nowArg);
   const clients = new Map();     // deviceId → { key, client }
   const devices = new Map();     // deviceId → Laufzeit { setpoint, measured, reason, car, lastTickMs, error }
   let timer = null;
@@ -142,7 +147,7 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
   }
 
   function runtime(id) {
-    if (!devices.has(id)) devices.set(id, { setpoint: 0, measured: null, reason: 'Start', car: null, carSince: null, lastTickMs: 0, error: null, surplusW: 0 });
+    if (!devices.has(id)) devices.set(id, { setpoint: 0, measured: null, reason: 'Start', car: null, carSince: null, lastTickMs: 0, lastTickMono: null, lastReadMono: null, error: null, surplusW: 0 });
     return devices.get(id);
   }
 
@@ -160,18 +165,21 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
     const stamps = v.fieldUpdatedAt || {};
     const meterAt = Number(state?.meter?.updatedAt) || Number(stamps.gridTotalW) || 0;
     const t = now();
+    // A26: Alter monoton aus der Erzeuger-Marke (Poller, A24), ohne Marke Wanduhr.
+    const meterMonoAge = Number(state?.meter?.updatedAt) > 0 ? monoStampAge(state.meter, 'updatedAt', mono) : monoStampAge(stamps, 'gridTotalW', mono);
     return {
       exportW: Number(v.gridExportW) || 0,
       importW: Number(v.gridImportW) || 0,
       dischargeW: Number(v.batteryDischargeW) || (Number(v.batteryPowerW) < 0 ? -Number(v.batteryPowerW) : 0),
       socPct: Number.isFinite(Number(v.soc)) ? Number(v.soc) : null,
-      dataAgeMs: state?.meter?.ok === false ? null : (meterAt > 0 ? t - meterAt : null)
+      dataAgeMs: state?.meter?.ok === false ? null : (meterAt > 0 ? (meterMonoAge ?? (t - meterAt)) : null)
     };
   }
 
   async function tickDevice(dev, base) {
     const rt = runtime(dev.id);
     const t = now();
+    const m = mono();
     const client = clientFor(dev);
     let measured = null;
     try {
@@ -183,14 +191,14 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
     }
     // Auto-Zustand mit Zeitstempel des Wechsels (Wartezeit/Zeitlimit).
     const car = carStateFromCharger(getCharger());
-    if (car && car.state !== rt.car) { rt.car = car.state; rt.carSince = t; }
+    if (car && car.state !== rt.car) { rt.car = car.state; rt.carSince = m; }
     if (!car) { rt.car = null; rt.carSince = null; }
     const decision = decideMypvSetpoint(dev.plan, {
       ...base,
       heaterPowerW: measured ? measured.powerW : rt.setpoint,
       deviceOff: measured ? measured.deviceOn === false : false,
       car: rt.car ? { state: rt.car, sinceMs: rt.carSince } : null
-    }, rt.setpoint, t);
+    }, rt.setpoint, m); // Wartezeit des Autos monoton (carSince und m aus derselben Uhr)
     // Netzanschluss (services/grid-connection): Grenze des Wächters, W oder null.
     let cap;
     try { cap = getCapW(dev.id); } catch { cap = null; }
@@ -200,7 +208,7 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
       decision.reason = capW === 0 ? 'Netzanschluss an der Grenze — Heizstab aus' : `Netzanschluss an der Grenze — höchstens ${capW} W`;
     }
     if (decision.reason !== rt.reason) pushLog('mypv_regulator', { id: dev.id, powerW: decision.powerW, reason: decision.reason });
-    trackEnergy(dev.id, measured ? measured.powerW : rt.setpoint, t, rt.lastTickMs ? t - rt.lastTickMs : 0);
+    trackEnergy(dev.id, measured ? measured.powerW : rt.setpoint, t, rt.lastTickMono != null ? m - rt.lastTickMono : 0);
     // Not-Halt kann mitten im Takt kommen: dann nichts mehr schreiben.
     if (state?.ctrl?.discretionaryWritesPaused === true) return;
     try {
@@ -222,6 +230,7 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
     rt.surplusW = Math.round(decision.surplusW || 0);
     rt.blockedByCar = decision.blockedByCar;
     rt.lastTickMs = t;
+    rt.lastTickMono = m;
   }
 
   // Nur lesen (Not-Halt): Messwerte und Fehler, kein Befehl.
@@ -229,8 +238,8 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
     const rt = runtime(dev.id);
     const t = now();
     const intervalMs = Number(dev.plan?.intervalS || MYPV_DEFAULTS.intervalS) * 1000;
-    if (rt.lastReadMs && t - rt.lastReadMs < intervalMs - 200) return;
-    rt.lastReadMs = t;
+    if (rt.lastReadMono != null && mono() - rt.lastReadMono < intervalMs - 200) return;
+    rt.lastReadMono = mono();
     try {
       const measured = await clientFor(dev).read();
       rt.measured = { ...measured, at: t };
@@ -276,7 +285,7 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
       for (const dev of mine) {
         const rt = runtime(dev.id);
         const intervalMs = Number(dev.plan?.intervalS || MYPV_DEFAULTS.intervalS) * 1000;
-        if (rt.lastTickMs && now() - rt.lastTickMs < intervalMs - 200) continue;
+        if (rt.lastTickMono != null && mono() - rt.lastTickMono < intervalMs - 200) continue;
         await tickDevice(dev, base);
       }
     } catch (e) {

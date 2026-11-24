@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createInstallerPortalClient, isAllowedPortalUrl, buildCompactStatus, buildControlsSummary, SIDECAR_NAME, RELEASE_PENDING_NAME, buildLicenseInfo, nextReportDay } from '../services/installer-portal-client.js';
+import { createInstallerPortalClient, isAllowedPortalUrl, buildCompactStatus, redactPortalResult, buildControlsSummary, SIDECAR_NAME, RELEASE_PENDING_NAME, buildLicenseInfo, nextReportDay } from '../services/installer-portal-client.js';
 
 function tmpDir(withApplianceId = true) {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-ipc-'));
@@ -231,6 +231,50 @@ test('buildCompactStatus extrahiert die Portal-Felder aus dem Runtime-Snapshot',
   assert.equal(s.version, 'v1.0.6');
   assert.equal(s.alarmsActive, 0);   // alarms: null → konfiguriert=false
   assert.equal(s.emergencyStop, false);
+});
+
+// Portal 19.11.: „Netz-Sollwert –“ bei Sungrow und DVhub-MQTT — beide melden keinen Sollwert zurück
+// (victron.gridSetpointW null). Dann den Wert zeigen, den DVhub zuletzt gesendet hat, und die Quelle mitgeben.
+test('buildCompactStatus: ohne Rückmeldung vom Gerät der zuletzt gesendete Netz-Sollwert/Min-SoC (Quelle dvhub)', () => {
+  const dir = tmpDir();
+  const ctx = ctxFor(dir);
+  ctx.getCachedRuntimeStatusPayload = () => ({
+    victron: { soc: 8, gridSetpointW: null, minSocPct: null, alarms: null },
+    schedule: { lastWrite: { gridSetpointW: { value: -40, source: 'default', at: 1 }, minSocPct: { value: 12, at: 1 } } },
+  });
+  const s = buildCompactStatus(ctx, Date.now());
+  assert.equal(s.gridSetpointW, -40);
+  assert.equal(s.gridSetpointSource, 'dvhub');
+  assert.equal(s.minSocPct, 12);
+  assert.equal(s.minSocSource, 'dvhub');
+});
+
+test('buildCompactStatus: Rückmeldung vom Gerät hat Vorrang; ohne beides bleibt es null', () => {
+  const dir = tmpDir();
+  const ctx = ctxFor(dir);
+  ctx.getCachedRuntimeStatusPayload = () => ({
+    victron: { gridSetpointW: 50, minSocPct: 20, alarms: null },
+    schedule: { lastWrite: { gridSetpointW: { value: -40 }, minSocPct: { value: 12 } } },
+  });
+  let s = buildCompactStatus(ctx, Date.now());
+  assert.equal(s.gridSetpointW, 50);
+  assert.equal(s.gridSetpointSource, 'device');
+  assert.equal(s.minSocPct, 20);
+  assert.equal(s.minSocSource, 'device');
+  ctx.getCachedRuntimeStatusPayload = () => ({ victron: { alarms: null }, schedule: { lastWrite: { gridSetpointW: null } } });
+  s = buildCompactStatus(ctx, Date.now());
+  assert.equal(s.gridSetpointW, null);
+  assert.equal(s.gridSetpointSource, null);
+  assert.equal(s.minSocPct, null);
+  assert.equal(s.minSocSource, null);
+});
+
+// Portal 19.11.: Befehls-Ergebnisse (Fern-Support-Status) trugen das UI-Token der Box ins Portal.
+test('redactPortalResult entfernt uiToken (auch verschachtelt), sonst unverändert', () => {
+  const r = redactPortalResult({ ok: true, uiToken: 'a', status: { open: true, uiToken: 'b', list: [{ uiToken: 'c', x: 1 }] } });
+  assert.deepEqual(r, { ok: true, status: { open: true, list: [{ x: 1 }] } });
+  assert.equal(redactPortalResult(null), null);
+  assert.equal(redactPortalResult('text'), 'text');
 });
 
 test('Steuerungen fürs Portal: DV, §51, Einspeisegrenze, §14a, EEBUS', () => {
@@ -771,4 +815,406 @@ test('Kopplungsdatei mit Geräteschlüssel ist nur für DVhub lesbar (0600)', as
   const client = createInstallerPortalClient(ctxFor(dir), { fetchImpl: portal.fetchImpl });
   await client.claim({ portalUrl: 'https://portal.example.de', pairingCode: '123456' });
   assert.equal(fs.statSync(path.join(dir, SIDECAR_NAME)).mode & 0o777, 0o600);
+});
+
+// ── Portal-Steuerungs-Report: Provider, Netzzähler, Steuermodus, Topologie ────
+// (Christin 2026-11-14) Bei jeder Portal-Verbindung meldet die Anlage, WIE sie
+// angesteuert wird: ausgewählter Provider, genutzter Netzzähler, Steuermodus und
+// — bei mehreren Wechselrichtern — Topologie + Aufteilung. Universell für alle
+// Hersteller, nie Geheimnisse (keine Hosts/IPs/Tokens/Passwörter).
+
+test('controls: Victron — Provider, Profil-Zähler, ESS-Setpoint, Einzelgerät', () => {
+  const ctx = {
+    getCfg: () => ({
+      manufacturer: 'victron',
+      victron: { host: '203.0.113.60' },
+      meter: { fc: 4, address: 820, quantity: 3 },        // Profil-Zählerblock
+      meterSource: { mode: 'profile', label: '' },
+      controlWrite: { gridSetpointW: { enabled: true } },
+      dvControl: { enabled: true },
+    }),
+    state: { ctrl: {} },
+  };
+  const c = buildControlsSummary(ctx, { victron: { gridSetpointW: -2500, soc: 55 }, meter: { ok: true } });
+  assert.deepEqual(c.provider, { id: 'victron', label: 'Victron' });
+  assert.equal(c.gridMeter.source, 'profile');
+  assert.equal(c.gridMeter.mode, 'profile');
+  assert.equal(c.gridMeter.externalConfigured, false);
+  assert.equal(c.gridMeter.live, true);
+  assert.equal(c.controlMode.kind, 'ess-setpoint');
+  assert.equal(c.controlMode.writes, true);
+  assert.equal(c.controlMode.paused, false);
+  assert.equal(c.controlMode.detail.gridSetpointW, -2500);
+  assert.equal(c.topology.multiDevice, false);
+  assert.equal(c.topology.kind, 'single');
+  assert.equal(c.topology.deviceCount, 1);
+  assert.ok(!JSON.stringify(c).includes('203.0.113.60'), 'kein Host im Report');
+});
+
+test('controls: Sungrow — External EMS (Modus 3), Smart-Meter, Zwei-WR-Split', () => {
+  const ctx = {
+    getCfg: () => ({
+      manufacturer: 'sungrow',
+      victron: { host: '203.0.113.84' },
+      meter: { fc: 4, address: 5000 },
+      meterSource: { mode: 'profile' },
+      controlWrite: { gridSetpointW: { enabled: true, emulate: 'sungrow-ems' } },
+      dvControl: { enabled: true },
+      sungrow: {
+        controlMode: 'external', heartbeatTimeoutS: 30,
+        secondInverter: {
+          host: '203.0.113.83', strategyCharge: 'soc-balance', strategyDischarge: 'by-power',
+          ratioMasterPct: 60, batteryCapacityWh: 9600, maxChargeW: 5000, maxDischargeW: 5000, pvKwp: 8.2,
+        },
+      },
+    }),
+    state: { ctrl: { sungrowEms: {
+      controlMode: 'external', owns: true, heartbeatSupported: true, heartbeatTimeoutS: 30,
+      decision: { split: { masterW: 3000, slaveW: 2000, strategy: 'soc-balance' } },
+    } } },
+  };
+  const payload = { victron: {
+    soc: 50, batteryPowerW: 5000, pvTotalW: 9000,
+    sungrowMasterSocPct: 48, sungrowMasterBatteryW: 3000, sungrowMasterPvW: 5000,
+    sungrowSecond: {
+      online: true, aggregate: true, strategyCharge: 'soc-balance', strategyDischarge: 'by-power',
+      socPct: 52, batteryPowerW: 2000, pvPowerW: 4000, bdcRatedW: 5000, runningStateText: 'Betrieb',
+    },
+  }, meter: { ok: true } };
+  const c = buildControlsSummary(ctx, payload);
+  assert.deepEqual(c.provider, { id: 'sungrow', label: 'Sungrow SH Hybrid' });
+  assert.equal(c.gridMeter.source, 'profile');
+  assert.equal(c.controlMode.kind, 'sungrow-ems');
+  assert.equal(c.controlMode.detail.mode, 'external');
+  assert.equal(c.controlMode.detail.emsModeValue, 3);
+  assert.equal(c.controlMode.detail.owns, true);
+  assert.equal(c.controlMode.detail.heartbeatSupported, true);
+  assert.equal(c.controlMode.writes, true);
+  assert.equal(c.topology.multiDevice, true);
+  assert.equal(c.topology.kind, 'sungrow-dual');
+  assert.equal(c.topology.deviceCount, 2);
+  assert.equal(c.topology.split.active, true);
+  assert.equal(c.topology.split.blocked, false);
+  assert.equal(c.topology.split.strategyActive, 'soc-balance');
+  assert.equal(c.topology.split.masterW, 3000);
+  assert.equal(c.topology.split.slaveW, 2000);
+  assert.equal(c.topology.split.ratioMasterPct, 60);
+  const master = c.topology.devices.find((d) => d.role === 'master');
+  const slave = c.topology.devices.find((d) => d.role === 'slave');
+  assert.equal(master.socPct, 48);
+  assert.equal(master.controlled, true);
+  assert.equal(slave.online, true);
+  assert.equal(slave.socPct, 52);
+  assert.equal(slave.batteryPowerW, 2000);
+  assert.equal(slave.capacityWh, 9600);
+  assert.equal(slave.maxChargeW, 5000);
+  assert.equal(slave.pvKwp, 8.2);
+  assert.equal(slave.ratedW, 5000);
+  const blob = JSON.stringify(c);
+  assert.ok(!blob.includes('203.0.113.83') && !blob.includes('203.0.113.84'), 'keine WR-Hosts im Report');
+});
+
+test('controls: Sungrow Zwei-WR — Slave offline sperrt den Split (master-only-Rückfall)', () => {
+  const ctx = {
+    getCfg: () => ({
+      manufacturer: 'sungrow', meter: { address: 1 },
+      controlWrite: { gridSetpointW: { enabled: true, emulate: 'sungrow-ems' } },
+      dvControl: { enabled: true },
+      sungrow: { controlMode: 'forced', secondInverter: { host: '203.0.113.83', strategyCharge: 'ratio' } },
+    }),
+    state: { ctrl: { sungrowEms: { controlMode: 'forced', owns: true } } },   // keine decision.split
+  };
+  const c = buildControlsSummary(ctx, { victron: { sungrowSecond: { online: false } }, meter: { ok: true } });
+  assert.equal(c.controlMode.detail.mode, 'forced');
+  assert.equal(c.controlMode.detail.emsModeValue, 2);
+  assert.equal(c.topology.kind, 'sungrow-dual');
+  assert.equal(c.topology.multiDevice, true);
+  assert.equal(c.topology.split.active, false);
+  assert.equal(c.topology.split.blocked, true);
+});
+
+test('controls: Sungrow Zwei-WR beim Start (Slave online unbekannt) → NICHT blockiert', () => {
+  const ctx = {
+    getCfg: () => ({
+      manufacturer: 'sungrow', meter: { address: 1 },
+      controlWrite: { gridSetpointW: { enabled: true, emulate: 'sungrow-ems' } }, dvControl: { enabled: true },
+      sungrow: { controlMode: 'external', secondInverter: { host: '203.0.113.83', strategyCharge: 'soc-balance' } },
+    }),
+    state: { ctrl: { sungrowEms: { controlMode: 'external', owns: true } } },
+  };
+  // View liefert online dreiwertig: null vor der Fehlerschwelle (reason 'starting') — kein echtes Offline.
+  const c = buildControlsSummary(ctx, { victron: { sungrowSecond: { online: null, reason: 'starting' } }, meter: { ok: true } });
+  assert.equal(c.topology.kind, 'sungrow-dual');
+  assert.equal(c.topology.split.blocked, false);   // „unbekannt" darf nicht als offline gelten
+  const slave = c.topology.devices.find((d) => d.role === 'slave');
+  assert.equal(slave.online, null);
+});
+
+test('controls: Victron zweite GX (multi-gx) — Topologie + Je-Gerät-Metadaten', () => {
+  const ctx = {
+    getCfg: () => ({
+      manufacturer: 'victron', meter: { address: 820 },
+      controlWrite: { gridSetpointW: { enabled: true } }, dvControl: { enabled: true },
+      multiGx: { enabled: true, host: '203.0.113.61', batteryCapacityWh: 20000, maxChargeW: 6000, maxDischargeW: 6000, minSocPct: 10 },
+    }),
+    state: { ctrl: {}, multiGx: { enabled: true, online: true, socPct: 44, batteryPowerW: -1500, setpointW: -1500, sharePct: 50, reason: null, mainDischargeBlocked: false } },
+  };
+  const c = buildControlsSummary(ctx, { victron: { soc: 40, batteryPowerW: -3000, pvTotalW: 7000 }, meter: { ok: true } });
+  assert.equal(c.topology.kind, 'second-gx');
+  assert.equal(c.topology.multiDevice, true);
+  assert.equal(c.topology.deviceCount, 2);
+  assert.equal(c.topology.split.active, true);
+  assert.equal(c.topology.split.blocked, false);
+  const g2 = c.topology.devices.find((d) => d.role === 'second-gx');
+  assert.equal(g2.online, true);
+  assert.equal(g2.socPct, 44);
+  assert.equal(g2.setpointW, -1500);
+  assert.equal(g2.capacityWh, 20000);
+  assert.equal(g2.maxChargeW, 6000);
+  assert.equal(g2.minSocPct, 10);
+  assert.ok(!JSON.stringify(c).includes('203.0.113.61'), 'keine GX-Adresse im Report');
+});
+
+test('controls: Fronius — Akku-Regelung (Zero-Feed-in), Profil-Zähler', () => {
+  const ctx = {
+    getCfg: () => ({
+      manufacturer: 'fronius', meter: { address: 40000 }, meterSource: { mode: 'profile' },
+      controlWrite: { gridSetpointW: { enabled: false } },   // echtes Profil: kein Setpoint-Dialekt
+      // Echtes Profil: Abregelung über feedExcessDcPv (Model-124), kein AC-Pfad.
+      dvControl: { enabled: true, zeroFeedIn: { enabled: true }, feedExcessDcPv: { enabled: true }, dontFeedExcessAcPv: { enabled: false } },
+    }),
+    state: { ctrl: {} },
+  };
+  const c = buildControlsSummary(ctx, { victron: {}, meter: { ok: true } });
+  assert.equal(c.provider.label, 'Fronius GEN24');
+  assert.equal(c.gridMeter.source, 'profile');
+  assert.equal(c.controlMode.kind, 'battery-regulation');
+  assert.equal(c.controlMode.detail.zeroFeedIn, true);
+  assert.equal(c.controlMode.detail.feedExcessDcPv, true);     // der echte Abregelpfad
+  assert.equal(c.controlMode.detail.dontFeedExcessAcPv, false);
+  assert.equal(c.controlMode.writes, true);
+  assert.equal(c.controlMode.readOnly, false);
+  assert.equal(c.topology.multiDevice, false);
+});
+
+test('controls: Lese-Modus (DVHUB_READ_ONLY=1) → writes=false, readOnly=true', () => {
+  const prev = process.env.DVHUB_READ_ONLY;
+  process.env.DVHUB_READ_ONLY = '1';
+  try {
+    const ctx = {
+      getCfg: () => ({ manufacturer: 'victron', meter: { address: 1 }, controlWrite: { gridSetpointW: { enabled: true } }, dvControl: { enabled: true } }),
+      state: { ctrl: {} },
+    };
+    const c = buildControlsSummary(ctx, { victron: { gridSetpointW: -1000 }, meter: { ok: true } });
+    assert.equal(c.controlMode.kind, 'ess-setpoint');   // Modus bleibt sichtbar
+    assert.equal(c.controlMode.readOnly, true);
+    assert.equal(c.controlMode.writes, false);          // Transport sperrt alle Writes
+  } finally {
+    if (prev === undefined) delete process.env.DVHUB_READ_ONLY; else process.env.DVHUB_READ_ONLY = prev;
+  }
+});
+
+test('controls: Deye — Akku-Regelung (Work-Mode Zero-Export), dontFeedExcessAcPv aus Objekt', () => {
+  const ctx = {
+    getCfg: () => ({
+      manufacturer: 'deye-lv', meter: { address: 1 }, meterSource: { mode: 'profile' },
+      controlWrite: { gridSetpointW: { enabled: true } },
+      // dvControl-Schalter sind Objekte ({enabled, …}) — nicht nackte Booleans.
+      dvControl: { enabled: true, dontFeedExcessAcPv: { enabled: true, fc: 16 } },
+    }),
+    state: { ctrl: {} },
+  };
+  const c = buildControlsSummary(ctx, { victron: {}, meter: { ok: true } });
+  assert.equal(c.controlMode.kind, 'battery-regulation');
+  assert.equal(c.controlMode.detail.dontFeedExcessAcPv, true);   // wäre bei === true gegen Objekt fälschlich false
+  assert.equal(c.controlMode.detail.zeroFeedIn, false);
+});
+
+test('controls: bridge-mqtt — Netz über die Bridge, ESS-Setpoint, Not-Halt; keine Geheimnisse', () => {
+  const ctx = {
+    getCfg: () => ({
+      manufacturer: 'bridge-mqtt',
+      apiToken: 'SECRET-TOKEN-123456',
+      luox: { password: 'hunter2-geheim' },
+      // Echtes Profil: transport mqtt (kein Profil-Zähler) + gridSetpointW schreibbar.
+      victron: { transport: 'mqtt' },
+      meter: { fc: 4, address: 820 },     // Default-Config seedet meter — darf NICHT zu profileMeter führen
+      meterSource: { mode: 'modbus', label: 'Netzzähler Keller', modbus: { host: '198.51.100.5' } },
+      controlWrite: { gridSetpointW: { enabled: true } },
+      dvControl: { enabled: true },
+    }),
+    state: { ctrl: { discretionaryWritesPaused: true } },
+  };
+  const c = buildControlsSummary(ctx, { victron: {}, meter: { ok: false } });
+  assert.equal(c.provider.id, 'bridge-mqtt');
+  assert.equal(c.provider.label, 'Universal (MQTT-Bridge)');
+  assert.equal(c.gridMeter.source, 'bridge');          // transport mqtt → Netz über Bridge, nicht Profil-Zähler
+  assert.equal(c.gridMeter.mode, 'modbus');            // konfigurierter Selektor (extern, noch nicht aktiv)
+  assert.equal(c.gridMeter.externalConfigured, true);
+  assert.equal(c.gridMeter.label, 'Netzzähler Keller');
+  assert.equal(c.gridMeter.live, false);
+  assert.equal(c.controlMode.kind, 'ess-setpoint');     // gridSetpointW schreibbar
+  assert.equal(c.controlMode.writes, false);            // Not-Halt
+  assert.equal(c.controlMode.paused, true);
+  assert.equal(c.topology.multiDevice, false);
+  const blob = JSON.stringify(c);
+  for (const secret of ['SECRET-TOKEN-123456', 'hunter2-geheim', '198.51.100.5']) {
+    assert.ok(!blob.includes(secret), `kein Geheimnis im Report: ${secret}`);
+  }
+});
+
+test('controls: reine Telemetrie (nichts schreibbar) → read-only, writes=false', () => {
+  const ctx = {
+    getCfg: () => ({ manufacturer: 'generic-telemetry', controlWrite: {}, dvControl: { enabled: true } }),
+    state: { ctrl: {} },
+  };
+  const c = buildControlsSummary(ctx, { victron: {}, meter: { ok: true } });
+  assert.equal(c.controlMode.kind, 'read-only');
+  assert.equal(c.controlMode.writes, false);
+  assert.equal(c.controlMode.paused, false);
+});
+
+test('controls: Sungrow — fremdes EMS steuert (foreign aus der Fehlermeldung, nicht .code)', () => {
+  const ctx = {
+    getCfg: () => ({
+      manufacturer: 'sungrow', meter: { address: 1 },
+      controlWrite: { gridSetpointW: { enabled: true, emulate: 'sungrow-ems' } }, dvControl: { enabled: true },
+      sungrow: { controlMode: 'external' },
+    }),
+    // So speichert der Dienst den Fehler: st.error = e.message = 'sungrow_foreign_ems_mode' (err.code wäre 'foreign_ems_mode').
+    state: { ctrl: { sungrowEms: { controlMode: 'external', owns: false, error: 'sungrow_foreign_ems_mode' } } },
+  };
+  const c = buildControlsSummary(ctx, { victron: {}, meter: { ok: true } });
+  assert.equal(c.controlMode.kind, 'sungrow-ems');
+  assert.equal(c.controlMode.detail.foreign, true);
+  assert.equal(c.controlMode.detail.owns, false);
+  assert.equal(c.controlMode.writes, false);   // fremdes EMS → DVhub schreibt nichts
+});
+
+test('controls: Fronius mit dvControl.enabled=false → battery-regulation, writes=false', () => {
+  const ctx = {
+    getCfg: () => ({
+      manufacturer: 'fronius', meter: { address: 1 },
+      controlWrite: { gridSetpointW: { enabled: false } },
+      dvControl: { enabled: false, zeroFeedIn: { enabled: true } },   // EEG-Festtarif schaltet dvControl aus
+    }),
+    state: { ctrl: {} },
+  };
+  const c = buildControlsSummary(ctx, { victron: {}, meter: { ok: true } });
+  assert.equal(c.controlMode.kind, 'battery-regulation');
+  assert.equal(c.controlMode.dvControl, false);
+  assert.equal(c.controlMode.writes, false);   // ohne dvControl.enabled keine Akku-Regelung
+});
+
+test('controls: Sungrow Zwei-WR im Not-Halt — Split NICHT aktiv, keiner gesteuert', () => {
+  const ctx = {
+    getCfg: () => ({
+      manufacturer: 'sungrow', meter: { address: 1 },
+      controlWrite: { gridSetpointW: { enabled: true, emulate: 'sungrow-ems' } }, dvControl: { enabled: true },
+      sungrow: { controlMode: 'external', secondInverter: { host: '203.0.113.83', strategyCharge: 'soc-balance' } },
+    }),
+    // Not-Halt aktiv; der zuletzt geschriebene Split bleibt im State klebrig stehen.
+    state: { ctrl: { discretionaryWritesPaused: true, sungrowEms: {
+      controlMode: 'external', owns: true,
+      decision: { split: { masterW: 3000, slaveW: 2000, strategy: 'soc-balance' } } } } },
+  };
+  const c = buildControlsSummary(ctx, { victron: { sungrowSecond: { online: true, socPct: 55 } }, meter: { ok: true } });
+  assert.equal(c.controlMode.writes, false);
+  assert.equal(c.controlMode.paused, true);
+  assert.equal(c.topology.split.active, false);   // trotz klebrigem decision.split
+  const master = c.topology.devices.find((d) => d.role === 'master');
+  const slave = c.topology.devices.find((d) => d.role === 'slave');
+  assert.equal(master.controlled, false);
+  assert.equal(slave.controlled, false);
+});
+
+test('controls: zweite GX — Not-Halt/Startup/Beta-Sperre/adresslos korrekt unterschieden', () => {
+  const base = {
+    manufacturer: 'victron', meter: { address: 1 },
+    controlWrite: { gridSetpointW: { enabled: true } }, dvControl: { enabled: true },
+    multiGx: { enabled: true, host: '203.0.113.61', batteryCapacityWh: 20000 },
+  };
+  const run = (state) => buildControlsSummary({ getCfg: () => base, state }, { victron: { soc: 40 }, meter: { ok: true } });
+  // (a) Not-Halt: Dienst läuft, setpointW null, online true → zweite GX, aber nicht aktiv.
+  const paused = run({ ctrl: { discretionaryWritesPaused: true }, multiGx: { enabled: true, online: true, setpointW: null, reason: 'ok' } });
+  assert.equal(paused.topology.kind, 'second-gx');
+  assert.equal(paused.topology.split.active, false);
+  assert.equal(paused.topology.split.blocked, false);
+  // (b) Startup: online schon false, aber reason 'starting' → NICHT als blockiert melden.
+  const starting = run({ ctrl: {}, multiGx: { enabled: true, online: false, reason: 'starting', setpointW: null } });
+  assert.equal(starting.topology.kind, 'second-gx');
+  assert.equal(starting.topology.split.blocked, false);
+  // (c) Wirklich offline: reason 'follower_offline' → blockiert.
+  const off = run({ ctrl: {}, multiGx: { enabled: true, online: false, reason: 'follower_offline', setpointW: null } });
+  assert.equal(off.topology.split.blocked, true);
+  // (d) Beta-Sperre zu: Dienst schreibt enabled:false → KEINE zweite GX.
+  const gated = run({ ctrl: {}, multiGx: { enabled: false, online: null, reason: 'disabled' } });
+  assert.equal(gated.topology.kind, 'single');
+  // (e) Adresslos: Dienst meldet enabled:true, reason 'not_configured' (host leer) → KEINE zweite GX (Phantom vermeiden).
+  const noHost = buildControlsSummary(
+    { getCfg: () => ({ ...base, multiGx: { ...base.multiGx, host: '' } }), state: { ctrl: {}, multiGx: { enabled: true, online: null, reason: 'not_configured' } } },
+    { victron: { soc: 40 }, meter: { ok: true } });
+  assert.equal(noHost.topology.kind, 'single');
+  // (f) Split-Prozess: state.multiGx fehlt → Dienststatus unbekannt → Einzelgerät (bekannte Lücke).
+  const worker = run({ ctrl: {} });
+  assert.equal(worker.topology.kind, 'single');
+});
+
+test('controls: entfernter zweiter Sungrow-WR (Adresse gelöscht) → Einzelgerät trotz klebrigem Runtime', () => {
+  const ctx = {
+    getCfg: () => ({
+      manufacturer: 'sungrow', meter: { address: 1 },
+      controlWrite: { gridSetpointW: { enabled: true, emulate: 'sungrow-ems' } }, dvControl: { enabled: true },
+      sungrow: { controlMode: 'external', secondInverter: { host: '' } },   // Adresse entfernt
+    }),
+    state: { ctrl: { sungrowEms: { controlMode: 'external', owns: true } } },
+  };
+  // Runtime-sungrowSecond steht noch mit alten Werten (klebrig) — darf NICHT zu sungrow-dual führen.
+  const c = buildControlsSummary(ctx, { victron: { sungrowSecond: { online: true, socPct: 60 } }, meter: { ok: true } });
+  assert.equal(c.topology.kind, 'single');
+  assert.equal(c.topology.multiDevice, false);
+});
+
+test('controls: Herstellerwechsel zu Victron — liegengebliebener Sungrow-WR verdeckt NICHT die zweite GX', () => {
+  const ctx = {
+    getCfg: () => ({
+      manufacturer: 'victron',                   // zurück auf Victron
+      meter: { address: 820 },
+      controlWrite: { gridSetpointW: { enabled: true } }, dvControl: { enabled: true },
+      // sungrow.* bleibt beim Wechsel in der config.json stehen (nicht herstellergebunden):
+      sungrow: { controlMode: 'external', secondInverter: { host: '203.0.113.83', strategyCharge: 'soc-balance' } },
+      multiGx: { enabled: true, host: '203.0.113.61', batteryCapacityWh: 20000 },
+    }),
+    state: { ctrl: { sungrowEms: { decision: { split: { masterW: 1, slaveW: 1, strategy: 'soc-balance' } } } },
+      multiGx: { enabled: true, online: true, socPct: 44, setpointW: -1500, reason: 'ok' } },
+  };
+  const c = buildControlsSummary(ctx, { victron: { soc: 40, sungrowSecond: { online: true, socPct: 60 } }, meter: { ok: true } });
+  assert.equal(c.topology.kind, 'second-gx');   // echte zweite GX, nicht der Sungrow-Altbestand
+  assert.equal(c.topology.split.active, true);
+});
+
+test('controls: Sungrow master-only — Slave läuft im Eigenverbrauch, gilt nicht als gesteuert', () => {
+  const ctx = {
+    getCfg: () => ({
+      manufacturer: 'sungrow', meter: { address: 1 },
+      controlWrite: { gridSetpointW: { enabled: true, emulate: 'sungrow-ems' } }, dvControl: { enabled: true },
+      // ratioMasterPct NICHT gesetzt → wirksamer Wert ist der Laufzeit-Default 50.
+      sungrow: { controlMode: 'external', secondInverter: { host: '203.0.113.83', strategyCharge: 'master-only' } },
+    }),
+    state: { ctrl: { sungrowEms: { controlMode: 'external', owns: true,
+      decision: { split: { masterW: 4000, slaveW: 0, strategy: 'master-only' } } } } },
+  };
+  const c = buildControlsSummary(ctx, { victron: { sungrowSecond: { online: true, socPct: 60, strategyCharge: 'master-only' } }, meter: { ok: true } });
+  assert.equal(c.topology.split.strategyActive, 'master-only');
+  assert.equal(c.topology.split.ratioMasterPct, 50);   // Default, nicht null
+  const slave = c.topology.devices.find((d) => d.role === 'slave');
+  assert.equal(slave.online, true);
+  assert.equal(slave.controlled, false);               // master-only → Slave nicht gesteuert
+});
+
+test('controls: unbekannter Hersteller fällt auf die ID zurück (universell)', () => {
+  const ctx = { getCfg: () => ({ manufacturer: 'kostal-xyz', controlWrite: {}, dvControl: {} }), state: { ctrl: {} } };
+  const c = buildControlsSummary(ctx, {});
+  assert.deepEqual(c.provider, { id: 'kostal-xyz', label: 'kostal-xyz' });
+  assert.equal(c.topology.kind, 'single');
 });
