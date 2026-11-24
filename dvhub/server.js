@@ -226,7 +226,7 @@ import { createModbusHealth } from './services/inverter/modbus-health.js';
 import { createLegacyGate } from './services/gate/legacy.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createPriceOutlookService } from './services/optimizer/price-outlook.js';
-import { createEosRemoteFacade, eosRemoteActive, readEosPin, EOS_REMOTE_FACADE_PORT } from './services/optimizer/eos-remote.js';
+import { createEosRemoteFacade, eosRemoteActive, readEosPin, readEosBuildInfo, EOS_REMOTE_FACADE_PORT } from './services/optimizer/eos-remote.js';
 import { createOptimizerService } from './services/optimizer/index.js';
 import { createOptimizerRuleStore, optimizerRulesPath, readOptimizerRules, createScheduleRuleStore, scheduleRulesPath, readScheduleRules } from './services/optimizer/rule-store.js';
 import { createFamilyService } from './services/family/index.js';
@@ -2292,6 +2292,9 @@ ctx.getRawCfg = () => rawCfg;
 ctx.getLoadedConfig = () => loadedConfig;
 ctx.getConfigDefinition = () => CONFIG_DEFINITION;
 ctx.getAppVersion = () => APP_VERSION;
+// DVhub-EOS-Bauidentität (Rust-Kern + Build-Tag) für die Anzeige in /api/eos/status —
+// der rohe /v1/health-version-String ist nur Upstreams Paketnummer (0.3.0.dev…).
+ctx.eosBuildInfo = readEosBuildInfo(__dirname);
 ctx.getAppBuild = () => APP_BUILD;
 ctx.getTransportType = () => transport.type;
 ctx.getAppDir = () => __dirname;
