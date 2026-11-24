@@ -191,9 +191,13 @@ struct HistoryView: View {
         let result = await BoxData.history(controller, view: want.period, date: date)
         // Inzwischen anderer Zeitraum gewählt: Antwort verwerfen.
         guard want == key, !Task.isCancelled else { return }
+        // Tagesgrenzen nur aus der Antwort DIESES Abrufs (Tagesansicht): Scheitert er, steht in `summary` womöglich
+        // noch ein Monat/Jahr — dessen Grenzen ergäben einen riesigen Ladestand-Abruf (Codex 690e4f19).
+        var dayDomain: ClosedRange<Date>? = nil
         switch result {
         case .ok(let s):
             summary = s
+            if s.view == .day { dayDomain = s.dayDomain }
             proRequired = false
             message = s.kpis.isEmpty ? String(localized: "Für diesen Zeitraum liegen keine Werte vor.") : nil
         case .proRequired:
@@ -207,8 +211,8 @@ struct HistoryView: View {
         if want.period == .day {
             // Tag wie die Box ihn rechnet (range der Antwort), sonst der Kalendertag des Telefons (Codex Integration 24.11.).
             let fallbackStart = Calendar.current.startOfDay(for: date)
-            let start = summary?.dayDomain?.lowerBound ?? fallbackStart
-            let end = summary?.dayDomain?.upperBound ?? (Calendar.current.date(byAdding: .day, value: 1, to: fallbackStart) ?? fallbackStart)
+            let start = dayDomain?.lowerBound ?? fallbackStart
+            let end = dayDomain?.upperBound ?? (Calendar.current.date(byAdding: .day, value: 1, to: fallbackStart) ?? fallbackStart)
             if case .success(let pts) = await BoxData.series(controller, keys: [BoxData.socKey], start: start, end: end), want == key {
                 soc = pts
             } else if want == key {
