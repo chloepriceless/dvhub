@@ -20,10 +20,16 @@ public struct DemoWorld: Sendable, Equatable {
     /// am ersten Tag nicht von einer grauen Woche leer sein. Die Tage davor
     /// (Historie) tragen das übliche Wetter der Jahreszeit.
     public let brightFrom: Date?
+    /// Tagesnummer, an der die Kette der Tagesläufe beginnt (1. Januar, zwei
+    /// Jahre vor dem Start der Demo): Von dort an schließt jeder Tag mit dem
+    /// Ladestand an, mit dem der Vortag endete (DemoPlant.startSoc).
+    public let origin: Int
 
     public init(calendar: Calendar = .current, startedAt: Date? = nil) {
         self.calendar = calendar
         self.brightFrom = startedAt.map { calendar.startOfDay(for: $0.addingTimeInterval(-2 * 86_400)) }
+        let year = startedAt.map { calendar.component(.year, from: $0) } ?? 2026
+        self.origin = Self.civilDays(year: year - 2, month: 1, day: 1)
     }
 
     // MARK: Tag
@@ -47,6 +53,9 @@ public struct DemoWorld: Sendable, Equatable {
         public let noon: Double
         /// Leistung der Anlage bei wolkenlosem Himmel am Mittag (kW).
         public let clearPeakKw: Double
+        /// Zeitzone der Anlage und ihr Abstand zur Weltzeit am Tagesbeginn (Sekunden).
+        let zone: TimeZone
+        let offsetAtStart: Int
 
         public var isWeekend: Bool { weekday >= 6 }
         public var isWorkday: Bool { weekday <= 5 }
@@ -55,8 +64,26 @@ public struct DemoWorld: Sendable, Equatable {
         /// Viertelstunden des Tages (96; bei Zeitumstellung 92 oder 100).
         public var slotCount: Int { max(1, Int((end.timeIntervalSince(start) / 900).rounded())) }
 
-        /// Stunden seit Mitternacht (Uhr der Anlage läuft ohne Zeitumstellung durch den Tag).
-        public func hour(of date: Date) -> Double { date.timeIntervalSince(start) / 3600 }
+        /// Uhrzeit als Stunden seit Mitternacht — nach der Uhr an der Wand: An
+        /// Tagen mit Zeitumstellung springt sie mit (23 bzw. 25 Stunden lang).
+        public func hour(of date: Date) -> Double {
+            let elapsed = date.timeIntervalSince(start)
+            guard end.timeIntervalSince(start) != 86_400 else { return elapsed / 3600 }
+            return (elapsed + Double(zone.secondsFromGMT(for: date) - offsetAtStart)) / 3600
+        }
+
+        /// Zeitpunkt zu einer Uhrzeit dieses Tages (Stunden seit Mitternacht).
+        public func date(atHour hour: Double) -> Date {
+            let plain = start.addingTimeInterval(hour * 3600)
+            guard end.timeIntervalSince(start) != 86_400 else { return plain }
+            return plain.addingTimeInterval(-Double(zone.secondsFromGMT(for: plain) - offsetAtStart))
+        }
+
+        /// „HH:MM“ nach der Uhr der Anlage (Tagesende → 00:00).
+        public func clock(of date: Date) -> String {
+            let minutes = Int((hour(of: date) * 60).rounded())
+            return String(format: "%02d:%02d", (minutes / 60) % 24, minutes % 60)
+        }
     }
 
     /// Tage seit dem 1.1.1970 nach dem bürgerlichen Kalender.
@@ -108,7 +135,8 @@ public struct DemoWorld: Sendable, Equatable {
         let dst = calendar.timeZone.daylightSavingTimeOffset(for: start.addingTimeInterval(43_200)) / 3600
         let noon = 12.35 + dst
         return Day(start: start, end: end, number: number, weekday: weekday, season: season, weather: weather, priceLevel: level,
-                   sunrise: noon - dayLength / 2, dayLength: dayLength, noon: noon, clearPeakKw: DemoPlant.kwp * (0.40 + 0.36 * season))
+                   sunrise: noon - dayLength / 2, dayLength: dayLength, noon: noon, clearPeakKw: DemoPlant.kwp * (0.40 + 0.36 * season),
+                   zone: calendar.timeZone, offsetAtStart: calendar.timeZone.secondsFromGMT(for: start))
     }
 
     public func day(after day: Day, by days: Int = 1) -> Day {
@@ -166,7 +194,7 @@ public struct DemoWorld: Sendable, Equatable {
     /// Fahrt an Werktagen von 07:00 bis 08:30; sie kostet diesen Anteil des Akkus.
     public static let evTripPct = 7.0
     public static let evBatteryKwh = 60.0
-    static let evAwayFrom = 7.0, evAwayUntil = 8.5
+    public static let evAwayFrom = 7.0, evAwayUntil = 8.5
     static let evNoonStart = 11.5, evNoonKw = 4.2, evNoonHours = 1.0
     static let evNightStart = 2.0, evNightKw = 8.4, evNightHours = 0.5
 
@@ -230,5 +258,13 @@ public struct DemoWorld: Sendable, Equatable {
     public func spotCt(at date: Date) -> Double {
         let d = day(containing: date)
         return spotCt(d, hour: d.hour(of: date))
+    }
+
+    /// „HH:MM“ eines Zeitpunkts nach der Uhr der Anlage.
+    public func clock(_ date: Date) -> String { day(containing: date).clock(of: date) }
+
+    /// Minuten seit Mitternacht nach der Uhr der Anlage.
+    public func minuteOfDay(_ date: Date) -> Int {
+        Int(day(containing: date).hour(of: date) * 60 + 1e-6)
     }
 }
