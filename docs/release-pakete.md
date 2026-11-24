@@ -363,6 +363,16 @@ Funde außerhalb der Pakete:
    `main` über dem letzten Release stehen (nach 1.0.9: 1.0.10), sonst sortiert das dev-Paket vor dem Release.
    `publish-release.sh` nimmt nur Commits an, die auf `origin/main` liegen. Zurückziehen: `index-dev.json` am
    Vorab-Release `channels` löschen — Boxen auf dev prüfen und installieren dann wieder stable (mit Hinweis).
+6. **Lokaler Worker statt Handarbeit (seit 24.11.2026)** — `scripts/release/dev-worker.sh` läuft per launchd
+   (`zone.bikini.dvhub-dev-worker`, alle 10 min) in einem eigenen Klon unter
+   `~/Library/Application Support/dvhub-dev-worker/` und macht Schritt 5 selbst: origin/main holen → schon im Release
+   `dev` und in `index-dev.json`? → CI grün (`scripts/ci-check.py`)? → Signier-Probe über den 1Password-Agenten (90 s
+   Zeitlimit) → `build-release.sh` → `publish-release.sh`. CI rot, fehlende 1Password-Freigabe und Fehler meldet er
+   einmal als macOS-Mitteilung; Protokoll `~/Library/Logs/dvhub-dev-worker.log`, Bau-Protokolle unter `runs/`.
+   Einrichten: `scripts/release/dev-worker.sh --install`; Trockenlauf: `… --dry-run [--sha REF]`; Signieren
+   anhalten: Datei `state/sign-paused` anlegen; stoppen: `launchctl bootout gui/$(id -u)/zone.bikini.dvhub-dev-worker`.
+   Grenze: 1Password fragt bei jeder Signatur aus launchd nach einer Freigabe — unbeaufsichtigt veröffentlicht der
+   Worker nur mit einem eigenen dev-Schlüssel (offene Entscheidung).
 
 ## Offene Entscheidungen
 
