@@ -33,6 +33,9 @@ struct EVView: View {
     @State private var onceSoc = 80.0
     // Wochenplan: aufgeklappte Zeile bzw. neue Abfahrt (Tag 1…7)
     @State private var editingRow: Int?
+    // Die Zeile, wie sie beim Aufklappen war: Grundlage der Konfliktprüfung beim Speichern. Ein Aktualisieren
+    // währenddessen ersetzt ev.week; derselbe Index kann dann eine andere Abfahrt sein (Codex Integration 24.11.).
+    @State private var editingOriginal: EVState.WeekRow?
     @State private var newDay: Int?
     @State private var rowTime = ClockTime.date("07:00")
     @State private var rowOwnTarget = false
@@ -456,6 +459,7 @@ struct EVView: View {
     }
 
     private func begin(_ row: EVState.WeekRow, _ ev: EVState) {
+        editingOriginal = row
         rowTime = ClockTime.date(row.departure.isEmpty ? "07:00" : row.departure)
         rowOwnTarget = row.minSocPct != nil
         rowSoc = row.minSocPct ?? (ev.defaultMinSocPct ?? 80).rounded()
@@ -526,7 +530,8 @@ struct EVView: View {
                     Task {
                         let d = rowDraft(day: theDay)
                         if let row {
-                            await saveWeek(String(localized: "Wochenplan ändern"), original: row) { _ in .update(index: row.index, d) }
+                            let original = editingOriginal ?? row
+                            await saveWeek(String(localized: "Wochenplan ändern"), original: original) { _ in .update(index: original.index, d) }
                         } else {
                             await saveWeek(String(localized: "Abfahrt anlegen"), original: nil) { _ in .add(d) }
                         }

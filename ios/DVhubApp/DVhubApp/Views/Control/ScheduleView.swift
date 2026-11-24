@@ -283,7 +283,9 @@ struct ScheduleSection: View {
             HStack(spacing: 12) {
                 Button {
                     guard let draft else { return }
-                    let change: ScheduleEdit.Change = rule.map { .update($0, draft) } ?? .add(draft)
+                    // Grundlage der Konfliktprüfung ist die Regel, wie sie beim Öffnen war — ein Aktualisieren währenddessen
+                    // ersetzt `rule`, die Änderung von außen ginge sonst still verloren (Codex Integration 24.11.).
+                    let change: ScheduleEdit.Change = rule.map { .update(opened ?? $0, draft) } ?? .add(draft)
                     Task { await saveRule(change, reason: rule == nil ? String(localized: "Regel anlegen") : String(localized: "Regel ändern")) }
                 } label: { Label("Speichern", systemImage: "checkmark") }
                     .buttonStyle(.borderedProminent)
