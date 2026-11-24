@@ -1863,8 +1863,12 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     const startMs = tsMsOf(isoTimestamp(start));
     const endMs = tsMsOf(isoTimestamp(end));
     const firstRaw = r.start_ts == null ? null : tsMsOf(r.start_ts);
+    const lastRaw = r.end_ts == null ? null : tsMsOf(r.end_ts);
     const needStart = firstRaw == null || firstRaw - startMs >= 60_000;
-    const needEnd = r.end_ts == null;
+    // Endwert: auch mit Rohwert nachsehen, ob die Stufen SPÄTERE Werte haben
+    // (verdichtet + gelöscht, dann ein spät nachgeschriebener Rohwert mittendrin,
+    // Codex 2fe0149f) — sonst wäre der Endwert der des Nachzüglers.
+    const needEnd = lastRaw == null || endMs - lastRaw >= 60_000;
     if ((!needStart && !needEnd) || Date.now() < tiersMissingUntil) return out;
     const tierEdge = (dir, untilIso) => `
       SELECT v, b FROM (
@@ -1885,7 +1889,8 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         if (t && t.v != null) out.startValue = Number(t.v);
       }
       if (needEnd) {
-        const t = (await pool.query(tierEdge('DESC', '$3'), [seriesKey, isoTimestamp(start), isoTimestamp(end)])).rows?.[0];
+        const from = lastRaw == null ? isoTimestamp(start) : new Date(lastRaw + 1).toISOString();
+        const t = (await pool.query(tierEdge('DESC', '$3'), [seriesKey, from, isoTimestamp(end)])).rows?.[0];
         if (t && t.v != null) out.endValue = Number(t.v);
       }
     } catch (e) {

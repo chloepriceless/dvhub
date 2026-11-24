@@ -79,6 +79,7 @@ export const TIER_PORTION_MS = 60 * 60_000;
 export const TIER_RUN_BUDGET_MS = 60_000;
 export const TIER_INTERVAL_MS = 5 * 60_000;
 export const TIER_FIRST_RUN_DELAY_MS = 2 * 60_000;
+const STORAGE_RETRY_MS = 60 * 60_000;
 // Höchstens so viele 15-min-Eimer aus der Nachzügler-Liste je Transaktion.
 const DIRTY_BATCH = 16;
 const STATEMENT_TIMEOUT = '120s';
@@ -96,7 +97,9 @@ const toMs = (v) => (v == null ? null : (v instanceof Date ? v.getTime() : Date.
 
 // ── Welcher Wert gilt beim Lesen? ───────────────────────────────────────────
 const LAST_UNITS = new Set(['wh', 'kwh', 'mwh']);
-const LAST_KEY_RE = /(_wh|_kwh|_mwh|_count|_counter|_mode|_state|_status|_since|_id)$/i;
+// Codex 2fe0149f: TeslaMate schreibt ohne Einheit — Ladezähler (…_added) und
+// Ja/Nein-Zustände (plugged_in) zählen sonst als Mittelwert (0 → 1 würde 0,5).
+const LAST_KEY_RE = /(_wh|_kwh|_mwh|_count|_counter|_mode|_state|_status|_since|_id|_added|plugged_in)$/i;
 /** 'last' für Zählerstände/Energie-Summen und Zustände, sonst 'avg'. */
 export function tierValueKind(seriesKey, unit) {
   if (LAST_UNITS.has(String(unit ?? '').trim().toLowerCase())) return 'last';
@@ -365,6 +368,7 @@ export function createTelemetryTiers({
   let running = false;
   let last = null;
   let storage = null;
+  let storageAt = 0;
   let timer = null;
   const log = (e, d, lvl) => { try { pushLog?.(e, d, lvl); } catch { /* egal */ } };
 
@@ -472,8 +476,13 @@ export function createTelemetryTiers({
     try {
       const db = getDb?.();
       if (!db || typeof db.query !== 'function') return last;
-      if (!storage) {
+      // Einrichtung (Hypertable/Kompression) erneut versuchen, solange sie einen
+      // Fehler meldet — höchstens einmal je Stunde (Codex 2fe0149f: ein kurzer
+      // Sperr-Timeout ließ eine Stufe sonst bis zum Neustart unkomprimiert).
+      const storageFailed = storage && Object.values(storage.tables || {}).some((t) => t.error);
+      if (!storage || (storageFailed && now() - storageAt >= STORAGE_RETRY_MS)) {
         storage = await ensureTierStorage(db);
+        storageAt = now();
         if (Object.values(storage.tables).some((t) => t.changed?.length || t.error || t.skipped)) log('telemetry_tiers_storage', storage);
       }
       const hypertable = await isHypertable(db, 'timeseries_samples');

@@ -61,9 +61,10 @@ export function nextKeepDays(oldestRawAgeDays) {
   return null;   // schon bei ≤ 30 Tagen — nichts mehr entfernen
 }
 
-// Gründe, bei denen gar nicht komprimiert werden KANN (E3 b). Nicht dabei:
-// keine/pausierte Regel, scheiternder Job, gescheitertes compress_chunk.
-export const NO_COMPRESSION_REASONS = new Set(['no_timescaledb', 'apache', 'no_hypertable', 'not_enabled']);
+// Gründe, bei denen gar nicht komprimiert werden KANN (E3 b) — nur dauerhafte.
+// Nicht dabei: „ausgeschaltet“ (tuneTimescale schaltet sie selbst ein, Codex
+// f90b8e04), keine/pausierte Regel, scheiternder Job, gescheitertes compress_chunk.
+export const NO_COMPRESSION_REASONS = new Set(['no_timescaledb', 'apache', 'no_hypertable']);
 
 const REASON_TEXT = Object.freeze({
   no_timescaledb: 'TimescaleDB ist nicht installiert',
@@ -290,12 +291,14 @@ export function createStorageGuard({
     if (stateChanged || dec.effective !== lastEffective || !before) {
       writeProfileState(dataDir, { ...dec.state, effective: dec.effective, effectiveAt: nowIso }, profileIo);
     }
-    if (dec.effective !== lastEffective) {
+    const switched = dec.effective !== lastEffective;
+    if (switched) {
       log('storage_profile', { from: lastEffective, to: dec.effective, base: dec.base, temporary: dec.temporary, reason: dec.reason }, 'warn');
       const prevName = lastEffective;
       lastEffective = dec.effective;
       try { await onProfileChange?.(PROFILES[dec.effective], { from: prevName, ...profileView() }); } catch (e) { logGuardError(e); }
     }
+    return switched;
   }
 
   function profileView() {
@@ -407,7 +410,17 @@ export function createStorageGuard({
           // Ohne Probe (Fehler) wie früher an der Erweiterung festmachen.
           const ts = probe ? probe.timescale
             : (await db.query("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'")).rows?.length > 0;
-          if (!dbUnmeasured) { try { await decide(db, { totalMb, level, dataDir }); } catch (e) { logGuardError(e); } }
+          if (!dbUnmeasured) {
+            try {
+              // Nach einem Profilwechsel (DB-Regeln neu eingestellt, z. B. Kompression
+              // eingeschaltet) erst neu prüfen und neu entscheiden — sonst löscht die
+              // Aufbewahrung nach einem Stand, der schon nicht mehr gilt (Codex f90b8e04).
+              if (await decide(db, { totalMb, level, dataDir })) {
+                probe = (await evaluateCompression(db)) || probe;
+                await decide(db, { totalMb, level, dataDir });
+              }
+            } catch (e) { logGuardError(e); }
+          }
           if (level !== 'ok' && level !== 'unbekannt') {
             // Komprimieren nur, wo es geht (Community + eingeschaltet); ein Fehler
             // hält Löschstufe und Hinweis nicht mehr auf (Apache: compress_chunk wirft).

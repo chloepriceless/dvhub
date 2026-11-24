@@ -201,7 +201,7 @@ test('Ohne Kompression bei genug Platz: roter Hinweis trotzdem, nichts gelöscht
     assert.ok(!r.actions.some((a) => a.action === 'drop_raw'), 'kein Notfall-Löschen');
     // E3 b (Christin 24.11.): kann gar nicht komprimiert werden → mindestens „winzig“
     // (Rohwerte 30 Tage, 1-min 90 Tage); sonst bleibt das Profil.
-    const cannot = !(opts.policies === 0 || opts.failing);
+    const cannot = opts.ts === false || opts.license === 'apache' || opts.hypertable === false;   // dauerhaft (Codex f90b8e04)
     assert.equal(r.profile.effective, cannot ? 'winzig' : 'gross', JSON.stringify(opts));
     if (!cannot) assert.ok(!db.calls.some(([s]) => /drop_chunks|DELETE/.test(s)));
   }
@@ -478,4 +478,19 @@ test('1-min-Stufe je Profil: groß nie, klein 365, winzig 180, ohne Kompression 
     assert.equal(new Date(q[1][0]).toISOString(), new Date(Math.floor((NOW - keep * 86_400_000) / 900_000) * 900_000).toISOString());
     void r;
   }
+});
+
+// Codex f90b8e04 (P1): Profilwechsel stellt die DB um (Kompression wieder an) → vor dem Löschen neu prüfen.
+test('Nach dem Profilwechsel neu prüfen: Kompression wieder da → kein Löschen nach „winzig“', async () => {
+  let lic = 'apache';
+  const db = fakeDb({ oldestDays: 500, aggUntil: '2026-11-20T00:00:00Z' });
+  const orig = db.query.bind(db);
+  db.query = async (sql, p) => (sql.includes("current_setting('timescaledb.license'") ? { rows: [{ lic }] } : orig(sql, p));
+  const changes = [];
+  const r = await createStorageGuard({ getDb: () => db, statfs: stat(60),
+    onProfileChange: (p) => { changes.push(p.name); lic = 'timescale'; } }).check();
+  assert.deepEqual(changes, ['winzig', 'gross'], 'gleich wieder zurück');
+  assert.equal(r.profile.effective, 'gross');
+  assert.ok(!r.actions.some((a) => /retain/.test(a.action)), JSON.stringify(r.actions));
+  assert.ok(!db.calls.some(([s]) => /drop_chunks|DELETE/.test(s)));
 });

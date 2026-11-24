@@ -187,3 +187,56 @@ test('Store-Rückfall: fehlt die Stufen-Tabelle, bleibt die Roh-Antwort und es w
   await store.querySeries(q);
   assert.equal(tierQueries, 1, 'gemerkt: Tabelle fehlt');
 });
+
+// Codex 2fe0149f: TeslaMate schreibt ohne Einheit — Ladezähler und Ja/Nein-Zustände als letzter Wert.
+test('tierValueKind: tesla_charge_energy_added und tesla_plugged_in ohne Einheit → letzter Wert', () => {
+  assert.equal(tierValueKind('tesla_charge_energy_added', null), 'last');
+  assert.equal(tierValueKind('tesla_plugged_in', null), 'last');
+  assert.equal(tierValueKind('tesla_charger_power', null), 'avg');
+});
+
+// Codex 2fe0149f: gescheiterte Einrichtung (Sperr-Timeout) wird wiederholt — höchstens stündlich.
+test('ensureTierStorage: Fehler wird nach einer Stunde erneut versucht', async () => {
+  let t = Date.parse('2026-11-24T03:00:00Z'); let fail = true; let creates = 0;
+  const db = {
+    async connect() { return { query: (sql) => db.query(sql), release() {} }; },
+    async query(sql) {
+      if (/pg_extension/.test(sql)) return { rows: [{}] };
+      if (/timescaledb\.license/.test(sql)) return { rows: [{ lic: 'apache' }] };
+      if (/timescaledb_information\.hypertables/.test(sql)) return { rows: [] };
+      if (/create_hypertable/.test(sql)) { creates += 1; if (fail) { const e = new Error('lock timeout'); e.code = '55P03'; throw e; } return { rows: [] }; }
+      if (/telemetry_tier_state/.test(sql)) return { rows: [] };
+      return { rows: [] };
+    },
+  };
+  const tiers = createTelemetryTiers({ getDb: () => db, now: () => t });
+  await tiers.runOnce({ budget: 0 });
+  const first = creates;
+  assert.ok(first > 0);
+  t += 10 * 60_000; await tiers.runOnce({ budget: 0 });
+  assert.equal(creates, first, 'nicht in jedem Lauf');
+  fail = false; t += 60 * 60_000; await tiers.runOnce({ budget: 0 });
+  assert.ok(creates > first, 'nach einer Stunde erneut');
+  const after = creates;
+  t += 2 * 60 * 60_000; await tiers.runOnce({ budget: 0 });
+  assert.equal(creates, after, 'gelungen → nicht mehr');
+});
+
+// Codex 2fe0149f: später Rohwert mittendrin darf den Endwert aus den Stufen nicht verdrängen.
+test('getSeriesBoundaryValues: spätere Stufen-Werte nach dem letzten Rohwert gewinnen', async () => {
+  const start = '2026-11-01T00:00:00.000Z'; const end = '2026-11-02T00:00:00.000Z';
+  const seen = [];
+  const pool = {
+    async query(sql, p) {
+      if (/timeseries_samples_1m|timeseries_samples_15m/.test(sql)) {
+        seen.push(p);
+        return { rows: [{ v: Date.parse(p[1]) > Date.parse('2026-11-01T12:00:00Z') ? 80 : 50, b: '2026-11-01T23:45:00Z' }] };
+      }
+      return { rows: [{ start_value: 20, start_ts: '2026-11-01T00:00:05Z', end_value: 50, end_ts: '2026-11-01T12:00:00Z' }] };
+    },
+  };
+  const out = await createTelemetryStorePg(pool).getSeriesBoundaryValues({ seriesKey: 'battery_soc_pct', start, end });
+  assert.deepEqual(out, { startValue: 20, endValue: 80 });
+  assert.equal(seen.length, 1, 'nur das Ende aus den Stufen');
+  assert.ok(Date.parse(seen[0][1]) > Date.parse('2026-11-01T12:00:00Z'), 'nach dem letzten Rohwert gesucht');
+});
