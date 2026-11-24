@@ -87,9 +87,11 @@ const QUARTER_MS = 900_000;
 const ORIGIN = "TIMESTAMPTZ '2000-01-01 00:00:00+00'";
 
 export const TIER_TABLES = Object.freeze([
-  { name: '1m', table: TIER_1M_TABLE, seconds: 60, chunk: '1 day', compressAfter: '2 days' },
-  { name: '15m', table: TIER_15M_TABLE, seconds: 900, chunk: '7 days', compressAfter: '7 days' },
+  { name: '1m', table: TIER_1M_TABLE, seconds: 60, chunk: '1 day', compressAfter: '2 days', compressAfterMs: 2 * 86_400_000 },
+  { name: '15m', table: TIER_15M_TABLE, seconds: 900, chunk: '7 days', compressAfter: '7 days', compressAfterMs: 7 * 86_400_000 },
 ]);
+// Höchstens so viele Blöcke je Stufe und Lauf selbst komprimieren (compressBackfilledChunks).
+export const TIER_COMPRESS_CHUNKS_PER_RUN = 32;
 
 export const floorQuarterMs = (ms) => Math.floor(ms / QUARTER_MS) * QUARTER_MS;
 const iso = (ms) => new Date(ms).toISOString();
@@ -363,6 +365,37 @@ const DISTINCT_SCOPES_SQL = `
  * Laufender Verdichter. Ein Lauf: erst Nachzügler, dann vorwärts bis
  * „jetzt − TIER_LAG_MS“, höchstens budgetMs lang, eine Transaktion je Portion.
  */
+/**
+ * Fertige alte Blöcke der Stufen komprimieren (Integration 24.11., Prod-Hinweis): Die Rückfüllung schreibt alte
+ * Tage in frische, unkomprimierte Blöcke; die Kompressions-Regel (add_compression_policy) läuft nur alle 12 h. Bei
+ * Prod-Dichte (~17 MB je Tag 1-min-Werte) und einigen hundert Tagen Altbestand lägen sonst bis zur nächsten Regel
+ * Gigabytes unkomprimiert auf der Platte. Komprimiert wird nur, was die Regel ohnehin komprimieren würde, und nur
+ * Blöcke, die ganz vor dem Stand der Stufen enden (dort schreibt der normale Lauf nicht mehr):
+ * range_end ≤ min(untilMs, jetzt − compress_after). Nur Community-TimescaleDB mit eingeschalteter Kompression.
+ * @returns {Promise<number>} Zahl der komprimierten Blöcke
+ */
+async function compressBackfilledChunks(db, storage, untilMs, nowMs, { max = TIER_COMPRESS_CHUNKS_PER_RUN } = {}) {
+  if (storage?.mode !== 'timescale' || !Number.isFinite(untilMs)) return 0;
+  let n = 0;
+  for (const t of TIER_TABLES) {
+    if (storage.tables?.[t.name]?.compression !== true) continue;
+    const cutoff = Math.min(untilMs, nowMs - t.compressAfterMs);
+    const r = await db.query(`SELECT format('%I.%I', chunk_schema, chunk_name) AS c FROM timescaledb_information.chunks
+      WHERE hypertable_name = $1 AND NOT is_compressed AND range_end <= $2 ORDER BY range_start LIMIT ${Number(max) | 0}`,
+    [t.table, iso(cutoff)]);
+    for (const row of r.rows || []) {
+      try {
+        await db.query('SELECT compress_chunk($1::regclass, if_not_compressed => true)', [row.c]);
+        n += 1;
+      } catch (e) {
+        // Der Kompressions-Job kann denselben Block parallel erwischt haben (wie in der Platz-Wache).
+        if (!/already compressed/i.test(String(e?.message || ''))) throw e;
+      }
+    }
+  }
+  return n;
+}
+
 export function createTelemetryTiers({
   getDb, pushLog, now = () => Date.now(),
   portionMs = TIER_PORTION_MS, lagMs = TIER_LAG_MS, budgetMs = TIER_RUN_BUDGET_MS,
@@ -505,6 +538,13 @@ export function createTelemetryTiers({
         if (r.to) out.to = r.to;
       } while (now() - startedAt < budget);
       out.coverage = await tierCoverage(db);
+      // Was die Rückfüllung fertig hat, gleich komprimieren statt bis zu 12 h auf die Regel zu warten.
+      try {
+        out.compressed = await compressBackfilledChunks(db, storage, toMs(out.coverage?.until), now());
+      } catch (e) {
+        out.compressError = String(e?.message || e).slice(0, 200);
+        log('telemetry_tiers_compress_error', { error: out.compressError }, 'warn');
+      }
       last = out;
       return out;
     } catch (e) {

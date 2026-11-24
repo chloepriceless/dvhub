@@ -291,3 +291,56 @@ test('aggregateRange richtet vorher Hypertable/Kompression ein (auch bei pausier
   const iAgg = calls.findIndex((s) => /INSERT INTO timeseries_samples_1m/.test(s));
   assert.ok(iCreate >= 0 && iAgg > iCreate, 'erst einrichten, dann verdichten');
 });
+
+// Integration 24.11. (Prod-Hinweis): die Rückfüllung schreibt alte Tage in frische, unkomprimierte Blöcke; die
+// Kompressions-Regel läuft nur alle 12 h. Bei Prod-Dichte (~17 MB/Tag 1-min-Werte) und ein paar hundert Tagen
+// Altbestand lägen sonst Gigabytes unkomprimiert auf der Platte. Der Lauf komprimiert darum selbst, was die Regel
+// ohnehin komprimieren würde — aber nur Blöcke, die ganz vor dem Stand der Stufen und vor compress_after enden.
+function tierCompressDb({ lic = 'timescale', doneUntil = '2026-06-01T00:00:00Z', chunks = {} } = {}) {
+  const calls = [];
+  const db = {
+    calls,
+    async connect() { return { query: (sql, p) => db.query(sql, p), release() {} }; },
+    async query(sql, p) {
+      calls.push({ sql, p });
+      if (/pg_extension/.test(sql)) return { rows: [{}] };
+      if (/timescaledb\.license/.test(sql)) return { rows: [{ lic }] };
+      if (/SELECT compression_enabled AS c FROM timescaledb_information\.hypertables/.test(sql)) return { rows: [{ c: lic === 'timescale' }] };
+      if (/timescaledb_information\.hypertables/.test(sql)) return { rows: [{}] };
+      if (/timescaledb_information\.jobs/.test(sql)) return { rows: [{ after: 'x' }] };
+      if (/FOR UPDATE SKIP LOCKED/.test(sql)) return { rows: [] };
+      if (/FROM telemetry_tier_state s/.test(sql)) return { rows: [{ done_until: new Date(doneUntil), dirty_from: null, dirty_n: 0 }] };
+      if (/FROM timescaledb_information\.chunks/.test(sql)) return { rows: (chunks[p?.[0]] || []).map((c) => ({ c })) };
+      return { rows: [], rowCount: 0 };
+    },
+  };
+  return db;
+}
+
+test('Rückfüllung komprimiert fertige alte Blöcke der Stufen selbst (nur vor Stufen-Stand und compress_after)', async () => {
+  const now = Date.parse('2026-11-24T03:00:00Z');
+  const db = tierCompressDb({ chunks: { [TIER_1M_TABLE]: ['_timescaledb_internal._hyper_4_1_chunk', '_timescaledb_internal._hyper_4_2_chunk'], [TIER_15M_TABLE]: ['_timescaledb_internal._hyper_5_9_chunk'] } });
+  const tiers = createTelemetryTiers({ getDb: () => db, now: () => now });
+  const r = await tiers.runOnce({ budget: 0 });
+  const list = db.calls.filter((c) => /FROM timescaledb_information\.chunks/.test(c.sql));
+  assert.equal(list.length, 2, 'je Stufe eine Liste');
+  // Grenze = min(Stufen-Stand, jetzt − compress_after): Stand 01.06. liegt vor jetzt − 2 d bzw. − 7 d.
+  for (const c of list) assert.equal(new Date(c.p[1]).toISOString(), '2026-06-01T00:00:00.000Z');
+  assert.match(list[0].sql, /NOT is_compressed/);
+  assert.match(list[0].sql, /range_end <= \$2/);
+  const comp = db.calls.filter((c) => /compress_chunk/.test(c.sql)).map((c) => c.p[0]);
+  assert.deepEqual(comp, ['_timescaledb_internal._hyper_4_1_chunk', '_timescaledb_internal._hyper_4_2_chunk', '_timescaledb_internal._hyper_5_9_chunk']);
+  assert.equal(r.compressed, 3);
+});
+
+test('Rückfüllung: Grenze nie jünger als jetzt − compress_after; Apache/ohne Kompression: nichts komprimieren', async () => {
+  const now = Date.parse('2026-11-24T03:00:00Z');
+  const db = tierCompressDb({ doneUntil: '2026-11-24T02:00:00Z' });
+  await createTelemetryTiers({ getDb: () => db, now: () => now }).runOnce({ budget: 0 });
+  const cut = Object.fromEntries(db.calls.filter((c) => /FROM timescaledb_information\.chunks/.test(c.sql)).map((c) => [c.p[0], new Date(c.p[1]).toISOString()]));
+  assert.equal(cut[TIER_1M_TABLE], '2026-11-22T03:00:00.000Z');
+  assert.equal(cut[TIER_15M_TABLE], '2026-11-17T03:00:00.000Z');
+  const apache = tierCompressDb({ lic: 'apache', chunks: { [TIER_1M_TABLE]: ['x'] } });
+  await createTelemetryTiers({ getDb: () => apache, now: () => now }).runOnce({ budget: 0 });
+  assert.equal(apache.calls.filter((c) => /compress_chunk|timescaledb_information\.chunks/.test(c.sql)).length, 0);
+});
