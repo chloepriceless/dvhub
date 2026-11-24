@@ -344,3 +344,22 @@ test('Rückfüllung: Grenze nie jünger als jetzt − compress_after; Apache/ohn
   await createTelemetryTiers({ getDb: () => apache, now: () => now }).runOnce({ budget: 0 });
   assert.equal(apache.calls.filter((c) => /compress_chunk|timescaledb_information\.chunks/.test(c.sql)).length, 0);
 });
+
+// Codex 96409836 (P2): das Komprimieren läuft nach dem Rückfüll-Budget — es braucht eigene Grenzen, sonst hält ein
+// gesperrter Block oder eine langsame Platte den Lauf (running) fest und künftige Läufe fallen aus.
+test('Stufen-Kompression: je Block statement_timeout und lock_timeout, eigenes Zeitbudget', async () => {
+  let t = Date.parse('2026-11-24T03:00:00Z');
+  const chunks = { [TIER_1M_TABLE]: ['a', 'b', 'c'], [TIER_15M_TABLE]: ['d'] };
+  const db = tierCompressDb({ chunks });
+  const orig = db.query;
+  db.query = async (sql, p) => { const r = await orig(sql, p); if (/compress_chunk/.test(sql)) t += 40_000; return r; };
+  const r = await createTelemetryTiers({ getDb: () => db, now: () => t }).runOnce({ budget: 0 });
+  const sqls = db.calls.map((c) => c.sql);
+  const first = sqls.findIndex((s) => /compress_chunk/.test(s));
+  assert.ok(first > 0);
+  const before = sqls.slice(0, first).reverse();
+  assert.ok(before.findIndex((s) => /SET LOCAL statement_timeout/.test(s)) >= 0 && before.findIndex((s) => /SET LOCAL statement_timeout/.test(s)) < before.findIndex((s) => /FROM timescaledb_information\.chunks/.test(s)), 'statement_timeout im selben Block');
+  assert.ok(sqls.slice(0, first).some((s) => /SET LOCAL lock_timeout/.test(s)), 'lock_timeout');
+  // Budget 60 s: nach zwei Blöcken à 40 s ist Schluss.
+  assert.equal(r.compressed, 2);
+});

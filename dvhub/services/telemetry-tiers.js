@@ -90,8 +90,13 @@ export const TIER_TABLES = Object.freeze([
   { name: '1m', table: TIER_1M_TABLE, seconds: 60, chunk: '1 day', compressAfter: '2 days', compressAfterMs: 2 * 86_400_000 },
   { name: '15m', table: TIER_15M_TABLE, seconds: 900, chunk: '7 days', compressAfter: '7 days', compressAfterMs: 7 * 86_400_000 },
 ]);
-// Höchstens so viele Blöcke je Stufe und Lauf selbst komprimieren (compressBackfilledChunks).
+// Höchstens so viele Blöcke je Stufe und Lauf selbst komprimieren (compressBackfilledChunks), höchstens so
+// lange je Lauf, je Block mit eigener Abfrage-/Sperrfrist (Codex 96409836: sonst hielte ein gesperrter Block
+// oder eine langsame Platte den Lauf fest, und künftige Läufe fielen aus).
 export const TIER_COMPRESS_CHUNKS_PER_RUN = 32;
+export const TIER_COMPRESS_BUDGET_MS = 60_000;
+const COMPRESS_STATEMENT_TIMEOUT = '120s';
+const COMPRESS_LOCK_TIMEOUT = '10s';
 
 export const floorQuarterMs = (ms) => Math.floor(ms / QUARTER_MS) * QUARTER_MS;
 const iso = (ms) => new Date(ms).toISOString();
@@ -374,18 +379,24 @@ const DISTINCT_SCOPES_SQL = `
  * range_end ≤ min(untilMs, jetzt − compress_after). Nur Community-TimescaleDB mit eingeschalteter Kompression.
  * @returns {Promise<number>} Zahl der komprimierten Blöcke
  */
-async function compressBackfilledChunks(db, storage, untilMs, nowMs, { max = TIER_COMPRESS_CHUNKS_PER_RUN } = {}) {
+async function compressBackfilledChunks(db, storage, untilMs, nowFn, { max = TIER_COMPRESS_CHUNKS_PER_RUN, budgetMs = TIER_COMPRESS_BUDGET_MS } = {}) {
   if (storage?.mode !== 'timescale' || !Number.isFinite(untilMs)) return 0;
+  const startedAt = nowFn();
   let n = 0;
   for (const t of TIER_TABLES) {
     if (storage.tables?.[t.name]?.compression !== true) continue;
-    const cutoff = Math.min(untilMs, nowMs - t.compressAfterMs);
+    const cutoff = Math.min(untilMs, startedAt - t.compressAfterMs);
     const r = await db.query(`SELECT format('%I.%I', chunk_schema, chunk_name) AS c FROM timescaledb_information.chunks
       WHERE hypertable_name = $1 AND NOT is_compressed AND range_end <= $2 ORDER BY range_start LIMIT ${Number(max) | 0}`,
     [t.table, iso(cutoff)]);
     for (const row of r.rows || []) {
+      if (nowFn() - startedAt >= budgetMs) return n;
       try {
-        await db.query('SELECT compress_chunk($1::regclass, if_not_compressed => true)', [row.c]);
+        await inTransaction(db, async (c) => {
+          await c.query(`SET LOCAL statement_timeout = '${COMPRESS_STATEMENT_TIMEOUT}'`);
+          await c.query(`SET LOCAL lock_timeout = '${COMPRESS_LOCK_TIMEOUT}'`);
+          await c.query('SELECT compress_chunk($1::regclass, if_not_compressed => true)', [row.c]);
+        });
         n += 1;
       } catch (e) {
         // Der Kompressions-Job kann denselben Block parallel erwischt haben (wie in der Platz-Wache).
@@ -540,7 +551,7 @@ export function createTelemetryTiers({
       out.coverage = await tierCoverage(db);
       // Was die Rückfüllung fertig hat, gleich komprimieren statt bis zu 12 h auf die Regel zu warten.
       try {
-        out.compressed = await compressBackfilledChunks(db, storage, toMs(out.coverage?.until), now());
+        out.compressed = await compressBackfilledChunks(db, storage, toMs(out.coverage?.until), now);
       } catch (e) {
         out.compressError = String(e?.message || e).slice(0, 200);
         log('telemetry_tiers_compress_error', { error: out.compressError }, 'warn');
