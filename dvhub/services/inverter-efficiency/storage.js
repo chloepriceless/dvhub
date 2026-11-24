@@ -56,8 +56,8 @@ const NOT_MEASURABLE_ETA = 0.995;
 const ETA_MIN = 0.5;
 const ETA_MAX = 1.02;
 
-// Reihen des Speicherwegs: die des Wechselrichter-Wirkungsgrads plus PV gesamt.
-export const STORAGE_SERIES_KEYS = Object.freeze([...EFFICIENCY_SERIES_KEYS, 'pv_total_w']);
+// Reihen des Speicherwegs: dieselben wie beim Wechselrichter-Wirkungsgrad (mit PV gesamt).
+export const STORAGE_SERIES_KEYS = Object.freeze([...new Set([...EFFICIENCY_SERIES_KEYS, 'pv_total_w'])]);
 
 export const STORAGE_EFFICIENCY_SQL = `
 WITH ${EFFICIENCY_SAMPLES_CTE},
