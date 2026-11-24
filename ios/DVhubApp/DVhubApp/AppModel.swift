@@ -289,11 +289,12 @@ final class AppModel {
                 if let ref = old.keyRef, ref != created.keyRef { KeyStore.deleteKey(ref) }
             }
             attach(creds)
-            let fromDemo = selectedIsDemo
+            let changed = selectedId != creds.id
             selected?.stop()
             selectedId = creds.id
-            // Stand der Demo nicht als Stand der neuen Anlage in den Widgets stehen lassen.
-            if fromDemo { widgets.reset() }
+            // Stand der Demo oder einer anderen Anlage nicht als Stand der neuen in den Widgets stehen lassen
+            // (wie select(_:); Codex Integration 24.11.).
+            if changed { widgets.reset() }
             selected?.start()
             // Mit der eigenen Anlage ist die Demo erledigt (unter „Anlagen“ lässt sie sich wieder starten).
             endDemo()
@@ -351,7 +352,9 @@ final class WidgetBridge {
         lastSnapshot = snap
         // Die Live-Aktivität braucht keine App-Gruppe.
         Task { await LiveActivityManager.sync(snap) }
-        guard SharedStore.isAvailable, SharedStore.write(snap) else { return }
+        // Ein älterer Stand des Controllers überschreibt keinen jüngeren, den Hintergrund oder Widget inzwischen
+        // geholt haben (Codex Integration 24.11.).
+        guard SharedStore.isAvailable, SharedStore.write(snap, onlyIfNewer: true) else { return }
         if urgent { ControlCenter.shared.reloadControls(ofKind: SharedStore.controlKindStop) }
         if force || urgent || lastReload.map({ now.timeIntervalSince($0) >= Self.reloadEvery }) ?? true {
             lastReload = now
