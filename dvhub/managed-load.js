@@ -27,6 +27,8 @@
 //       wrong, not the meter. We then do not subtract at all and say so. A
 //       `max(0, ...)` would hide exactly the failure the gate exists to catch.
 
+import { monoStampAge } from './services/mono-clock.js';
+
 export const DEFAULT_FRESHNESS_SECONDS = 120;
 export const DEFAULT_HOME_GEOFENCE = 'Zuhause';
 
@@ -47,11 +49,13 @@ function strictNumber(value) {
  * Missing/unparsable => false (invariant 1). Future stamps beyond the window are
  * also rejected: a clock that runs ahead is a broken source, not a fresh one.
  */
-function isFresh(at, nowMs, freshnessSeconds) {
+function isFresh(at, nowMs, freshnessSeconds, box = null, key = null, clock = null) {
   if (at == null) return false;
   const ms = at instanceof Date ? at.getTime() : new Date(at).getTime();
   if (!Number.isFinite(ms)) return false;
-  const ageMs = nowMs - ms;
+  // A26: mit monotoner Uhr (Betrieb, server.js) das Alter aus der Empfangsmarke des Erzeugers (TeslaMate
+  // getFieldUpdatedAt); ohne Uhr oder ohne Marke (aus der Datenbank geseedet) Wanduhr wie bisher.
+  const ageMs = (clock && box && key != null ? monoStampAge(box, key, clock) : null) ?? (nowMs - ms);
   return ageMs >= -1000 && ageMs <= freshnessSeconds * 1000;
 }
 
@@ -71,10 +75,10 @@ function isFresh(at, nowMs, freshnessSeconds) {
  *
  * TeslaMate publishes charger_power in kW (see routes-api.js:2794) -> x1000.
  */
-function evShareW(tesla, updatedAt, nowMs, freshnessSeconds, homeGeofence) {
+function evShareW(tesla, updatedAt, nowMs, freshnessSeconds, homeGeofence, clock = null) {
   if (!tesla) return { w: 0, reason: 'ev_no_data' };
 
-  const fresh = k => isFresh(updatedAt?.[k], nowMs, freshnessSeconds);
+  const fresh = k => isFresh(updatedAt?.[k], nowMs, freshnessSeconds, updatedAt, k, clock);
 
   if (tesla.chargingState !== 'Charging') return { w: 0, reason: 'ev_not_charging' };
   if (!fresh('chargingState')) return { w: 0, reason: 'ev_charging_state_stale' };
@@ -135,6 +139,7 @@ export function computeManagedLoad({
   teslaUpdatedAt = null,
   devices = [],
   nowMs = Date.now(),
+  monoNow = null,
   freshnessSeconds = DEFAULT_FRESHNESS_SECONDS,
   homeGeofence = DEFAULT_HOME_GEOFENCE
 } = {}) {
@@ -144,7 +149,7 @@ export function computeManagedLoad({
     ? configuredWindow
     : DEFAULT_FRESHNESS_SECONDS;
 
-  const ev = evShareW(tesla, teslaUpdatedAt, nowMs, window, homeGeofence);
+  const ev = evShareW(tesla, teslaUpdatedAt, nowMs, window, homeGeofence, typeof monoNow === 'function' ? monoNow : null);
   const dev = deviceShareW(devices, nowMs, window);
   const managedW = ev.w + dev.w;
 

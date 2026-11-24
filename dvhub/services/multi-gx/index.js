@@ -29,7 +29,7 @@ import { betaGateOpen } from '../../beta-features.js';
 import { gridImportW } from '../optimizer/grid-storage.js';
 import { getPowerLimits } from '../power-limits.js';
 import { createLegacyGate, inverterReleaseState, modbusLegacySink, MULTI_GX_GATE_DEVICE, multiGxLegacyPolicies, unwrapLegacyWrite } from '../gate/legacy.js';
-import { pickMonoNow, createStampAge, markMono } from '../mono-clock.js';
+import { pickMonoNow, createStampAge, markMono, monoStampOf } from '../mono-clock.js';
 
 export const MULTI_GX_TICK_MS = 5000;
 // 820–822: Netz L1–L3 des Systems; ohne eigenen Zaehler meldet die GX dort den
@@ -249,7 +249,8 @@ export function createMultiGx(ctx, deps = {}) {
     if (!finite(v.batteryPowerW) || v.errors?.batteryPowerW) return null;
     if (v.freeze?.active === true || v.sourceMismatch?.active === true) return null;
     const at = v.fieldUpdatedAt?.batteryPowerW;
-    if (finite(at) && stamps.ageMs('primaryBattery', Number(at)) > PRIMARY_MAX_AGE_MS) return null;
+    // A24: monotone Marke des Pollers, wenn vorhanden (gleiche Uhr), sonst die am Übergabepunkt gemerkte Empfangszeit.
+    if (finite(at) && stamps.ageMs('primaryBattery', Number(at), monoStampOf(v.fieldUpdatedAt, 'batteryPowerW', mono)) > PRIMARY_MAX_AGE_MS) return null;
     return Number(v.batteryPowerW);
   }
 

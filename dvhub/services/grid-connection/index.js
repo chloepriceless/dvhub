@@ -68,6 +68,7 @@ import { getPowerLimits } from '../power-limits.js';
 import { MAX_BATTERY_DISCHARGE_W } from '../../server-utils.js';
 import { atomicWriteControlState } from '../../control-state-io.js';
 import fs from 'node:fs';
+import { pickMonoNow, monoStampAge, monoStampOf } from '../mono-clock.js';
 
 export const GRID_CONNECTION_DEFAULTS = Object.freeze({
   limitKw: null,
@@ -366,7 +367,8 @@ export function phaseVoltagesFromState(state, now = Date.now()) {
   const gv = state?.victron?.gridVoltage;
   if (!gv || typeof gv !== 'object') return null;
   const at = Number(gv.updatedAt);
-  if (!Number.isFinite(at) || at <= 0 || now - at > PHASE_VOLTAGE_MAX_AGE_MS) return null;
+  // A26: Alter monoton aus der Marke des Spannungs-Pollers (grid-voltage.js), ohne Marke Wanduhr.
+  if (!Number.isFinite(at) || at <= 0 || (monoStampAge(gv, 'updatedAt') ?? (now - at)) > PHASE_VOLTAGE_MAX_AGE_MS) return null;
   const out = [gv.l1, gv.l2, gv.l3].map((v) => (typeof v === 'number' && v >= VOLTAGE_MIN_V && v <= VOLTAGE_MAX_V ? v : null));
   return out.some((v) => v != null) ? out : null;
 }
@@ -395,7 +397,9 @@ export function victronLimitExtra(state, now = Date.now(), cfg = null) {
   const v = state?.victron || {};
   const at = Number(v.fieldUpdatedAt?.acInputLimitA) || 0;
   const a = Number(v.acInputLimitA);
-  const fresh = at > 0 && now - at <= VICTRON_LIMIT_MAX_AGE_MS;
+  // A26: Alter der letzten Lesung von 2714 monoton (Poller-Marke, A24), ohne Marke Wanduhr.
+  const ageMs = at > 0 ? (monoStampAge(v.fieldUpdatedAt, 'acInputLimitA') ?? (now - at)) : null;
+  const fresh = ageMs != null && ageMs <= VICTRON_LIMIT_MAX_AGE_MS;
   const error = Boolean(v.errors?.acInputLimitA);
   const victronPhaseLimitA = fresh && a >= 6 && a <= 4000 ? a : null;
   let victronLimitW = null;
@@ -412,7 +416,7 @@ export function victronLimitExtra(state, now = Date.now(), cfg = null) {
     victronPhaseLimitA,
     victronReadError: error,
     // Wie alt der gültige Wert ist (für die Meldung im Leitstand).
-    victronLimitAgeMs: victronPhaseLimitA != null ? now - at : null,
+    victronLimitAgeMs: victronPhaseLimitA != null ? Math.round(ageMs) : null,
     // Gelesener Wert unter 6 A (kein plausibler Anschluss): gilt nicht, wird
     // aber gemeldet statt still verworfen (Fable R1 P3-5).
     victronIgnoredA: fresh && !error && a > 0 && a < 6 ? a : null,
@@ -460,7 +464,8 @@ export function createGuardState() {
  *   „Akku zuerst“ (Nicht-Victron) zusätzlich Entladung, Ladestand ok, bekannte
  *   Entladegrenze (-1 = unbegrenzt), höchste Entladeleistung und der jüngste
  *   Entladegrenzen-Wunsch einer anderen Quelle (schedule-eval.js).
- * @param {number} p.now
+ * @param {number} p.now   Zeit für Abstände (Haltezeiten, Fristen) — im Betrieb monoton (A26)
+ * @param {number} [p.wallNow] Systemzeit für angezeigte/gespeicherte Zeitpunkte (assist.since); fehlt sie, gilt now
  * @param {number|null} [p.assistTargetW] strengstes Ziel der Akku-Hilfe aus
  *   anderen Quellen (höchster erlaubter Netzbezug in W, z. B. §14a), null = keins.
  *   Gilt zusätzlich zur Netzanschluss-Grenze und auch ohne sie.
@@ -468,7 +473,7 @@ export function createGuardState() {
  *   changed enthält die Gerätearten, deren Grenze sich geändert hat, 'ceiling'
  *   und 'battery_assist' (Akku-Hilfe angehoben, gesenkt oder beendet).
  */
-export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, now, assistTargetW = null }) {
+export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, now, wallNow = null, assistTargetW = null }) {
   const events = [];
   const capsBefore = { ...st.caps };
   const ceilingBefore = st.ceilingW;
@@ -519,7 +524,7 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
     if (extTarget != null && r?.batteryNative) {
       if (meas?.fresh) {
         const total = Number(meas.importW);
-        nativeBatteryStep(st, { r, battery, total, excess: total - extTarget, targetW: extTarget, phases: null, phaseTargets: null, events, endAssist, now });
+        nativeBatteryStep(st, { r, battery, total, excess: total - extTarget, targetW: extTarget, phases: null, phaseTargets: null, events, endAssist, now, wallNow });
       } else {
         st.disSince = null;
         if (st.assist && battery.socOk !== true) endAssist('soc');
@@ -723,7 +728,7 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   if (!batteryStuck) pending += batteryPending;
   if (r.batteryNative) {
     const targetW = extTarget == null ? r.targetW : Math.min(r.targetW, extTarget);
-    pending += nativeBatteryStep(st, { r, battery, total, excess, targetW, phases, phaseTargets, events, endAssist, now });
+    pending += nativeBatteryStep(st, { r, battery, total, excess, targetW, phases, phaseTargets, events, endAssist, now, wallNow });
   }
   const predicted = excess - pending;
 
@@ -887,7 +892,7 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
  *     Ziel, kommt nach RELEASE_MS (frühestens HOLD_AFTER_CUT_MS nach dem
  *     letzten Anheben) der Wert davor zurück.
  */
-function nativeBatteryStep(st, { r, battery, total, excess, targetW, phases, phaseTargets, events, endAssist, now }) {
+function nativeBatteryStep(st, { r, battery, total, excess, targetW, phases, phaseTargets, events, endAssist, now, wallNow = null }) {
   // targetW: Ziel der Akku-Hilfe (Netzanschluss oder strengere Anforderung);
   // excess: Überschuss über der Netzanschluss-Grenze (für „gleich weg“ bei den Lasten).
   const T = finite(targetW) ? Number(targetW) : r.targetW;
@@ -972,13 +977,13 @@ function nativeBatteryStep(st, { r, battery, total, excess, targetW, phases, pha
       const want = need > 0 ? assistValueW({ excessW: need, dischargeW: dis, maxW }) : current;
       if (!st.assist && pendingBase != null && Number.isFinite(current)) {
         // Hilfe aus dem letzten Lauf weiterführen statt erst zurückzuschreiben.
-        st.assist = { valueW: Math.max(want, current), baseW: pendingBase, since: now, raisedAt: now, seq: Number(battery.request?.seq) || 0, roomSince: null, lowerSince: null };
+        st.assist = { valueW: Math.max(want, current), baseW: pendingBase, since: wallNow ?? now, raisedAt: now, seq: Number(battery.request?.seq) || 0, roomSince: null, lowerSince: null };
         st.assistRestore = null;
         st.disSince = now;
         if (want > current) events.push({ type: 'assist', valueW: want, baseW: pendingBase, dischargeW: Math.round(dis), excessW: Math.round(aExcess), importW: Math.round(total), targetW: Math.round(T) });
       } else if (want > current) {
         if (!st.assist) {
-          st.assist = { valueW: want, baseW: base, since: now, raisedAt: now, seq: Number(battery.request?.seq) || 0, roomSince: null, lowerSince: null };
+          st.assist = { valueW: want, baseW: base, since: wallNow ?? now, raisedAt: now, seq: Number(battery.request?.seq) || 0, roomSince: null, lowerSince: null };
         } else {
           Object.assign(st.assist, { valueW: want, raisedAt: now, roomSince: null, lowerSince: null });
         }
@@ -1062,12 +1067,22 @@ const KIND_LABEL = { wallbox: 'Wallbox', heater: 'Heizstab', eebus: 'EEBUS-Gerä
  */
 export function createGridConnectionGuard(ctx, deps = {}) {
   const now = deps.now || (() => Date.now());
+  // A26 (Christin 24.11.2026): Abstände (Haltezeiten, Frische, Fristen, Takte) monoton; eine eingespielte Uhr (Tests)
+  // misst sie wie bisher mit. Zeitpunkte (assist.since, Anforderungen at/expiresAt in der Anzeige) bleiben Wanduhr.
+  const mono = pickMonoNow(deps.monoNow, deps.now);
+  // Alter eines Wanduhr-Stempels: monoton aus der Erzeuger-Marke (A24), sonst Wanduhr wie bisher.
+  const stampAge = (box, key, t = now()) => {
+    const at = Number(box?.[key]) || 0;
+    return at > 0 ? (monoStampAge(box, key, mono) ?? (t - at)) : null;
+  };
+  const evccStale = (s) => s?.lastPolledAt != null && (stampAge(s, 'lastPolledAt') ?? Infinity) > 90_000;
   const st = createGuardState();
   let lastTickAt = 0;
+  let lastTickMono = null;
   let timer = null;
   let lastLimitKey = null;
   let lastSyncedKey = null;
-  let lastEosSyncAt = 0;
+  let lastEosSyncMono = null;
   let lastVictronError = false;
   let lastVictronIgnored = null;
   let last = { meas: null, devices: [] };
@@ -1087,7 +1102,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     if (bc.charger === 'evcc') {
       const st = ctx.evccIntegration?.getStatus?.();
       // Veraltete Abfrage (evcc nicht erreichbar): unbekannt, nicht 0 (Gesamtrunde 1, P1).
-      if (st?.lastError || (st?.lastPolledAt != null && now() - Number(st.lastPolledAt) > 90_000)) return null;
+      if (st?.lastError || evccStale(st)) return null;
       const lp = st?.loadpoints?.[bc.loadpoint - 1];
       return finite(lp?.chargePowerW) ? Number(lp.chargePowerW) : null;
     }
@@ -1118,7 +1133,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     }
     // Weitere evcc-Ladepunkte: jeder, der gerade lädt (oder noch gedeckelt ist).
     if (evccOn && ctx.eosEvccBridge) {
-      const fresh = !(evccSt.lastError || (evccSt.lastPolledAt != null && now() - Number(evccSt.lastPolledAt) > 90_000));
+      const fresh = !(evccSt.lastError || evccStale(evccSt));
       for (const lp of Array.isArray(evccSt.loadpoints) ? evccSt.loadpoints : []) {
         const lpId = Number(lp?.id);
         if (!(lpId >= 1) || (bc.charger === 'evcc' && lpId === bc.loadpoint)) continue;
@@ -1172,19 +1187,23 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     // aktive Eintrag der Auswertung (gleicher Wert) zeigt, dass er noch gilt
     // (Gesamtprüfung 6, P2).
     const act = s.schedule?.active?.gridSetpointW;
-    const seenAt = Math.max(Number(lw?.at) || 0, act && lw && Number(act.value) === Number(lw.value) ? Number(act.at) || 0 : 0);
-    const setpointW = lw && finite(lw.value) && t - seenAt <= SETPOINT_MAX_AGE_MS ? Number(lw.value) : null;
+    // Jüngste Bestätigung (Write oder gleicher aktiver Eintrag): Alter monoton (A26), sonst Wanduhr wie bisher.
+    const actSame = act && lw && Number(act.value) === Number(lw.value);
+    const ages = [lw ? stampAge(lw, 'at', t) : null, actSame ? stampAge(act, 'at', t) : null].filter((x) => x != null);
+    const seenAge = ages.length ? Math.min(...ages) : Infinity;
+    const setpointW = lw && finite(lw.value) && seenAge <= SETPOINT_MAX_AGE_MS ? Number(lw.value) : null;
     const v = s.victron || {};
-    const at = Number(v.fieldUpdatedAt?.batteryPowerW) || 0;
+    const batAge = stampAge(v.fieldUpdatedAt, 'batteryPowerW', t);
     const maxAge = Number(c?.victron?.telemetryMaxAgeMs ?? 90000);
-    const chargeW = at > 0 && t - at <= maxAge ? Math.max(0, Number(v.batteryChargeW) || 0) : 0;
+    const batOk = batAge != null && batAge <= maxAge;
+    const chargeW = batOk ? Math.max(0, Number(v.batteryChargeW) || 0) : 0;
     if (!r?.batteryNative) {
       // Victron & Co.: gemessene Entladung nur für die Rückmeldung der Akku-Hilfe.
-      const fresh = at > 0 && t - at <= maxAge && !v.errors?.batteryPowerW;
+      const fresh = batOk && !v.errors?.batteryPowerW;
       return { setpointW, chargeW, dischargeW: fresh ? Math.max(0, Number(v.batteryDischargeW) || 0) : 0, batteryFresh: fresh };
     }
     // Akku zuerst (Nicht-Victron): Entladung, Ladestand, Entladegrenze.
-    const batFresh = at > 0 && t - at <= maxAge && !v.errors?.batteryPowerW;
+    const batFresh = batOk && !v.errors?.batteryPowerW;
     const dischargeW = batFresh ? Math.max(0, Number(v.batteryDischargeW) || 0) : 0;
     const limits = getPowerLimits(c).limits;
     const maxW = Math.min(Number(limits.batteryMaxDischargeDcW) || 0, Number(limits.inverterMaxPowerW) || 0);
@@ -1208,8 +1227,8 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const v = state().victron || {};
     const maxAge = Number(c?.victron?.telemetryMaxAgeMs ?? 90000);
     const fresh = (f) => {
-      const at = Number(v.fieldUpdatedAt?.[f]) || 0;
-      return at > 0 && t - at <= maxAge && !v.errors?.[f];
+      const age = stampAge(v.fieldUpdatedAt, f, t);
+      return age != null && age <= maxAge && !v.errors?.[f];
     };
     const soc = Number(v.soc);
     if (v.soc == null || v.soc === '' || !Number.isFinite(soc) || !fresh('soc')) return false;
@@ -1229,9 +1248,16 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const lw = s.schedule?.lastWrite?.maxDischargeW;
     const lwOk = lw && finite(lw.value);
     const rbAt = Number(v.fieldUpdatedAt?.maxDischargeW) || 0;
-    const rbOk = c?.points?.maxDischargeW?.enabled === true && rbAt > 0 && t - rbAt <= maxAge
+    const rbAge = stampAge(v.fieldUpdatedAt, 'maxDischargeW', t);
+    const rbOk = c?.points?.maxDischargeW?.enabled === true && rbAge != null && rbAge <= maxAge
       && !v.errors?.maxDischargeW && finite(v.maxDischargeW);
-    if (rbOk && (!lwOk || rbAt > (Number(lw.at) || 0) + ASSIST_READBACK_GRACE_MS)) return { value: Number(v.maxDischargeW), from: 'readback' };
+    // „Sicher nach dem eigenen Write gelesen“: beide Stempel monoton, wenn beide eine Marke haben (A26), sonst Wanduhr.
+    const rbMono = monoStampOf(v.fieldUpdatedAt, 'maxDischargeW', mono);
+    const lwMono = lwOk ? monoStampOf(lw, 'at', mono) : null;
+    const rbAfterWrite = rbMono != null && lwMono != null
+      ? rbMono > lwMono + ASSIST_READBACK_GRACE_MS
+      : rbAt > (Number(lw?.at) || 0) + ASSIST_READBACK_GRACE_MS;
+    if (rbOk && (!lwOk || rbAfterWrite)) return { value: Number(v.maxDischargeW), from: 'readback' };
     if (lwOk) return { value: Number(lw.value), from: 'own_write' };
     if (rbOk) return { value: Number(v.maxDischargeW), from: 'readback' };
     return null;
@@ -1280,8 +1306,12 @@ export function createGridConnectionGuard(ctx, deps = {}) {
   function dropSupersededRestore() {
     if (!st.assistRestore || st.assist) return false;
     st.assistRestore.at ??= Date.now();
+    st.assistRestore.atMono ??= mono();
     const lw = state().schedule?.lastWrite?.maxDischargeW;
-    if (!lw || String(lw.source || '').startsWith('grid_connection') || !(Number(lw.at) >= st.assistRestore.at)) return false;
+    // Reihenfolge „Write nach dem Ende der Hilfe“ monoton, wenn der Write eine Marke hat (A26), sonst Wanduhr.
+    const lwMono = lw ? monoStampOf(lw, 'at', mono) : null;
+    const newer = lwMono != null ? lwMono >= st.assistRestore.atMono : Number(lw?.at) >= st.assistRestore.at;
+    if (!lw || String(lw.source || '').startsWith('grid_connection') || !newer) return false;
     log('grid_connection_assist_superseded', { valueW: st.assistRestore.valueW, by: lw.source, text: 'Netzanschluss: Zurückschreiben der Entladegrenze entfällt — eine neuere Vorgabe gilt.' });
     st.assistRestore = null;
     persistAssist();
@@ -1290,7 +1320,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
 
   let assistWriting = false;
   let assistDirty = false;
-  let assistRestoreTriedAt = 0;
+  let assistRestoreTriedMono = null;
   // Akku-Hilfe durchsetzen: anheben/senken mit eigener Quelle, beenden mit dem
   // Wert davor. Alles über applyControlTarget — Grenzwerte, T-0075-Boden und
   // das Not-Halt-Tor gelten auch hier.
@@ -1304,8 +1334,8 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       value = st.assist.valueW; source = ASSIST_SOURCE;
     } else if (st.assistRestore) {
       if (dropSupersededRestore()) return;
-      if (!force && now() - assistRestoreTriedAt < ASSIST_RETRY_MS) return;
-      assistRestoreTriedAt = now();
+      if (!force && assistRestoreTriedMono != null && mono() - assistRestoreTriedMono < ASSIST_RETRY_MS) return;
+      assistRestoreTriedMono = mono();
       value = st.assistRestore.valueW; source = ASSIST_RESTORE_SOURCE;
     } else return;
     const restore = source === ASSIST_RESTORE_SOURCE;
@@ -1397,7 +1427,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const ceiling = ceilingNow();
     if (!lw || ceiling == null || !(Number(lw.value) > ceiling)) return;
     if (req && req.source !== lw.source) return;
-    if (now() - (Number(lw.at) || 0) > SETPOINT_MAX_AGE_MS) return;
+    if ((stampAge(lw, 'at') ?? Infinity) > SETPOINT_MAX_AGE_MS) return;
     // Erste Decke (vorher keine): der Steuerpfad hat noch keinen angefragten
     // Wert gemerkt — dann ist der zuletzt geschriebene ungedeckelt (Codex
     // 7a44bb81, P2).
@@ -1439,6 +1469,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
 
   function tick() {
     lastTickAt = now();
+    lastTickMono = mono();
     if (paused()) {
       if (!pausedSeen) {
         pausedSeen = true;
@@ -1474,8 +1505,8 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         lastLimitKey = limitKey;
       }
       // Geänderte Grenze an EOS — gedrosselt, aber nicht vergessen.
-      if (limitKey !== lastSyncedKey && now() - lastEosSyncAt >= 60_000) {
-        lastEosSyncAt = now();
+      if (limitKey !== lastSyncedKey && (lastEosSyncMono == null || mono() - lastEosSyncMono >= 60_000)) {
+        lastEosSyncMono = mono();
         lastSyncedKey = limitKey;
         Promise.resolve(ctx.eosConfigSync?.sync?.()).catch(() => {});
       }
@@ -1488,7 +1519,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         if (r.victronReadError) log('grid_connection_victron_unreadable', { text: `Victron-Bezugsgrenze (Reg. 2714) nicht lesbar — der zuletzt gelesene Wert gilt noch bis ${Math.round(VICTRON_LIMIT_MAX_AGE_MS / 60_000)} min nach der letzten Lesung, danach nur die DVhub-Werte.` }, 'warn');
       }
       const wantsAssist = (r.batteryNative || r.batterySupported) && liveRequests().length > 0;
-      const meas = r.active || wantsAssist ? meterImport(state(), c, { now: lastTickAt, maxAgeMs: METER_MAX_AGE_MS }) : null;
+      const meas = r.active || wantsAssist ? meterImport(state(), c, { now: lastTickAt, maxAgeMs: METER_MAX_AGE_MS, clock: mono }) : null;
       const list = r.active ? devices(c) : [];
       // Steht ein Zurückschreiben an, das eine neuere Vorgabe überholt hat, gilt
       // es nicht mehr — auch nicht als Rückkehrwert einer neuen Hilfe (Codex
@@ -1497,7 +1528,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       const battery = batteryInput(c, r);
       const assistTargetW = r.batteryNative ? externalTargetW(meas, battery) : null;
       if (!r.batteryNative && wantsAssist) last = { ...last, meas, battery };
-      const res = guardStep(st, { resolved: r, meas, devices: list, battery, now: lastTickAt, assistTargetW });
+      const res = guardStep(st, { resolved: r, meas, devices: list, battery, now: lastTickMono, wallNow: lastTickAt, assistTargetW });
       last = { meas, devices: list, battery };
       report(r, res.events);
       if (res.changed.size || res.ceilingTightened) enforce(res.changed, res.ceilingTightened);
@@ -1524,8 +1555,8 @@ export function createGridConnectionGuard(ctx, deps = {}) {
   // ASSIST_REQUEST_MAX_AGE_MS ohne Erneuerung.
   const requests = new Map();
   const liveRequests = () => {
-    const t = now();
-    for (const [k, q] of requests) if (t > q.expiresAt) requests.delete(k);
+    const m = mono();
+    for (const [k, q] of requests) if (m > q.expiresMono) requests.delete(k);
     return paused() ? [] : [...requests.values()];
   };
   // Strengstes Ziel (W) der Anforderungen, null = keins. coverW wird gegen den
@@ -1625,10 +1656,13 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       if (r.battery.kind === 'none') return { ok: false, kind: 'none', reason: 'battery_not_steerable', acceptedW: 0 };
       const before = ceilingNow();
       const t = now();
+      const m = mono();
+      // Ablauf monoton (A26): die Restzeit bis untilMs (Systemzeit der Quelle) bzw. die feste Frist läuft ab Eingang.
       requests.set(source, {
         source, maxImportW: hasMax ? Math.round(Number(q.maxImportW)) : null,
         coverW: hasCover ? Math.round(Number(q.coverW)) : null, at: t,
         expiresAt: until ?? t + ASSIST_REQUEST_MAX_AGE_MS,
+        expiresMono: m + (until != null ? until - t : ASSIST_REQUEST_MAX_AGE_MS),
         lastTargetW: requests.get(source)?.lastTargetW ?? null
       });
       // Decke gesunken: laufenden Sollwert sofort neu durch den Steuerpfad.
@@ -1681,7 +1715,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       if (timer) return;
       // Rückfalltakt: hängt die Zählerabfrage selbst, greift der Fail-safe trotzdem.
       timer = safeInterval('grid-connection.fallback', () => {
-        if (now() - lastTickAt >= FALLBACK_TICK_MS - 500) tick();
+        if (lastTickMono == null || mono() - lastTickMono >= FALLBACK_TICK_MS - 500) tick();
       }, FALLBACK_TICK_MS);
     },
     stop() { if (timer) { clearInterval(timer); timer = null; } },
@@ -1726,7 +1760,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       const t = now();
       const meas = last.meas;
       const clampRaw = s.ctrl?._gridConnection?.clamp;
-      const clamp = clampRaw && t - Number(clampRaw.at || 0) <= CLAMP_FRESH_MS
+      const clamp = clampRaw && (stampAge(clampRaw, 'at', t) ?? Infinity) <= CLAMP_FRESH_MS
         ? { requestedW: clampRaw.requestedW, valueW: clampRaw.valueW, source: clampRaw.source } : null;
       const caps = last.devices
         .filter((d) => st.caps[d.id] != null)

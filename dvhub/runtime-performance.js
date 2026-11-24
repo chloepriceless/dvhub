@@ -1,3 +1,5 @@
+import { pickMonoNow } from './services/mono-clock.js';
+
 function toIso(value) {
   return new Date(value).toISOString();
 }
@@ -58,10 +60,15 @@ export function createTelemetryWriteBuffer({
   flushIntervalMs = 5000,
   batchMs = 0,
   maxQueuedRows = 20000,
-  now = () => Date.now(),
+  now: nowArg = null,
+  monoNow: monoNowArg = null,
   buildSamples,
   writeSamples
 }) {
+  const now = nowArg || (() => Date.now());
+  // A26: Abstände (Schreibtakt, Probenabstand resolution_seconds) monoton — ein Sprung der Systemzeit vorwärts gäbe
+  // einer Probe sonst Stunden Gültigkeit (Energie in der Historie), rückwärts nur 1 s. ts bleibt Systemzeit.
+  const mono = pickMonoNow(monoNowArg, nowArg);
   let pendingSnapshot = null;
   let lastFlushedAt = null;
   let queue = [];
@@ -70,7 +77,7 @@ export function createTelemetryWriteBuffer({
 
   function writeQueued(force) {
     if (!queue.length) return;
-    const t = Number(now());
+    const t = Number(mono());
     if (!force && batchMs > 0 && lastWriteAt != null && (t - lastWriteAt) < batchMs) return;
     if (lastWriteAt == null && !force && batchMs > 0) { lastWriteAt = t; return; }
     const rows = queue;
@@ -89,7 +96,7 @@ export function createTelemetryWriteBuffer({
 
   function flush({ force = false } = {}) {
     if (!pendingSnapshot) { if (force) writeQueued(true); return false; }
-    const currentNow = Number(now());
+    const currentNow = Number(mono());
     if (!force && lastFlushedAt != null && (currentNow - lastFlushedAt) < flushIntervalMs) {
       return false;
     }

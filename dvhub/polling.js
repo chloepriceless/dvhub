@@ -31,6 +31,10 @@ import { meterPollDurationSeconds, meterPollErrorsTotal, telemetryFreezeActive }
 import { followerBatteryForFlow } from './services/multi-gx/planning.js';
 // Netzspannung L1–L3 + Frequenz des Netzzählers, zentral (05.11.2026).
 import { createGridVoltagePoller } from './services/grid-voltage.js';
+// A24 (Christin 23.11.2026): jeder Messwert-Stempel (Wanduhr) bekommt beim Erzeugen eine monotone Marke daneben —
+// Verbraucher messen Frische und Reihenfolge damit, ein Sprung der Systemzeit verschiebt sie nicht. Unsichtbar
+// (WeakMap), nie gespeichert, nie im Status; die Wanduhr-Felder bleiben unverändert.
+import { monoNow, stampMono, clearMonoStamp, monoStampOf, monoStampAge } from './services/mono-clock.js';
 
 /**
  * Load persisted energy state from disk into state.energy (if today's data).
@@ -224,8 +228,10 @@ export function createPoller(ctx) {
     }
     const every = Number(conf.pollEveryMs);
     if (every > 0) {
-      const t = Date.now();
-      if (lastPointPollAt[name] && t - lastPointPollAt[name] < every) return undefined;
+      // Takt monoton (A24): nach einem Rücksprung der Systemzeit blieb der Punkt (z. B. Netzanschluss-Grenze 2714) sonst
+      // um die Sprungweite ungelesen.
+      const t = monoNow();
+      if (lastPointPollAt[name] != null && t - lastPointPollAt[name] < every) return undefined;
       lastPointPollAt[name] = t;
     }
     // SunSpec-deklarierte Punkte warten auf den Geräte-Scan (ensureSunspecResolved)
@@ -233,10 +239,12 @@ export function createPoller(ctx) {
     if (conf.sunspec && conf.address == null) return false;
     try {
       let sourceAt = null;
+      let sourceMono = null;
       if (transport.type === 'mqtt') {
         const result = await transport.readPoint(name);
         state.victron[name] = result.mqttValue;
         sourceAt = Number(result?.ts);
+        sourceMono = Number.isFinite(result?.monoTs) ? result.monoTs : null;
       } else {
         // Lese-Engine (18.11.2026): ein Lesepunkt kann mehrere Register lesen (combine E4, split E9, Skalenfaktor
         // E5). Ohne diese Schlüssel genau ein mbRequest(conf) wie bisher.
@@ -251,14 +259,20 @@ export function createPoller(ctx) {
       // NICHT als Frische-Mass — ein eingefrorener SoC nach Comms-Ausfall behielte
       // seinen Wert. fieldUpdatedAt reflektiert echte Aktualitaet je Feld.
       (state.victron.fieldUpdatedAt ??= {})[name] = _now;
+      stampMono(state.victron.fieldUpdatedAt, name);
       // MQTT liefert aus dem Cache: der Abfrage-Stempel oben ist „jetzt“, der
       // Wert kann bis staleMaxAgeMs alt sein (0 = ohne Grenze). Die Empfangszeit
       // des Werts steht daneben — der Netzstrom-Zähler bucht mit altem Wert nicht
       // ab (grid-share.js, Gegenprüfung Release 1.0.9). Modbus: Wert = Abfrage.
       // Auch die Bestätigung „nach dem Schreiben“ der Einspeisung aus Akku 2
       // (multi-gx/floor-handoff.js) nimmt die Empfangszeit, sonst den Poll.
-      if (sourceAt > 0) (state.victron.fieldSourceAt ??= {})[name] = sourceAt;
-      else if (state.victron.fieldSourceAt) delete state.victron.fieldSourceAt[name];
+      // A24: die Empfangszeit monoton vom MQTT-Eingang (monoTs), nie die Abfrage — sonst wirkte ein Wert aus dem Cache
+      // nach dem Schreiben „neu“. Ohne monoTs (fremder Transport) keine Marke: Verbraucher bleiben bei der Wanduhr.
+      if (sourceAt > 0) {
+        (state.victron.fieldSourceAt ??= {})[name] = sourceAt;
+        if (sourceMono != null) stampMono(state.victron.fieldSourceAt, name, { at: sourceMono });
+        else clearMonoStamp(state.victron.fieldSourceAt, name);
+      } else if (state.victron.fieldSourceAt) delete state.victron.fieldSourceAt[name];
       return state.victron[name] != null;
     } catch (e) {
       state.victron.errors[name] = e.message;
@@ -323,6 +337,7 @@ export function createPoller(ctx) {
       // T-0075: per-field success timestamp (success branch only), mirroring
       // pollPoint — real freshness for the dv-control readback fields too.
       (state.victron.fieldUpdatedAt ??= {})[name] = _now;
+      stampMono(state.victron.fieldUpdatedAt, name);
     } catch (e) {
       state.victron.errors[name] = e.message;
       state.victron.updatedAt = Date.now();
@@ -596,9 +611,9 @@ export function createPoller(ctx) {
     if (cfg.points?.batteryPowerW?.derive === 'm160_battery' && !groups.has(victronKey)) {
       groups.set(victronKey, { ep: sunspecEndpointOf(null, v), slots: [] });
     }
-    const now = Date.now();
+    const now = monoNow(); // A26: Wiederholtakt der SunSpec-Suche monoton
     for (const [key, group] of groups) {
-      if (now < (sunspecRetryAt.get(key) || 0)) continue;
+      if (sunspecRetryAt.has(key) && now < sunspecRetryAt.get(key)) continue;
       sunspecRetryAt.set(key, now + 60000);
       const { ep } = group;
       // Der Standardfall (victron.*) loggt wie bisher; eine abweichende Verbindung nennt Unit und Port.
@@ -702,7 +717,7 @@ export function createPoller(ctx) {
   // Schreiben (Sequenzen, EMS) geht erst, wenn das Gerät als Sungrow-Hybrid
   // erkannt ist — ein String-WR (SG) oder ein fremdes Gerät bekommt keinen Write.
   let identifyRetryAt = 0;
-  let identifyInfoAt = 0;
+  let identifyInfoAt = null;
   let bdcRetryAt = 0;
   // Block-Fähigkeit der FC-3-Gerätegrenzen je Verbindung (N3, Feld 15.11.): wirft der WR auf einen Block eine
   // Modbus-Ausnahme (illegale Adresse), dauerhaft auf Einzellesen zurückfallen und das je Verbindung merken.
@@ -719,19 +734,20 @@ export function createPoller(ctx) {
       fc, host: v.host, port: v.port, unitId: v.unitId, timeoutMs: v.timeoutMs, address, quantity
     });
     const now = Date.now();
+    const nowMono = monoNow(); // A26: Wiederholtakte (Kennung, BDC, Info) monoton; identifiedAt/infoAt bleiben Systemzeit
     let dev = state.victron.device;
     if (dev && dev.endpointKey !== endpointKey) {
       delete state.victron.device;
       dev = null;
       identifyRetryAt = 0;
-      identifyInfoAt = 0;
+      identifyInfoAt = null;
       bdcRetryAt = 0;
       blockCaps.limits = true;
       blockCaps.soc = true;
     }
     if (!dev) {
-      if (now < identifyRetryAt) return;
-      identifyRetryAt = now + 60000;
+      if (nowMono < identifyRetryAt) return;
+      identifyRetryAt = nowMono + 60000;
       try {
         const id = await identifySungrow(read);
         dev = { ...id, endpointKey, identifiedAt: now };
@@ -750,8 +766,8 @@ export function createPoller(ctx) {
     }
     // BDC-Nennleistung ist die Obergrenze der Akku-Vorgabe: fehlt sie (Lesefehler bei der
     // Erkennung), alle 60 s nachlesen — bis dahin gibt es keinen Zwangsbetrieb (Codex b8aa8e70).
-    if (dev.supported && dev.bdcRatedW == null && now >= bdcRetryAt) {
-      bdcRetryAt = now + 60000;
+    if (dev.supported && dev.bdcRatedW == null && nowMono >= bdcRetryAt) {
+      bdcRetryAt = nowMono + 60000;
       try {
         const w = Number((await read({ fc: 4, address: wire(5628), quantity: 1 }))?.[0]);
         if (Number.isFinite(w) && w > 0 && w !== 0xffff) {
@@ -761,8 +777,8 @@ export function createPoller(ctx) {
       } catch { /* nächster Versuch in 60 s */ }
     }
     const infoEveryMs = Math.max(30000, Number(cfg.identify.infoEveryMs) || 300000);
-    if (now - identifyInfoAt < infoEveryMs) return;
-    identifyInfoAt = now;
+    if (identifyInfoAt != null && nowMono - identifyInfoAt < infoEveryMs) return;
+    identifyInfoAt = nowMono;
     try {
       const info = decodeSungrowInfoBlock(await read({ fc: 4, address: wire(13000), quantity: 46 }));
       if (info) state.victron.device = { ...state.victron.device, info, infoAt: now };
@@ -881,7 +897,9 @@ export function createPoller(ctx) {
     const factor = meterFactor(m, 'meter');
     const notAvailable = Array.isArray(m.notAvailableRaw) ? m.notAvailableRaw.map(Number) : [];
     const fb = m.fallback && typeof m.fallback === 'object' ? m.fallback : null;
-    const usePrimary = !fb || !meterFallbackSince || Date.now() - meterFallbackSince >= METER_PRIMARY_RETRY_MS;
+    // Wiederholung des Hauptblocks monoton (A24): nach einem Rücksprung blieb der Zähler sonst um die Sprungweite auf dem
+    // Ersatzregister (ohne Phasenwerte).
+    const usePrimary = !fb || !meterFallbackSince || monoNow() - meterFallbackSince >= METER_PRIMARY_RETRY_MS;
     if (usePrimary) {
       let regs = null;
       try {
@@ -910,7 +928,7 @@ export function createPoller(ctx) {
           text: 'Zähler-Block ohne Werte (Firmware?) — Gesamtleistung kommt aus dem Ersatzregister, ohne Phasenwerte'
         }, 'warn');
       }
-      meterFallbackSince = Date.now();
+      meterFallbackSince = monoNow() || 1;
     }
     const fregs = await transport.mbRequest({ ...m, ...fb, quantity: 2 });
     if (!Array.isArray(fregs) || fregs.length < 2) {
@@ -967,6 +985,7 @@ export function createPoller(ctx) {
       // E10: Zähler ausgeblendet (Kennungsprobe passt nicht) — nicht lesen, Fehlerzweig unten ohne Backoff.
       if (meterHiddenBy) throw Object.assign(new Error(meterHiddenBy), { identityHidden: true });
       let l1, l2, l3, total;
+      let meterSourceMono = null; // A24: monotone Empfangszeit des MQTT-Netzwerts (readGrid().monoTs)
       if (String(cfg.meter?.readType || '').toLowerCase() === 'spine-http') {
         // SPiNE EnergyLink One als Netzzähler-Quelle: der eingebaute
         // 3-Phasen-Zähler (Shelly Pro3EM) wird über die lokale HTTP-API des
@@ -1026,6 +1045,7 @@ export function createPoller(ctx) {
             return v.some((x) => x != null) ? { total: v.reduce((a, b) => a + (b ?? 0), 0), l1: v[0] ?? 0, l2: v[1] ?? 0, l3: v[2] ?? 0 } : null;
           })();
         if (!grid) throw new Error('MQTT: Netzwerte fehlen oder sind veraltet (Zufluss prüfen)');
+        meterSourceMono = Number.isFinite(grid.monoTs) ? grid.monoTs : null;
         const posImport = cfg.gridPositiveMeans === 'grid_import';
         // positiv = Import -> bei feed_in-Konvention invertieren
         const sign = posImport ? 1 : -1;
@@ -1172,6 +1192,9 @@ export function createPoller(ctx) {
         };
       }
 
+      // A24: Zählerstempel monoton (Nulleinspeisung meterFresh, Einspeisegrenze); MQTT-Empfang des Netzwerts dazu.
+      stampMono(state.meter, 'updatedAt');
+      if (state.meter.sourceAt != null && Number.isFinite(meterSourceMono)) stampMono(state.meter, 'sourceAt', { at: meterSourceMono });
       state.dvRegs[0] = u16(total);
       state.dvRegs[1] = total < 0 ? 0xffff : 0x0000;
       state.dvRegs[3] = 0;
@@ -1201,6 +1224,7 @@ export function createPoller(ctx) {
       state.meter.ok = false;
       state.meter.error = e.message;
       state.meter.updatedAt = Date.now();
+      stampMono(state.meter, 'updatedAt');
       if (e?.identityHidden === true || e?.valueUnknown === true) {
         // E10: kein Verbindungsfehler (die Probe hat eine Antwort bekommen) — kein Backoff, keine Fehlermetrik. Die
         // Netzwerte leer statt der alten oder womöglich falschen (Leitstand zeigt „-“, Telemetrie schreibt nichts).
@@ -1312,6 +1336,7 @@ export function createPoller(ctx) {
             // T-0075-Frische: der Discharge-Floor keyt auf batteryPowerW —
             // ohne Stempel gälte der abgeleitete Wert sofort als stale.
             (state.victron.fieldUpdatedAt ??= {}).batteryPowerW = Date.now();
+            stampMono(state.victron.fieldUpdatedAt, 'batteryPowerW');
             if (state.victron.errors) delete state.victron.errors.batteryPowerW;
             unknownPoints.delete('batteryPowerW');
           } else {
@@ -1440,6 +1465,12 @@ export function createPoller(ctx) {
         const inputStamps = balanceInputs.map((f) => Number(state.victron.fieldUpdatedAt[f])).filter((t) => t > 0);
         const meterAt = Number(state.meter.updatedAt) > 0 ? Number(state.meter.updatedAt) : nowStamp;
         state.victron.fieldUpdatedAt.selfConsumptionW = Math.min(nowStamp, meterAt, ...inputStamps);
+        // A24: monoton dasselbe — ältester Eingang. Nur wenn jeder Eingang eine Marke hat, sonst keine (Wanduhr).
+        const fu = state.victron.fieldUpdatedAt;
+        const inputMonos = balanceInputs.filter((f) => Number(fu[f]) > 0).map((f) => monoStampOf(fu, f));
+        const meterMono = Number(state.meter.updatedAt) > 0 ? monoStampOf(state.meter, 'updatedAt') : monoNow();
+        if (meterMono != null && inputMonos.every((m) => m != null)) stampMono(fu, 'selfConsumptionW', { at: Math.min(monoNow(), meterMono, ...inputMonos) });
+        else clearMonoStamp(fu, 'selfConsumptionW');
       }
       // Empfangsalter = das des ältesten Eingangs (MQTT-Cache), sonst keins. Ein
       // alter Eintrag aus der Zeit mit Verbrauchs-Topic darf nicht stehen
@@ -1449,8 +1480,16 @@ export function createPoller(ctx) {
         .map((f) => Number(state.victron.fieldSourceAt?.[f]))
         .concat(Number(state.meter?.sourceAt))
         .filter((t) => t > 0);
-      if (inputAt.length) (state.victron.fieldSourceAt ??= {}).selfConsumptionW = Math.min(...inputAt);
-      else if (state.victron.fieldSourceAt) delete state.victron.fieldSourceAt.selfConsumptionW;
+      if (inputAt.length) {
+        const fs = (state.victron.fieldSourceAt ??= {});
+        fs.selfConsumptionW = Math.min(...inputAt);
+        // A24: Empfangszeit monoton, wenn jeder Eingang mit Empfangszeit auch eine Marke hat.
+        const srcMonos = ['pvPowerW', 'pvAcW', 'acPvL1W', 'acPvL2W', 'acPvL3W', 'batteryPowerW']
+          .filter((f) => Number(fs[f]) > 0).map((f) => monoStampOf(fs, f))
+          .concat(Number(state.meter?.sourceAt) > 0 ? [monoStampOf(state.meter, 'sourceAt')] : []);
+        if (srcMonos.length && srcMonos.every((m) => m != null)) stampMono(fs, 'selfConsumptionW', { at: Math.min(...srcMonos) });
+        else clearMonoStamp(fs, 'selfConsumptionW');
+      } else if (state.victron.fieldSourceAt) delete state.victron.fieldSourceAt.selfConsumptionW;
     } else if (state.victron.selfConsumptionDerived && loadPolled === true) {
       // Herkunft (Codex 1bce7fc9): nur ein in diesem Takt GEMESSENER Wert ersetzt die abgeleitete Last. Fällt die
       // Ableitung aus (Eingang fehlerhaft), bleibt der gehaltene Wert als abgeleitet markiert — sonst hielte eine
@@ -1490,7 +1529,10 @@ export function createPoller(ctx) {
       const sBat = sungrowSecond.batteryPowerW ?? 0;
       state.victron.sungrowMasterLoadW = Number(state.victron.selfConsumptionW);
       state.victron.selfConsumptionW = Number(Math.max(0, Number(state.victron.selfConsumptionW) + sPv - sBat).toFixed(3));
-      if (state.victron.fieldUpdatedAt) state.victron.fieldUpdatedAt.selfConsumptionW = Date.now();
+      if (state.victron.fieldUpdatedAt) {
+        state.victron.fieldUpdatedAt.selfConsumptionW = Date.now();
+        stampMono(state.victron.fieldUpdatedAt, 'selfConsumptionW');
+      }
     } else if (sungrowSecondCfg.enabled && !sungrowSecond) {
       delete state.victron.sungrowMasterLoadW;
     }
@@ -1503,7 +1545,9 @@ export function createPoller(ctx) {
       const maxAge = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
       if (Number.isFinite(loadNow) && loadNow > 0) {
         state.victron._sungrowLoadHold = { w: loadNow, at: Date.now() };
-      } else if (giW > 100 && !loadHidden && state.victron._sungrowLoadHold && Date.now() - state.victron._sungrowLoadHold.at <= maxAge) {
+        stampMono(state.victron._sungrowLoadHold, 'at');
+      } else if (giW > 100 && !loadHidden && state.victron._sungrowLoadHold
+        && (monoStampAge(state.victron._sungrowLoadHold, 'at') ?? (Date.now() - state.victron._sungrowLoadHold.at)) <= maxAge) {
         // E10: eine ausgeblendete Hauslast setzt die Sicherung nicht wieder ein (Codex e20a456e).
         state.victron.selfConsumptionW = state.victron._sungrowLoadHold.w;
       }
@@ -1620,10 +1664,17 @@ export function createPoller(ctx) {
       ctx.gridConnection?.pollTick?.();
     } catch (e) { pushLog('grid_connection_error', { error: e?.message || String(e) }, 'warn'); }
 
+    // A26: die Kopie des Zählers behält die monotonen Marken (unsichtbar, nicht im IPC) — liveSnapshotStale misst den
+    // Abstand Zähler ↔ Feldstempel damit.
+    const meterSnap = { ...state.meter };
+    for (const k of ['updatedAt', 'sourceAt']) {
+      const m = monoStampOf(state.meter, k);
+      if (m != null) stampMono(meterSnap, k, { at: m });
+    }
     ctx.onPollComplete?.({
       ts: new Date(state.meter.updatedAt || Date.now()).toISOString(),
       resolutionSeconds: Math.max(1, Math.round(effectivePollIntervalMs() / 1000)),
-      meter: { ...state.meter },
+      meter: meterSnap,
       victron: { ...state.victron }
     });
 

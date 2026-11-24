@@ -34,7 +34,7 @@
 // Empfangszeit monoton (createStampAge). Episoden-Zeiten und readback.at bleiben
 // Wanduhr (Anzeige, Protokoll).
 
-import { pickMonoNow, createStampAge } from '../mono-clock.js';
+import { pickMonoNow, createStampAge, monoStampOf } from '../mono-clock.js';
 
 export const FEED_IN_CAP_MODES = Object.freeze(['', 'none', 'pct60', 'pct70', 'pct', 'watts']);
 export const FEED_IN_CAP_TICK_MS = 5000;
@@ -279,7 +279,9 @@ export function createFeedInCap(ctx, deps = {}) {
    */
   function meterFresh() {
     const s = ctx.state || {};
-    return s.meter?.ok === true && stampAge.ageMs('meter', Number(s.meter.updatedAt || 0)) < METER_MAX_AGE_MS;
+    // A24: monotone Marke des Pollers am Zählerstempel, wenn vorhanden (gleiche Uhr) — sonst die gemerkte Empfangszeit.
+    return s.meter?.ok === true
+      && stampAge.ageMs('meter', Number(s.meter.updatedAt || 0), s.meter ? monoStampOf(s.meter, 'updatedAt', mono) : null) < METER_MAX_AGE_MS;
   }
 
   /** Grenze für die Regelschleife (nur Weg „loop“), sonst null. */

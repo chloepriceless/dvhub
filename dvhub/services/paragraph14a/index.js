@@ -21,6 +21,7 @@ import { parseMqttPayload } from '../../transport-mqtt.js';
 import { resolveEvccBridgeConfig } from '../optimizer/eos-evcc-bridge.js';
 import { directWallboxConfigured } from '../wallbox/types.js';
 import { mergeDeviceCaps, meterImport } from '../import-limit/core.js';
+import { monoStampAge } from '../mono-clock.js';
 import {
   P14A_MIN_W, STEUVE_KINDS, DEFAULT_PRIORITY, computePmin14a, budgetW, allocateBudget, demandW, setShare, ownShare,
 } from './rules.js';
@@ -180,7 +181,8 @@ export function createParagraph14aService(ctx, deps = {}) {
       const pollMs = Math.max(5_000, Number(cfg?.evcc?.pollIntervalMs) || 15_000);
       const maxAge = Math.max(EVCC_MEASUREMENT_MIN_AGE_MS, 3 * pollMs);
       const polledAt = Number(st?.lastPolledAt) || 0;
-      const fresh = st?.lastError == null && polledAt > 0 && now() - polledAt <= maxAge;
+      // A26: Alter monoton aus der Marke der evcc-Anbindung (getStatus), ohne Marke Wanduhr.
+      const fresh = st?.lastError == null && polledAt > 0 && (monoStampAge(st, 'lastPolledAt') ?? (now() - polledAt)) <= maxAge;
       if (!fresh) return { measuredW: null, available: true };
       const lp = st?.loadpoints?.[bc.loadpoint - 1];
       return { measuredW: fin(lp?.chargePowerW), available: lp?.connected !== false };

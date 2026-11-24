@@ -55,7 +55,7 @@
 // aktive SoC-Grenze wie eine gesetzte Entlade-Sperre.
 
 import { knownMaxDischargeW, decodeMaxDischargeRaw, MAX_DISCHARGE_INT32_ADDR } from './peak-shaving/index.js';
-import { monoNow, createStampAge } from './mono-clock.js';
+import { monoNow, createStampAge, monoStampOf, monoStampAge, stampAfter } from './mono-clock.js';
 
 // So alt darf das Halte-Signal der Auswertung (state.ctrl.eosGridHold) bzw.
 // DVhubs eigener 2704-Schreibwert höchstens sein — mindestens, bei langsamerem
@@ -154,6 +154,10 @@ function holdSignalMaxAgeMs(cfg) {
   return Math.max(HOLD_SIGNAL_MAX_AGE_MS, Number.isFinite(evaluateMs) && evaluateMs > 0 ? 3 * evaluateMs : 0);
 }
 
+// A24: „Uhr“ ohne Marken — ein Aufruf mit eingespielter Wanduhr (Tests ohne ctx.monoNow) bekommt keine monotonen
+// Erzeuger-Stempel und bleibt bei der Wanduhr.
+const NO_MARKS = () => NaN;
+
 function isFresh(at, nowMs, maxAgeMs) {
   const t = Number(at);
   return t > 0 && Math.abs(nowMs - t) <= maxAgeMs;
@@ -167,15 +171,21 @@ function isFresh(at, nowMs, maxAgeMs) {
  * Kein Halten, wenn
  *   • die Hauslast unbekannt war (Sollwert 0 = Eigenverbrauch, der Akku soll entladen),
  *   • Peak Shaving den Halte-Wert gedeckelt hat (der Akku soll den Rest liefern).
+ * A26: mit `clock` (monotone Uhr des Wächters) zählt das Alter der Signale aus ihrer Erzeuger-Marke (schedule-eval
+ * stampMono); ohne Uhr oder Marke Wanduhr wie bisher.
  */
-export function activeDischargeHold(state, nowMs = Date.now(), cfg = {}) {
+export function activeDischargeHold(state, nowMs = Date.now(), cfg = {}, clock = null) {
   const hold = state?.ctrl?.eosGridHold;
   const maxAgeMs = holdSignalMaxAgeMs(cfg);
-  if (!hold || hold.known !== true || !isFresh(hold.at, nowMs, maxAgeMs)) return null;
+  const fresh = (sig) => {
+    const age = clock ? monoStampAge(sig, 'at', clock) : null;
+    return age != null ? age <= maxAgeMs : isFresh(sig.at, nowMs, maxAgeMs);
+  };
+  if (!hold || hold.known !== true || !fresh(hold)) return null;
   // Peak Shaving oder Netzanschluss haben den Halte-Wert gedeckelt: der Akku
   // soll den Rest liefern — kein Halten.
   for (const clamp of [state?.ctrl?._peakShaving?.clamp, state?.ctrl?._gridConnection?.clamp]) {
-    if (clamp && clamp.source === 'eos_grid_hold' && isFresh(clamp.at, nowMs, maxAgeMs)
+    if (clamp && clamp.source === 'eos_grid_hold' && fresh(clamp)
         && Number(clamp.valueW) < Number(clamp.requestedW)) return null;
   }
   return 'eos_grid_hold';
@@ -219,10 +229,20 @@ export function isVictronModbus(cfg) {
  * Eine 0 aus 2704 (2. und 3.) zählt am Victron (Modbus) nur mit eigenem
  * 0-Write — sie ist von −1 (unbegrenzt) nicht zu unterscheiden.
  */
-export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = null) {
-  const known = knownMaxDischargeW(state, cfg, nowMs);
-  const ownOk = ownRead && !ownRead.error && Number.isFinite(Number(ownRead.value))
-    && isFresh(ownRead.at, nowMs, capReadMaxAgeMs(cfg));
+//
+// Zeit (A24, Christin 23.11.2026): mit `clock` (monotone Uhr des Wächters) und `monoMs` tragen die Quellen ihre
+// monotone Erzeugerzeit (known.mono, ownRead.mono). Frische und „neuer als“ rechnen dann monoton; fehlt einer Seite die
+// monotone Zeit, beide Seiten Wanduhr wie bisher (nie gemischt). So überstimmt nach einem Rücksprung der Systemzeit
+// weder eine alte eigene Lesung eine neuere Sperre (Codex ba9fa22b P2) noch verfällt eine frische (Codex 4fd0803c P2).
+export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = null, { monoMs = null, clock = null } = {}) {
+  const known = knownMaxDischargeW(state, cfg, nowMs, clock || NO_MARKS);
+  const knownMono = clock ? known?.mono ?? null : null;
+  // Frische der eigenen Lesung: ihre monotone Zeit stammt vom Wächter selbst (gleiche Uhr wie monoMs) — dafür braucht
+  // es keine Erzeuger-Marke. Für die Reihenfolge gegen known nur mit passender Uhr (clock).
+  const ownMonoFresh = Number.isFinite(monoMs) && Number.isFinite(ownRead?.mono);
+  const ownMono = clock && ownMonoFresh ? ownRead.mono : null;
+  const ownFresh = ownMonoFresh ? monoMs - ownRead.mono <= capReadMaxAgeMs(cfg) : isFresh(ownRead?.at, nowMs, capReadMaxAgeMs(cfg));
+  const ownOk = ownRead && !ownRead.error && Number.isFinite(Number(ownRead.value)) && ownFresh;
   // Eine NEUERE eindeutige Rücklesung (Poll-Punkt bzw. Peak Shaving) geht der
   // eigenen Lesung vor — die gilt bis zu 90 s, an der GX kann die Sperre
   // inzwischen aufgehoben oder gesetzt sein (Gesamtprüfung Release 1.0.9).
@@ -230,7 +250,8 @@ export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = nul
   // neuer nicht (sie kann −1 heißen, Gegenprüfung 0ff2eb8d).
   const knownUsable = known && known.from !== 'own_write'
     && (!zeroIsAmbiguous(known, cfg) || ownZeroWrite(state));
-  if (ownOk && knownUsable && !zeroIsAmbiguous(known, cfg) && Number(known.at) > Number(ownRead.at)) return known.value;
+  if (ownOk && knownUsable && !zeroIsAmbiguous(known, cfg)
+      && stampAfter({ wall: known.at, mono: knownMono }, { wall: ownRead.at, mono: ownMono })) return known.value;
   // Eindeutiger Wert (2720 bzw. MQTT) geht vor — auch vor einer 2704-0 mit
   // alter eigener 0 (an der GX kann längst −1 stehen, Gegenprüfung 0ff2eb8d).
   if (ownOk && !ownRead.ambiguousZero) return Number(ownRead.value);
@@ -240,7 +261,8 @@ export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = nul
   // (Gegenprüfung Release 1.0.9, P2).
   if (knownUsable) return known.value;
   if (ownOk && ownZeroWrite(state)) return Number(ownRead.value);
-  if (known && known.from === 'own_write' && isFresh(known.at, nowMs, holdSignalMaxAgeMs(cfg))) return known.value;
+  if (known && known.from === 'own_write'
+      && (knownMono != null && Number.isFinite(monoMs) ? monoMs - knownMono <= holdSignalMaxAgeMs(cfg) : isFresh(known.at, nowMs, holdSignalMaxAgeMs(cfg)))) return known.value;
   return null;
 }
 
@@ -253,8 +275,8 @@ function zeroIsAmbiguous(known, cfg) {
 
 // Eine 0 aus einer 2704-Rücklesung (Poll-Punkt / Peak Shaving) trägt gerade
 // eine Entschuldigung — dann mit 2720 gegenprüfen.
-function reliesOnAmbiguousZero(state, cfg, nowMs) {
-  const known = knownMaxDischargeW(state, cfg, nowMs);
+function reliesOnAmbiguousZero(state, cfg, nowMs, clock = NO_MARKS) {
+  const known = knownMaxDischargeW(state, cfg, nowMs, clock);
   // Ohne eigenen 0-Write entschuldigt eine 2704-0 ohnehin nichts (7b1613f5).
   return !!known && known.from !== 'own_write' && zeroIsAmbiguous(known, cfg) && ownZeroWrite(state);
 }
@@ -510,15 +532,16 @@ export function createSetpointFollowWatchdog(ctx) {
     return typeof t.mbRequest === 'function' && conf.address != null ? conf : null;
   }
 
-  // Eigene Rücklesung für die Prüfung: nur, solange sie nach der monotonen Uhr höchstens capReadMaxAgeMs alt ist. Sonst
-  // unverändert (at = Wanduhr der Lesung): knownDischargeCapW vergleicht „neuer als“ gegen die Wanduhr-Stempel der
-  // anderen Rücklesungen; nur EINE Seite umzurechnen kehrte die Reihenfolge nach einem Sprung um (Codex 29b60b7e P2).
+  // Eigene Rücklesung für die Prüfung: nur, solange sie nach der monotonen Uhr höchstens capReadMaxAgeMs alt ist. `at`
+  // bleibt die Wanduhr der Lesung, `mono` ihre monotone Zeit: knownDischargeCapW ordnet monoton, wenn auch die andere
+  // Rücklesung eine monotone Erzeugerzeit hat (A24), sonst Wanduhr gegen Wanduhr — nur EINE Seite umzurechnen kehrte
+  // die Reihenfolge nach einem Sprung um (Codex 29b60b7e P2).
   function capReadNow(cfg, monoMs) {
     if (!capRead) return null;
     return capRead.mono == null || monoMs - capRead.mono <= capReadMaxAgeMs(cfg) ? capRead : null;
   }
 
-  function maybeReadCap(cfg, nowMs, monoMs, opts) {
+  function maybeReadCap(cfg, nowMs, monoMs, opts, markClock = null) {
     const conf = capReadable(cfg);
     if (!conf || capReadPending || (capReadStartedAt != null && monoMs - capReadStartedAt < CAP_READ_EVERY_MS)) return;
     // Nur jüngere auffällige Punkte (≤ holdMs): bei einem langen Entschuldigungs-
@@ -530,7 +553,7 @@ export function createSetpointFollowWatchdog(ctx) {
     const capBlock = capRead && !capRead.error && Number(capRead.value) >= 0 && Number(capRead.value) < opts.minShortfallW
       && !(capRead.ambiguousZero && !ownZeroWrite(state));
     const victron = isVictronModbus(cfg);
-    const crossCheck = victron && !no2720 && ctx.transport.type !== 'mqtt' && reliesOnAmbiguousZero(state, cfg, nowMs);
+    const crossCheck = victron && !no2720 && ctx.transport.type !== 'mqtt' && reliesOnAmbiguousZero(state, cfg, nowMs, markClock || NO_MARKS);
     if (!suspicious && !capBlock && !crossCheck) return;
     capReadPending = true;
     capReadStartedAt = monoMs;
@@ -583,6 +606,9 @@ export function createSetpointFollowWatchdog(ctx) {
     const nowMs = nowArg ?? Date.now();
     const monoMs = monoArg ?? (nowArg != null ? nowArg : mono());
     clock.wall = nowMs; clock.mono = monoMs;
+    // A24: monotone Erzeuger-Stempel (Poller, Peak Shaving, Schreibpfad) nur mit derselben Uhr wie monoMs — im Betrieb
+    // tick() ohne Argumente (mono), in Tests nur mit ctx.monoNow. Sonst bleibt es bei der Schätzung aus der Wanduhr.
+    const markClock = typeof ctx.monoNow === 'function' || (nowArg == null && monoArg == null) ? mono : null;
     const cfg = getCfg() || {};
     const opts = resolveSetpointFollowOptions(cfg);
     // Lückengrenze: bei langsamem Poll-Takt (meterPollMs bis 60 s) liegen die
@@ -607,7 +633,8 @@ export function createSetpointFollowWatchdog(ctx) {
     // Nur frisch gelesene Werte zählen: schlägt ein Read fehl, behält der
     // Live-State den alten Wert — ein alter „Akku steht"-Wert wäre ein Fehlalarm.
     const stamps = v.fieldUpdatedAt || {};
-    const fresh = (name) => Number(stamps[name]) > 0 && stampAge.ageMs(name, Number(stamps[name])) <= opts.maxAgeMs;
+    const fresh = (name) => Number(stamps[name]) > 0
+      && stampAge.ageMs(name, Number(stamps[name]), markClock ? monoStampOf(stamps, name, markClock) : null) <= opts.maxAgeMs;
     const live = (name) => (fresh(name) ? v[name] : null);
 
     const netImportW = (v.gridImportW == null || v.gridExportW == null)
@@ -626,12 +653,12 @@ export function createSetpointFollowWatchdog(ctx) {
       activeSocLimitPct: live('activeSocLimitPct'),
       // Rückfall, wenn die Anlage gar keine Untergrenze meldet (MQTT-Quellen).
       configuredFloorPct: cfg.optimizer?.hardFloorSocPct,
-      holdReason: activeDischargeHold(state, nowMs, cfg),
+      holdReason: activeDischargeHold(state, nowMs, cfg, markClock),
       // Entlade-Sperre (Reg. 2704): Rücklesung, sonst DVhubs eigener letzter
       // Schreibwert, dieser nur befristet.
-      maxDischargeW: knownDischargeCapW(state, cfg, nowMs, capReadNow(cfg, monoMs))
+      maxDischargeW: knownDischargeCapW(state, cfg, nowMs, capReadNow(cfg, monoMs), { monoMs, clock: markClock })
     }, opts);
-    try { maybeReadCap(cfg, nowMs, monoMs, opts); } catch { /* Lesen darf den Wächter nie stören */ }
+    try { maybeReadCap(cfg, nowMs, monoMs, opts, markClock); } catch { /* Lesen darf den Wächter nie stören */ }
 
     const last = wstate.last || {};
     const detail = {

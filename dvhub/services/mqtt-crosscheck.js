@@ -30,6 +30,7 @@
 
 /** Felder der Kreuzprobe. `abs`/`rel`: erlaubte Abweichung (beide müssen gerissen sein). */
 import { betaGateOpen } from '../beta-features.js';
+import { monoNow, monoStampAge } from './mono-clock.js';
 
 export const CROSSCHECK_FIELDS = [
   { key: 'soc', label: 'Ladestand', unit: '%', abs: 3, rel: 0 },
@@ -80,9 +81,11 @@ export function resolveCrossCheckOptions(cfg = {}) {
  * @param {object} mqttValues   { soc, batteryPowerW, gridTotalW } + _ts je Feld
  * @param {object} modbusValues dieselben Felder aus dem Live-State
  * @param {object} state        Vergleichs-Gedächtnis (divergingSince je Feld)
+ * @param {number} [nowMs]  Systemzeit (since in der Anzeige)
+ * @param {number} [monoMs] monotone Zeit für die Dauer des Widerspruchs (A26); fehlt sie, misst nowMs wie bisher
  * @returns {{ mismatches: Array, state: object, transition: 'mismatch'|'clear'|null }}
  */
-export function compareSources(mqttValues, modbusValues, state, opts, nowMs = Date.now()) {
+export function compareSources(mqttValues, modbusValues, state, opts, nowMs = Date.now(), monoMs = nowMs) {
   const mem = state || { fields: {}, active: false, since: null };
   const mismatches = [];
   for (const f of CROSSCHECK_FIELDS) {
@@ -99,14 +102,15 @@ export function compareSources(mqttValues, modbusValues, state, opts, nowMs = Da
     const diff = Math.abs(a - b);
     const limit = Math.max(f.abs, f.rel * Math.max(Math.abs(a), Math.abs(b)));
     if (diff <= limit) { delete mem.fields[f.key]; continue; }
-    const entry = mem.fields[f.key] || (mem.fields[f.key] = { since: nowMs, worst: 0 });
+    const entry = mem.fields[f.key] || (mem.fields[f.key] = { since: nowMs, sinceMono: monoMs, worst: 0 });
     entry.worst = Math.max(entry.worst, diff);
     entry.mqtt = a; entry.modbus = b;
-    if ((nowMs - entry.since) >= opts.sustainMs) {
+    const seitMs = Math.round(monoMs - (entry.sinceMono ?? entry.since));
+    if (seitMs >= opts.sustainMs) {
       mismatches.push({
         key: f.key, label: f.label, unit: f.unit,
         mqtt: a, modbus: b, diff: Number(diff.toFixed(1)),
-        limit: Number(limit.toFixed(1)), seitMs: nowMs - entry.since
+        limit: Number(limit.toFixed(1)), seitMs
       });
     }
   }
@@ -131,7 +135,7 @@ export function createMqttCrossCheck(ctx) {
   let compareTimer = null;
   let stopping = false;
   const mem = { fields: {}, active: false, since: null };
-  const cache = new Map();  // topic → { value, ts }
+  const cache = new Map();  // topic → { value, ts, mono } — mono: monotone Empfangszeit (A26), nur im Speicher
   let connectedAt = 0;
   let lastConnectError = null;
 
@@ -145,22 +149,25 @@ export function createMqttCrossCheck(ctx) {
     };
   }
 
-  function cached(topic, maxAgeMs, nowMs) {
+  // A26: Alter monoton (Empfangsmarke), wenn der Takt eine monotone Zeit hat; mit übergebener Systemzeit (Tests) wie
+  // bisher die Wanduhr.
+  const entryAge = (e, nowMs, monoMs) => (monoMs != null && e.mono != null ? monoMs - e.mono : nowMs - e.ts);
+  function cached(topic, maxAgeMs, nowMs, monoMs) {
     const e = cache.get(topic);
     if (!e || e.value == null) return null;
-    if ((nowMs - e.ts) > maxAgeMs) return null;
+    if (entryAge(e, nowMs, monoMs) > maxAgeMs) return null;
     return e;
   }
 
   /** MQTT-Seite in DVhub-Konvention bringen (Venus: positiv = Netzbezug). */
-  function mqttSnapshot(opts, nowMs) {
+  function mqttSnapshot(opts, nowMs, monoMs) {
     const t = topics(opts.portalId);
     const out = {};
-    const soc = cached(t.soc, opts.maxAgeMs, nowMs);
-    if (soc) { out.soc = Number(soc.value); out.soc_ageMs = nowMs - soc.ts; }
-    const bat = cached(t.batteryPowerW, opts.maxAgeMs, nowMs);
-    if (bat) { out.batteryPowerW = Number(bat.value); out.batteryPowerW_ageMs = nowMs - bat.ts; }
-    const phases = [t.gridL1W, t.gridL2W, t.gridL3W].map((x) => cached(x, opts.maxAgeMs, nowMs));
+    const soc = cached(t.soc, opts.maxAgeMs, nowMs, monoMs);
+    if (soc) { out.soc = Number(soc.value); out.soc_ageMs = entryAge(soc, nowMs, monoMs); }
+    const bat = cached(t.batteryPowerW, opts.maxAgeMs, nowMs, monoMs);
+    if (bat) { out.batteryPowerW = Number(bat.value); out.batteryPowerW_ageMs = entryAge(bat, nowMs, monoMs); }
+    const phases = [t.gridL1W, t.gridL2W, t.gridL3W].map((x) => cached(x, opts.maxAgeMs, nowMs, monoMs));
     if (phases.some(Boolean)) {
       // Eine nie gesehene Phase zählt 0 (1-/2-phasige Anlagen publizieren sie nicht),
       // eine STALE Phase macht die Summe unbrauchbar (sonst fiele sie still weg).
@@ -168,23 +175,25 @@ export function createMqttCrossCheck(ctx) {
       const sum = seen.reduce((acc, e) => acc + Number(e.value || 0), 0);
       const posImport = getCfg()?.gridPositiveMeans === 'grid_import';
       out.gridTotalW = posImport ? sum : -sum;
-      out.gridTotalW_ageMs = nowMs - Math.min(...seen.map((e) => e.ts));
+      out.gridTotalW_ageMs = Math.max(...seen.map((e) => entryAge(e, nowMs, monoMs)));
     }
     return out;
   }
 
-  function modbusSnapshot(nowMs) {
+  // Modbus-Seite: Alter aus den Erzeuger-Marken des Pollers (A24), ohne Marke bzw. mit Systemzeit (Tests) Wanduhr.
+  function modbusSnapshot(nowMs, monoMs) {
     const v = state.victron || {};
     const fu = v.fieldUpdatedAt || {};
+    const age = (box, key) => (monoMs != null ? monoStampAge(box, key) : null) ?? (nowMs - Number(box?.[key] || 0));
     const out = {};
-    if (v.soc != null) { out.soc = Number(v.soc); out.soc_ageMs = fu.soc ? nowMs - fu.soc : null; }
+    if (v.soc != null) { out.soc = Number(v.soc); out.soc_ageMs = fu.soc ? age(fu, 'soc') : null; }
     if (v.batteryPowerW != null) {
       out.batteryPowerW = Number(v.batteryPowerW);
-      out.batteryPowerW_ageMs = fu.batteryPowerW ? nowMs - fu.batteryPowerW : null;
+      out.batteryPowerW_ageMs = fu.batteryPowerW ? age(fu, 'batteryPowerW') : null;
     }
     if (state.meter?.ok === true && state.meter.grid_total_w != null) {
       out.gridTotalW = Number(state.meter.grid_total_w);
-      out.gridTotalW_ageMs = nowMs - Number(state.meter.updatedAt || 0);
+      out.gridTotalW_ageMs = age(state.meter, 'updatedAt');
     }
     return out;
   }
@@ -228,13 +237,18 @@ export function createMqttCrossCheck(ctx) {
     } catch { /* noop */ }
   }
 
-  /** Ein Vergleichstakt. Wirft nie. */
-  function compare(nowMs = Date.now()) {
+  /**
+   * Ein Vergleichstakt. Wirft nie. Ohne Zeitangabe (Betrieb) misst er monoton (A26); eine übergebene Systemzeit (Tests)
+   * misst wie bisher alles mit der Wanduhr.
+   */
+  function compare(nowArg, monoArg) {
     try {
+      const nowMs = nowArg ?? Date.now();
+      const monoMs = monoArg ?? (nowArg == null ? monoNow() : null);
       const opts = resolveCrossCheckOptions(getCfg() || {});
       if (!opts.enabled) { state.victron && (state.victron.sourceMismatch = null); return null; }
       const { mismatches, transition } = compareSources(
-        mqttSnapshot(opts, nowMs), modbusSnapshot(nowMs), mem, opts, nowMs
+        mqttSnapshot(opts, nowMs, monoMs), modbusSnapshot(nowMs, monoMs), mem, opts, nowMs, monoMs ?? nowMs
       );
       if (transition === 'mismatch') alarm(mismatches);
       if (transition === 'clear') cleared();
@@ -290,7 +304,7 @@ export function createMqttCrossCheck(ctx) {
       if (packet?.retain) return;
       try {
         const msg = JSON.parse(payload.toString());
-        if (msg.value !== undefined && msg.value !== null) cache.set(topic, { value: msg.value, ts: Date.now() });
+        if (msg.value !== undefined && msg.value !== null) cache.set(topic, { value: msg.value, ts: Date.now(), mono: monoNow() });
       } catch { /* noop */ }
     });
     client.on('error', (e) => {

@@ -4,6 +4,7 @@
 // Log-Ereignisnamen). Die Netze rufen nur exportierte Produktionsfunktionen auf.
 import assert from 'node:assert/strict';
 import { after } from 'node:test';
+import { monoFollowsDate } from './mono-follows-date.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,6 +25,8 @@ export const HOST = '192.0.2.10';
 /** Feste Uhr (und auf Wunsch Timer) für den Test; liefert advance(ms) = Uhr vorstellen + Mikrotasks leeren. */
 export function fixClock(t, apis = ['Date']) {
   t.mock.timers.enable({ apis, now: GOLDEN_T0 });
+  // A26: die monotone Uhr (Keepalive, Backoff, Frische) läuft mit der gestellten Uhr mit.
+  t.after(monoFollowsDate());
   return async (ms = 0) => {
     if (ms > 0) t.mock.timers.tick(ms);
     // setImmediate ist nicht gemockt: zwei Runden reichen für die verketteten awaits im Verify-Pfad.

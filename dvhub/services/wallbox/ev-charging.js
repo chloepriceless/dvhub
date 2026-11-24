@@ -10,6 +10,7 @@
 // Antwort, evcc-Daten veraltet). Der Aufrufer entscheidet, was „unbekannt“ heißt.
 
 import { DIRECT_WALLBOX_TYPES } from './types.js';
+import { monoStampAge } from '../mono-clock.js';
 
 export const EV_CHARGING_MIN_W = 100;
 const EVCC_STALE_MS = 3 * 60_000;
@@ -37,7 +38,8 @@ export function createEvChargingProbe({ getCfg, evccIntegration, getAdapter, now
     }
     const st = evccIntegration?.getStatus?.();
     if (!st?.url) return null;
-    if (!st.lastPolledAt || now() - Number(st.lastPolledAt) > EVCC_STALE_MS) return null;
+    // A26: Alter der letzten evcc-Antwort monoton (Marke aus evcc-integration getStatus), ohne Marke Wanduhr.
+    if (!st.lastPolledAt || (monoStampAge(st, 'lastPolledAt') ?? (now() - Number(st.lastPolledAt))) > EVCC_STALE_MS) return null;
     const lps = Array.isArray(st.loadpoints) ? st.loadpoints : [];
     return lps.some((lp) => lp?.charging === true && Number(lp.chargePowerW) > EV_CHARGING_MIN_W);
   };

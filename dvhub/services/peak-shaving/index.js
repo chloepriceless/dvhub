@@ -33,6 +33,7 @@
 import { betaGateOpen } from '../../beta-features.js';
 import { localParts, zoneOffsetMs } from '../../tz-fast.js';
 import { capPositiveSetpoint } from '../import-limit/core.js';
+import { monoNow as sharedMonoNow, monoStampOf, monoStampAge } from '../mono-clock.js';
 
 export const PEAK_SHAVING_DEFAULTS = Object.freeze({
   enabled: false,
@@ -110,9 +111,13 @@ export function peakShavingStatusText(resolved) {
 const METER_MAX_AGE_MS = 15_000;
 const PV_FIELDS = ['pvPowerW', 'acPvL1W', 'acPvL2W', 'acPvL3W', 'acPv2L1W', 'acPv2L2W', 'acPv2L3W'];
 
-function fieldAgeMs(state, field, now) {
-  const at = Number(state?.victron?.fieldUpdatedAt?.[field] ?? 0);
-  return at > 0 ? now - at : null;
+// A24: Alter monoton, wenn der Poller den Stempel monoton markiert hat (gleiche Uhr), sonst Wanduhr wie bisher.
+function fieldAgeMs(state, field, now, clock = sharedMonoNow) {
+  const stamps = state?.victron?.fieldUpdatedAt;
+  const at = Number(stamps?.[field] ?? 0);
+  if (!(at > 0)) return null;
+  const m = monoStampOf(stamps, field, clock);
+  return m != null ? clock() - m : now - at;
 }
 
 /**
@@ -229,15 +234,20 @@ export const MAX_DISCHARGE_INT16_ADDR = 2704;
  * Eine mehrdeutige 0 aus dem Poll-Punkt weicht einer eindeutigen eigenen
  * Rücklesung (2720 bzw. MQTT).
  */
-export function knownMaxDischargeW(state, cfg, now = Date.now()) {
+// A24 (Christin 23.11.2026): jede Quelle trägt neben `at` (Wanduhr) `mono` — die monotone Zeit des Erzeugers
+// (Poller, Rücklesung von Peak Shaving, Schreibpfad) mit der Uhr `clock`, oder null ohne Marke. Verbraucher, die zwei
+// Quellen nach „neuer als“ ordnen (Entlade-Wächter), vergleichen damit; Frische hier ebenso monoton, sonst Wanduhr.
+export function knownMaxDischargeW(state, cfg, now = Date.now(), clock = sharedMonoNow) {
   const v = state?.victron || {};
   const maxAgeMs = Number(cfg?.victron?.telemetryMaxAgeMs ?? 90000);
   const rb = state?.ctrl?._peakShaving?.readback;
+  const rbMono = rb ? monoStampOf(rb, 'at', clock) : null;
+  const rbAge = rbMono != null ? clock() - rbMono : now - Number(rb?.at);
   // Ist der letzte Leseversuch gescheitert, gilt auch der alte Wert nicht mehr.
-  const own = (rb && !rb.error && Number.isFinite(Number(rb.value)) && Number(rb.at) > 0 && now - Number(rb.at) <= maxAgeMs)
-    ? { value: Number(rb.value), from: 'own_readback', at: Number(rb.at), tick: rb.tick ?? null, ambiguousZero: Number(rb.value) === 0 && rb.ambiguousZero === true }
+  const own = (rb && !rb.error && Number.isFinite(Number(rb.value)) && Number(rb.at) > 0 && rbAge <= maxAgeMs)
+    ? { value: Number(rb.value), from: 'own_readback', at: Number(rb.at), mono: rbMono, tick: rb.tick ?? null, ambiguousZero: Number(rb.value) === 0 && rb.ambiguousZero === true }
     : null;
-  const age = fieldAgeMs(state, 'maxDischargeW', now);
+  const age = fieldAgeMs(state, 'maxDischargeW', now, clock);
   if (v.maxDischargeW != null && Number.isFinite(Number(v.maxDischargeW)) && age !== null && age <= maxAgeMs
       && !v.errors?.maxDischargeW) {
     const value = Number(v.maxDischargeW);
@@ -249,12 +259,15 @@ export function knownMaxDischargeW(state, cfg, now = Date.now()) {
       && String(pt.readType || '').toLowerCase() === 'int32' && Number(pt.quantity) >= 2;
     const ambiguousZero = value === 0 && cfg?.victron?.transport !== 'mqtt' && !reads2720AsInt32;
     if (ambiguousZero && own && !own.ambiguousZero) return own;
-    return { value, from: 'readback', at: now - age, ambiguousZero };
+    // `at` bleibt der Wanduhr-Stempel des Pollers (superseded() vergleicht ihn mit dem Wanduhr-Write lastWriteAt);
+    // aus dem monotonen Alter zurückgerechnet läge eine alte Lesung nach einem Sprung vorwärts „nach“ dem eigenen
+    // Write (Codex 3018ff4d P2). Die monotone Reihenfolge trägt `mono`.
+    return { value, from: 'readback', at: Number(v.fieldUpdatedAt.maxDischargeW), mono: monoStampOf(v.fieldUpdatedAt, 'maxDischargeW', clock), ambiguousZero };
   }
   if (own) return own;
   const lw = state?.schedule?.lastWrite?.maxDischargeW;
   if (lw && lw.value != null && Number.isFinite(Number(lw.value))) {
-    return { value: Number(lw.value), from: 'own_write', at: Number(lw.at) || 0, source: lw.source };
+    return { value: Number(lw.value), from: 'own_write', at: Number(lw.at) || 0, mono: monoStampOf(lw, 'at', clock), source: lw.source };
   }
   return null;
 }
@@ -295,8 +308,15 @@ function superseded(d, known, lastWrite) {
   if (known.from === 'own_readback') {
     const writeTick = Number.isFinite(Number(d.lastWriteTick)) ? Number(d.lastWriteTick) : -Infinity;
     if (!(Number(known.tick) > writeTick)) return false;
-  } else if (known.at <= (Number(d.lastWriteAt) || 0) + READBACK_GRACE_MS) {
-    return false;
+  } else {
+    // A24 (Codex 243a25d4 P2): Poll-Lesung gegen den eigenen Write monoton, wenn beide eine monotone Zeit haben
+    // (known.mono vom Poller, d.lastWriteAt beim Write gestempelt; gemeinsame Uhr) — sonst Wanduhr wie bisher.
+    // Nach einem Rücksprung zwischen Poll und Write läge die alte Lesung per Wanduhr sonst „danach“.
+    const writeMono = monoStampOf(d, 'lastWriteAt');
+    const notAfter = known.mono != null && writeMono != null
+      ? known.mono <= writeMono + READBACK_GRACE_MS
+      : known.at <= (Number(d.lastWriteAt) || 0) + READBACK_GRACE_MS;
+    if (notAfter) return false;
   }
   // Der Wert VOR unserem Write zählt nur in der ersten eigenen Lesung danach
   // (Gerät hat noch nicht übernommen) — danach ist er eine Änderung von außen
@@ -427,7 +447,8 @@ export function createPeakShaving(ctx, deps = {}) {
     const s = ctx.state || {};
     const t = now();
     const ctl = s.ctrl?._peakShaving || {};
-    const clampFresh = ctl.clamp && (t - Number(ctl.clamp.at || 0)) <= CLAMP_FRESH_MS;
+    // A26: Alter des Deckel-Signals monoton (Marke aus schedule-eval), ohne Marke Wanduhr.
+    const clampFresh = ctl.clamp && (monoStampAge(ctl.clamp, 'at') ?? (t - Number(ctl.clamp.at || 0))) <= CLAMP_FRESH_MS;
     const clamp = clampFresh
       ? { requestedW: ctl.clamp.requestedW, valueW: ctl.clamp.valueW, mode: ctl.clamp.mode, reason: ctl.clamp.reason ?? null, source: ctl.clamp.source }
       : null;

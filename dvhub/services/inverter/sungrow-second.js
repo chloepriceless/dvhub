@@ -24,7 +24,7 @@
 import { safeInterval } from '../safe-async.js';
 import { wire, runningStateText, resolveSecondInverter, isSungrowEmergencyCharge } from './sungrow.js';
 import { createModbusHealth } from './modbus-health.js';
-import { pickMonoNow } from '../mono-clock.js';
+import { pickMonoNow, stampMono } from '../mono-clock.js';
 
 export const SUNGROW_SECOND_TICK_MS = 5000;
 const OFFLINE_AFTER_ERRORS = 3;
@@ -97,8 +97,9 @@ const u16 = (w) => {
 
 export function createSungrowSecond(ctx, deps = {}) {
   const now = deps.now || Date.now;
-  // A23 b (Christin 23.11.2026): Config-Takt und Modbus-Gesundheit monoton; updatedAt bleibt Wanduhr (Anzeige und
-  // Frische-Prüfung der Verbraucher in sungrow.js, die noch Wanduhr rechnen).
+  // A23 b (Christin 23.11.2026): Config-Takt und Modbus-Gesundheit monoton; updatedAt bleibt Wanduhr (Anzeige).
+  // A24: updatedAt bekommt beim Veröffentlichen eine monotone Marke (stampMono) — die Frische-Prüfung der Verbraucher
+  // (secondInverterTelemetry) misst damit.
   const monoNow = pickMonoNow(deps.monoNow, deps.now);
   // Modbus-Gesundheit des Slave-WR (N5): zählt die Lese-Anfragen/Fehler dieses Pollers (Feld: ~1 Lesefehler auf
   // 4000 Slave-Anfragen). wrap() zählt transparent; der eigentliche Transport bleibt unverändert.
@@ -137,6 +138,7 @@ export function createSungrowSecond(ctx, deps = {}) {
       health: modbusHealth.snapshot(), tickMs: SUNGROW_SECOND_TICK_MS,
       errors, updatedAt: now(), ...extra,
     };
+    stampMono(ctx.state.sungrowSecond, 'updatedAt', { clock: monoNow });
   }
 
   async function readReg(c, address, quantity) {

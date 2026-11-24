@@ -14,6 +14,7 @@
 import { PUSH_FIELDS } from './input-push.js';
 import { gridDirection } from '../server-utils.js';
 import { effectivePvKwp } from './forecast/effective-pv.js';
+import { monoStampAge } from './mono-clock.js';
 
 // Ohne diese beiden kann DVhub nicht steuern; alles andere ist optional.
 const REQUIRED_INPUTS = new Set(['grid_total', 'battery_soc']);
@@ -21,7 +22,12 @@ const REQUIRED_INPUTS = new Set(['grid_total', 'battery_soc']);
 const INPUT_LABELS = Object.fromEntries(Object.entries(PUSH_FIELDS).map(([field, spec]) => [spec.input, { field, label: spec.label }]));
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-const ageMs = (at, now) => (num(at) !== null ? Math.max(0, now - at) : null);
+// A26: Alter monoton aus der Erzeuger-Marke (Poller, A24), wenn box/key den Stempel tragen; sonst Wanduhr wie bisher.
+const ageMs = (at, now, box = null, key = null) => {
+  if (num(at) === null) return null;
+  const mono = box && key != null && Number(box[key]) === at ? monoStampAge(box, key) : null;
+  return Math.max(0, Math.round(mono ?? (now - at))); // ganze ms wie bisher (monotone Zeit ist gebrochen)
+};
 
 function describeSource(cfg, transport) {
   if (transport?.type === 'mqtt' && transport?.schema === 'dvhub') {
@@ -66,7 +72,7 @@ function inputRows({ cfg, state, transport, now }) {
   const rows = Object.entries(points)
     .filter(([, p]) => p && p.enabled !== false)
     .map(([key]) => {
-      const age = ageMs(fieldAt[key] ?? v.updatedAt, now);
+      const age = fieldAt[key] != null ? ageMs(fieldAt[key], now, fieldAt, key) : ageMs(v.updatedAt, now, v, 'updatedAt');
       return {
         key,
         label: key,
@@ -83,7 +89,7 @@ function inputRows({ cfg, state, transport, now }) {
   const m = state?.meter || {};
   rows.unshift({
     key: 'meter', label: 'Netzzähler', pushField: null, topic: null,
-    value: num(m.grid_total_w), unit: 'W', ageMs: ageMs(m.updatedAt, now),
+    value: num(m.grid_total_w), unit: 'W', ageMs: ageMs(m.updatedAt, now, m, 'updatedAt'),
     fresh: m.ok === true, received: num(m.grid_total_w) !== null, error: m.error || null,
   });
   return rows;
@@ -99,7 +105,7 @@ function seenRows(cfg, state, now, inputs) {
   const rows = [
     { key: 'grid', label: 'Netz', value: grid, unit: 'W',
       note: grid === null ? null : `${gridDirection(grid, cfg?.gridPositiveMeans).label} (Vorzeichen: ${signRule})`,
-      ageMs: ageMs(m.updatedAt, now) },
+      ageMs: ageMs(m.updatedAt, now, m, 'updatedAt') },
     { key: 'gridImportW', label: 'Netzbezug', value: num(v.gridImportW), unit: 'W' },
     { key: 'gridExportW', label: 'Einspeisung', value: num(v.gridExportW), unit: 'W' },
     { key: 'pvTotalW', label: 'PV gesamt', value: num(v.pvTotalW), unit: 'W' },
@@ -108,7 +114,7 @@ function seenRows(cfg, state, now, inputs) {
     { key: 'selfConsumptionW', label: 'Hausverbrauch', value: num(v.selfConsumptionW), unit: 'W',
       note: loadDerived ? 'berechnet aus Energiebilanz' : null },
   ];
-  for (const r of rows) if (r.ageMs === undefined) r.ageMs = ageMs(v.updatedAt, now);
+  for (const r of rows) if (r.ageMs === undefined) r.ageMs = ageMs(v.updatedAt, now, v, 'updatedAt');
   return rows;
 }
 

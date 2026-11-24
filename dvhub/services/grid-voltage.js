@@ -34,6 +34,7 @@
 // dort bleibt der Wert null.
 
 import { scanGxServices, GX_SCAN_UNITS } from './victron-gx/devices.js';
+import { monoNow, pickMonoNow, stampMono, monoStampOf, monoStampAge } from './mono-clock.js';
 
 export const VICTRON_GRID_REGS = Object.freeze({ l1: 2616, l2: 2618, l3: 2620, frequency: 2644 });
 export const GRID_VOLTAGE_POLL_MS = 30_000;
@@ -107,7 +108,8 @@ export function freshGridVoltage(gv, nowMs = Date.now(), maxAgeMs = GRID_VOLTAGE
     return out;
   }
   const at = Number(gv.updatedAt);
-  if (!Number.isFinite(at) || nowMs - at > maxAgeMs) return { ok: false, reason: 'voltage_stale' };
+  // A26: Alter monoton aus der Marke des Pollers (unten, stampMono), ohne Marke (IPC, Tests) Wanduhr.
+  if (!Number.isFinite(at) || (monoStampAge(gv, 'updatedAt') ?? (nowMs - at)) > maxAgeMs) return { ok: false, reason: 'voltage_stale' };
   const out = { ok: true, l1: gv.l1, l2: gv.l2, l3: gv.l3, frequencyHz: gv.frequencyHz ?? null, updatedAt: at, source: gv.source };
   if (gv.phaseAt && typeof gv.phaseAt === 'object') out.phaseAt = { ...gv.phaseAt };
   return out;
@@ -126,8 +128,12 @@ function fromSpine(em) {
  * NICHT darauf, damit eine Unit-Suche den Steuer-Takt nie aufhält (die
  * Modbus-Warteschlange schiebt die Steuer-Lesungen zwischen die Suchanfragen).
  */
-export function createGridVoltagePoller({ state, pushLog = () => {}, getTransport = () => null, now = () => Date.now(), firstDelayMs = GRID_VOLTAGE_FIRST_DELAY_MS } = {}) {
-  let nextModbusAt = now() + firstDelayMs;
+export function createGridVoltagePoller({ state, pushLog = () => {}, getTransport = () => null, now: nowArg = null, monoNow: monoNowArg = null, firstDelayMs = GRID_VOLTAGE_FIRST_DELAY_MS } = {}) {
+  const now = nowArg || (() => Date.now());
+  // A26: Lesetakt und Such-Pause monoton (ein Rücksprung setzte die Spannungsabfrage sonst stundenlang aus); eine
+  // eingespielte Uhr (Tests) misst wie bisher mit. Die Messzeit updatedAt bleibt Wanduhr, monoton nur als Marke.
+  const mono = pickMonoNow(monoNowArg, nowArg);
+  let nextModbusAt = mono() + firstDelayMs;
   let nextScanAt = 0;
   let foundUnit = null;
   // Zuletzt gefundene, dann weggefallene Unit: in der Such-Pause erneut fragen
@@ -136,14 +142,21 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
   let running = null;
 
   const victronState = () => (state.victron ??= {});
-  function set(gv) { victronState().gridVoltage = gv; }
+  // markAt: monotone Messzeit zu gv.updatedAt (stampMono, unsichtbar). 'keep' = Marke der vorigen Messung übernehmen
+  // (Lesefehler: alte Werte mit alter Messzeit bleiben stehen).
+  function set(gv, markAt = null) {
+    const prev = victronState().gridVoltage;
+    const at = markAt === 'keep' ? monoStampOf(prev, 'updatedAt', mono) : markAt;
+    if (gv && at != null) stampMono(gv, 'updatedAt', { clock: mono, at });
+    victronState().gridVoltage = gv;
+  }
   function setError(message) {
     const prev = victronState().gridVoltage;
     set({
       l1: prev?.l1 ?? null, l2: prev?.l2 ?? null, l3: prev?.l3 ?? null, frequencyHz: prev?.frequencyHz ?? null,
       updatedAt: prev?.updatedAt ?? null, source: 'victron_modbus', unitId: prev?.unitId ?? null,
       error: String(message || 'unbekannt').slice(0, 160),
-    });
+    }, 'keep');
   }
 
   function sourceOf(cfg, transport) {
@@ -164,14 +177,14 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
     try {
       const m = await readSungrowGridVoltage(mbRequest, { host: v.host, port: v.port, unitId: unit, timeoutMs: v.timeoutMs });
       if (![m.l1, m.l2, m.l3].some(isNum)) throw new NoGridVoltageError();
-      set({ ...m, updatedAt: now(), source: 'sungrow-inverter', unitId: unit, error: null });
+      set({ ...m, updatedAt: now(), source: 'sungrow-inverter', unitId: unit, error: null }, mono());
     } catch (e) {
       const prev = victronState().gridVoltage;
       set({
         l1: prev?.l1 ?? null, l2: prev?.l2 ?? null, l3: prev?.l3 ?? null, frequencyHz: prev?.frequencyHz ?? null,
         updatedAt: prev?.updatedAt ?? null, source: 'sungrow-inverter', unitId: prev?.unitId ?? unit,
         error: String(e?.message || 'unbekannt').slice(0, 160),
-      });
+      }, 'keep');
     }
   }
 
@@ -187,7 +200,7 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
     const unit = foundUnit ?? configured;
     try {
       const m = await readAt(unit);
-      set({ ...m, updatedAt: now(), source: 'victron_modbus', unitId: unit, error: null });
+      set({ ...m, updatedAt: now(), source: 'victron_modbus', unitId: unit, error: null }, mono());
       return;
     } catch (e) {
       if (!wrongUnit(e)) { setError(e?.message); return; }
@@ -206,15 +219,15 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
         foundUnit = lostUnit;
         lostUnit = null;
         pushLog('victron_grid_meter_found', { unitId: foundUnit, configuredUnitId: configured, again: true });
-        set({ ...m, updatedAt: now(), source: 'victron_modbus', unitId: foundUnit, error: null });
+        set({ ...m, updatedAt: now(), source: 'victron_modbus', unitId: foundUnit, error: null }, mono());
         return;
       } catch {
         // Auch eine Zeitüberschreitung hält die fällige Suche nicht auf — ein
         // Ersatzzähler auf einer anderen Unit wird sonst nie gefunden (Codex 617760b9).
       }
     }
-    if (now() < nextScanAt) { setError('grid_meter_not_found'); return; }
-    nextScanAt = now() + GRID_UNIT_RESCAN_MS;
+    if (mono() < nextScanAt) { setError('grid_meter_not_found'); return; }
+    nextScanAt = mono() + GRID_UNIT_RESCAN_MS;
     // Ein Treffer zählt erst, wenn er wirklich Spannung meldet; sonst ab der
     // nächsten Unit weitersuchen (Codex-Gegenprüfung 7f88bc74, P2).
     let units = GRID_SCAN_ORDER.filter((u) => u !== unit);
@@ -233,7 +246,7 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
         foundUnit = hit;
         lostUnit = null;
         pushLog('victron_grid_meter_found', { unitId: hit, configuredUnitId: configured });
-        set({ ...m, updatedAt: now(), source: 'victron_modbus', unitId: hit, error: null });
+        set({ ...m, updatedAt: now(), source: 'victron_modbus', unitId: hit, error: null }, mono());
         return;
       } catch (e) {
         if (!wrongUnit(e)) { setError(e?.message); return; }
@@ -250,7 +263,9 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
       const src = sourceOf(cfg, transport);
       if (src === 'spine') {
         if (spine && typeof spine === 'object') {
-          set({ ...fromSpine(spine), updatedAt: Number(spineAt) || now(), source: 'spine_http', unitId: null, error: null });
+          // Messzeit = die des Zählers (polling.js): dessen monotone Marke übernehmen, wenn sie zum Stempel passt.
+          const spineMono = Number(spineAt) > 0 && Number(spineAt) === Number(state.meter?.updatedAt) ? monoStampOf(state.meter, 'updatedAt', mono) : null;
+          set({ ...fromSpine(spine), updatedAt: Number(spineAt) || now(), source: 'spine_http', unitId: null, error: null }, Number(spineAt) > 0 ? spineMono : mono());
         }
         return;
       }
@@ -260,7 +275,9 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
           const gv = { l1: g.l1 ?? null, l2: g.l2 ?? null, l3: g.l3 ?? null, frequencyHz: g.frequencyHz ?? null, updatedAt: Number(g.ts) || now(), source: 'victron_mqtt', unitId: null, error: null };
           // Empfangszeit je Phase: MQTT liefert die Phasen einzeln (Datenspende).
           if (Array.isArray(g.phaseTs)) gv.phaseAt = { l1: g.phaseTs[0] ?? null, l2: g.phaseTs[1] ?? null, l3: g.phaseTs[2] ?? null };
-          set(gv);
+          // Empfangszeit monoton aus dem MQTT-Eingang (transport-mqtt readGridVoltage monoTs), sonst keine Marke.
+          // Die Marke des Transports stammt aus der gemeinsamen Uhr — nur mit ihr gültig.
+          set(gv, Number(g.ts) > 0 ? (Number.isFinite(g.monoTs) && mono === monoNow ? g.monoTs : null) : mono());
         } else if (g?.invalidated || victronState().gridVoltage?.source !== 'victron_mqtt') {
           // Ausdrücklich ungültig gemeldet (Codex-Gegenprüfung 19f1d2bf) oder nie geliefert.
           set(null);
@@ -272,7 +289,7 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
       }
       if (src === 'sungrow') {
         if (running) return running;
-        const ts = now();
+        const ts = mono();
         if (ts < nextModbusAt) return;
         nextModbusAt = ts + GRID_VOLTAGE_POLL_MS;
         if (Number(state.meter?.consecutiveErrors) > 0) return;
@@ -286,7 +303,7 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
         return;
       }
       if (running) return running;
-      const t = now();
+      const t = mono();
       if (t < nextModbusAt) return;
       nextModbusAt = t + GRID_VOLTAGE_POLL_MS;
       // Wie bei den Geräte-Alarmen: stockt die Steuer-Abfrage, nicht noch mehr

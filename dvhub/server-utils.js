@@ -3,6 +3,7 @@
 // ZERO imports. ZERO state/config dependencies.
 
 import { localDate as fastLocalDate, localMinutesOfDay as fastLocalMinutesOfDay } from './tz-fast.js';
+import { monoStampAge } from './services/mono-clock.js';
 
 export const MAX_BODY_BYTES = 256 * 1024; // 256 KB
 
@@ -99,14 +100,20 @@ export function localMinutesOfDay(date = new Date(), timezone = 'Europe/Berlin')
 // A field is "stale" only when it HAS a success timestamp that has aged past
 // maxAgeMs — a missing timestamp (0) coincides with a cold-start null value and
 // is handled by the caller's null/unknown check, never treated as stale here.
+//
+// A24 (Christin 23.11.2026): trägt der Stempel eine monotone Marke des Pollers (stampMono in polling.js), zählt deren
+// Alter — ein Sprung der Systemzeit macht einen stehenden Wert so weder jünger noch älter. Ohne Marke (fremder
+// Erzeuger, Web-Prozess, Tests) wie bisher nowMs − Stempel.
 export function victronFieldAgeMs(state, field, nowMs = Date.now()) {
-  const at = Number(state?.victron?.fieldUpdatedAt?.[field] ?? 0);
-  return at > 0 ? nowMs - at : null;
+  const stamps = state?.victron?.fieldUpdatedAt;
+  const at = Number(stamps?.[field] ?? 0);
+  if (!(at > 0)) return null;
+  return monoStampAge(stamps, field) ?? (nowMs - at);
 }
 export function victronFieldStale(state, field, maxAgeMs, nowMs = Date.now()) {
-  const at = Number(state?.victron?.fieldUpdatedAt?.[field] ?? 0);
+  const age = victronFieldAgeMs(state, field, nowMs);
   const max = Number(maxAgeMs);
-  return at > 0 && Number.isFinite(max) && (nowMs - at) > max;
+  return age !== null && Number.isFinite(max) && age > max;
 }
 
 export function gridDirection(value, gridPositiveMeans = 'feed_in') {
