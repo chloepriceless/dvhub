@@ -382,6 +382,22 @@ EOF
     fi
   fi
 
+  # Community-TimescaleDB: erst die Rückfüllung der Datenstufen fertig werden und ihre fertigen Blöcke
+  # komprimieren lassen. Seit 24.11. komprimiert DVhub sie selbst (telemetry-tiers.js, compressBackfilledChunks);
+  # die Stufen laufen ungebremst (kein Gate) — ohne dieses Warten schüfen sie nach dem Füllen noch Platz, bevor die
+  # Wache läuft, und der eingestellte Füllstand gälte nicht mehr (S5 am 24.11.: 149 → 485 MB frei).
+  if [[ "$ts_mode" == community ]]; then
+    local t_settle settled=0 q=""
+    t_settle=$(date +%s)
+    for i in $(seq 1 90); do
+      q="$(psql_db -U postgres -d dvhub -At -c "SELECT (SELECT coalesce(done_until >= now() - interval '1 hour', false)::int FROM telemetry_tier_state WHERE id = 'tiers') || ':' || (SELECT count(*) FROM timescaledb_information.chunks c CROSS JOIN telemetry_tier_state s WHERE s.id = 'tiers' AND c.hypertable_name IN ('timeseries_samples_1m', 'timeseries_samples_15m') AND NOT c.is_compressed AND c.range_end <= least(s.done_until, now() - CASE WHEN c.hypertable_name = 'timeseries_samples_1m' THEN interval '2 days' ELSE interval '7 days' END))" 2>/dev/null | tr -d '\r')"
+      [[ "$q" == "1:0" ]] && { settled=1; break; }
+      sleep 5
+    done
+    note "Datenstufen vor dem Füllen: $( (( settled )) && echo fertig || echo "nicht fertig ($q, Zeitlimit)") nach $(( $(date +%s) - t_settle )) s"
+    settle_db
+  fi
+
   # Füllstand einstellen. fill_to setzt nach jeder Füll-Datei zwei CHECKPOINTs ab und misst neu,
   # bis der Stand hält (Postgres gibt nach Checkpoints WAL-Platz frei, auf 4 GB mehrere
   # Prozentpunkte). Danach wird NICHT mehr nachgefüllt: der Zeitstempel „at“ der Wache ist der
